@@ -4,30 +4,47 @@ using Xunit.Abstractions;
 
 namespace Planet.Simulation.Tests;
 
+/// <summary>暫時的診斷：追大陸形成退步用。找到原因後會刪掉。</summary>
 public class DiagnosticDump
 {
     private readonly ITestOutputHelper _output;
     public DiagnosticDump(ITestOutputHelper output) => _output = output;
 
     [Fact]
-    public void DumpOceanicBudget()
+    public void DumpConfig()
     {
-        var engine = new SimulationEngine(SimulationGrid.Build(1_852_259.92, 24), 42);
-        engine.Step(1000);
-        Array.Clear(engine.PhaseDeltas);
-        Array.Clear(engine.Tectonics.SubPhaseDeltas);
-        var before = engine.State.CrustThickness
-            .Where((_, i) => engine.State.Crust[i] == CrustType.Oceanic).DefaultIfEmpty(0f).Average();
-        engine.Step(500);
-        var after = engine.State.CrustThickness
-            .Where((_, i) => engine.State.Crust[i] == CrustType.Oceanic).DefaultIfEmpty(0f).Average();
+        var grid = SimulationGrid.Build(1_852_259.92, 24);
+        var engine = new SimulationEngine(grid, 42);
+        engine.Step(4000);
+        var s = engine.State;
 
-        _output.WriteLine($"海洋地殼平均 {before:F2} → {after:F2}（淨 {after - before:+0.00;-0.00}）");
-        _output.WriteLine("大階段（公里/步）：");
-        for (var i = 0; i < engine.PhaseDeltas.Length; i++)
-            _output.WriteLine($"  {SimulationEngine.PhaseNames[i],-24} {engine.PhaseDeltas[i] / 500:+0.0000;-0.0000}");
-        _output.WriteLine("板塊子階段（公里/步）：");
-        for (var i = 0; i < engine.Tectonics.SubPhaseDeltas.Length; i++)
-            _output.WriteLine($"  {PlateTectonics.SubPhaseNames[i],-18} {engine.Tectonics.SubPhaseDeltas[i] / 500:+0.0000;-0.0000}");
+        var con = Enumerable.Range(0, s.CellCount).Where(c => s.Crust[c] == CrustType.Continental).ToArray();
+        var oce = Enumerable.Range(0, s.CellCount).Where(c => s.Crust[c] == CrustType.Oceanic)
+            .Select(c => s.CrustThickness[c]).Order().ToArray();
+
+        var seen = new bool[s.CellCount];
+        var sizes = new List<int>();
+        var stack = new Stack<int>();
+        foreach (var start in con)
+        {
+            if (seen[start]) continue;
+            var size = 0; stack.Push(start); seen[start] = true;
+            while (stack.Count > 0)
+            {
+                var cell = stack.Pop(); size++;
+                var b = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var i = 0; i < SimulationGrid.MaxNeighborsPerCell; i++)
+                {
+                    var n = grid.Neighbors[b + i];
+                    if (n == SimulationGrid.NoNeighbor || seen[n] || s.Crust[n] != CrustType.Continental) continue;
+                    seen[n] = true; stack.Push(n);
+                }
+            }
+            sizes.Add(size);
+        }
+
+        _output.WriteLine($"RESULT 大陸={con.Length} 最大塊={(sizes.Count > 0 ? sizes.Max() : 0)} " +
+            $"塊數={sizes.Count} 大陸厚={(con.Length > 0 ? con.Average(c => s.CrustThickness[c]) : 0):F1} " +
+            $"海洋厚中位={oce[oce.Length / 2]:F1} 陸地={engine.LandFraction():P1}");
     }
 }
