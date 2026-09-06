@@ -1,4 +1,4 @@
-namespace Planet.Simulation;
+﻿namespace Planet.Simulation;
 
 /// <summary>
 /// 內營力：板塊運動、隱沒、碰撞造山、海底擴張。把一顆全是海洋的星球演化出陸地。
@@ -201,6 +201,9 @@ public sealed class PlateTectonics
     private readonly float[] _markerThickness;
     private readonly float[] _markerAge;
     private readonly float[] _markerDensity;
+    // 礁灰岩的厚度（公尺）。它是地殼柱的一部分，所以**必須跟地殼一起漂**，
+    // 不能像以前那樣掛在格子上——見 CoralReefs 類別說明裡的「化石紀錄」那一段。
+    private readonly float[] _markerOrganic;
     private readonly CrustType[] _markerCrust;
     private readonly bool[] _markerOceanicOnly; // 永遠不能變成大陸地殼，見 SimulationState.OceanicOnly
     private readonly int[] _markerPlate;
@@ -232,25 +235,6 @@ public sealed class PlateTectonics
 
     /// <summary>診斷用：隱沒消耗掉的地殼厚度總和（公里·格，正值代表移除）。</summary>
     public double LastSubductedCrustKm { get; private set; }
-
-    /// <summary>診斷用：板塊那一段各子階段對「大陸格平均厚度」的貢獻（公里）。</summary>
-    public double[] SubPhaseDeltas { get; } = new double[3];
-
-    /// <summary>診斷用的子階段名稱。</summary>
-    public static readonly string[] SubPhaseNames = ["取樣(Rasterize)", "島弧增厚", "重力擴展"];
-
-    private static double MeanContinental(SimulationState state)
-    {
-        var total = 0.0;
-        var count = 0;
-        for (var cell = 0; cell < state.CellCount; cell++)
-        {
-            if (state.Crust[cell] != CrustType.Oceanic) continue;
-            total += state.CrustThickness[cell];
-            count++;
-        }
-        return count > 0 ? total / count : 0;
-    }
 
     /// <summary>診斷用：目前存活的標記數量。跟格數比對可以看出標記有沒有異常增生。</summary>
     public int MarkerCount => _markerCount;
@@ -324,6 +308,7 @@ public sealed class PlateTectonics
         _markerThickness = new float[capacity];
         _markerAge = new float[capacity];
         _markerDensity = new float[capacity];
+        _markerOrganic = new float[capacity];
         _markerCrust = new CrustType[capacity];
         _markerOceanicOnly = new bool[capacity];
         _markerPlate = new int[capacity];
@@ -379,6 +364,7 @@ public sealed class PlateTectonics
                 _markerThickness[marker] = state.CrustThickness[cell];
                 _markerAge[marker] = state.CrustAge[cell];
                 _markerDensity[marker] = state.CrustDensity[cell];
+                _markerOrganic[marker] = state.OrganicThickness[cell];
                 _markerCrust[marker] = state.Crust[cell];
                 _markerOceanicOnly[marker] = state.OceanicOnly[cell];
                 _markerPlate[marker] = plates.PlateIdByCell[cell];
@@ -422,22 +408,11 @@ public sealed class PlateTectonics
         plates.Advance(grid, deltaMyr);
         ClassifyBoundaries(grid, state, plates);
 
-        var mark = MeanContinental(state);
-        void Sub(int index)
-        {
-            var now = MeanContinental(state);
-            SubPhaseDeltas[index] += now - mark;
-            mark = now;
-        }
-
         MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);
-        Sub(0);
         Array.Clear(_arcAdded);
         ApplyConvergence(state, deltaMyr);
         for (var cell = 0; cell < grid.CellCount; cell++) LastArcCrustKm += _arcAdded[cell];
-        Sub(1);
         SpreadOverthickenedCrust(grid, state, deltaMyr);
-        Sub(2);
 
         // **這裡刻意不回寫標記**——回寫由 SimulationEngine 在「所有」會改地殼的作用跑完之後統一做。
         // 原本在這裡就回寫，導致排在後面的火山與侵蝕改完地殼之後，下一次 Rasterize 會用
@@ -655,6 +630,7 @@ public sealed class PlateTectonics
                     _markerThickness[winner] = MathF.Min(
                         _markerThickness[winner] + _markerThickness[loser] * ContinentalCollisionTransfer,
                         Isostasy.MaxCrustThicknessKm);
+
                 }
                 else
                 {
@@ -733,6 +709,7 @@ public sealed class PlateTectonics
         LastRidgeCrustKm += Isostasy.OceanicCrustThicknessKm / MarkersPerCell;
                 _markerThickness[marker] = Isostasy.OceanicCrustThicknessKm;
                 _markerAge[marker] = 0f;
+                _markerOrganic[marker] = 0f; // 剛從地函冒出來的玄武岩上面不會有礁
                 // **新生地殼要繼承這個板塊的密度異常**，否則重板塊會被自己擴張出來的普通地殼稀釋掉：
                 // 重地殼浮力低、每次碰撞都輸、優先被隱沒，補進來的又是普通密度，
                 // 實測2億年內重地殼從428格衰減到只剩10格，「重板塊」實質上消失了（2026-09-06）。
@@ -814,6 +791,17 @@ public sealed class PlateTectonics
             // 跟厚度這種體積量不同，它們是表層性質。
             state.CrustAge[cell] = _markerAge[top];
             state.CrustDensity[cell] = _markerDensity[top];
+
+            // **礁灰岩也取最高的那一塊，不可以像厚度那樣加總**（2026-09-07 踩過）：
+            // 取樣用總和、而回寫是把格子的值**絕對地**寫給格子裡的**每一個**標記
+            // （見 WriteGridBackToMarkers）。這個配對對厚度是刻意的——它有
+            // MaxCrustThicknessKm 上限，而且擁擠處理會殺掉多餘的標記，所以收斂。
+            // 礁體沒有上限，一格暫時擠進2個標記就翻倍，下一輪再翻，是**指數放大**：
+            // 實測最大厚度從8公里衝到211公里。
+            //
+            // 物理上取最高的也才對：兩塊各帶著礁體的地殼撞在一起，礁體不會相加，
+            // 沉下去的那一塊連同它的礁體一起被隱沒掉。
+            state.OrganicThickness[cell] = _markerOrganic[top];
             state.Crust[cell] = _markerCrust[top];
             state.OceanicOnly[cell] = _markerOceanicOnly[top];
 
@@ -840,6 +828,7 @@ public sealed class PlateTectonics
         LastRidgeCrustKm += Isostasy.OceanicCrustThicknessKm;
         _markerThickness[marker] = Isostasy.OceanicCrustThicknessKm;
         _markerAge[marker] = 0f;
+        _markerOrganic[marker] = 0f; // 剛從地函冒出來的玄武岩上面不會有礁
         // 新生地殼要繼承這個板塊的密度異常，否則重板塊會被自己擴張出來的普通地殼稀釋掉
         _markerDensity[marker] =
             Isostasy.OceanicCrustDensity + plates.Plates[_markerPlate[marker]].DensityAnomalyKgPerM3;
@@ -936,6 +925,7 @@ public sealed class PlateTectonics
                 _markerThickness[marker] = state.CrustThickness[cell];
                 _markerAge[marker] = state.CrustAge[cell];
                 _markerDensity[marker] = state.CrustDensity[cell];
+                _markerOrganic[marker] = state.OrganicThickness[cell];
                 // 型別與旗標是類別值，沒有差值可言，直接跟著格子走
                 _markerCrust[marker] = state.Crust[cell];
                 _markerOceanicOnly[marker] = state.OceanicOnly[cell];
@@ -961,6 +951,7 @@ public sealed class PlateTectonics
         var thickness = 0f;
         var age = 0f;
         var density = 0f;
+        var organic = 0f;
 
         for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
         {
@@ -980,6 +971,7 @@ public sealed class PlateTectonics
             thickness += _markerThickness[donor];
             age += _markerAge[donor];
             density += _markerDensity[donor];
+            organic += _markerOrganic[donor];
         }
 
         if (donors == 0)
@@ -988,6 +980,7 @@ public sealed class PlateTectonics
             _markerThickness[marker] = Isostasy.MinCrustThicknessKm;
             _markerAge[marker] = 0f;
             _markerDensity[marker] = Isostasy.OceanicCrustDensity;
+            _markerOrganic[marker] = 0f;
             _markerCrust[marker] = CrustType.Oceanic;
             _markerOceanicOnly[marker] = false;
             return;
@@ -997,6 +990,7 @@ public sealed class PlateTectonics
         _markerThickness[marker] = borrowed;
         _markerAge[marker] = age / donors;
         _markerDensity[marker] = density / donors;
+        _markerOrganic[marker] = organic / donors;
 
         var perDonor = borrowed / donors * MisfitDeductionFraction;
         var continental = 0;
@@ -1069,6 +1063,7 @@ public sealed class PlateTectonics
                 _markerThickness[write] = _markerThickness[read];
                 _markerAge[write] = _markerAge[read];
                 _markerDensity[write] = _markerDensity[read];
+                _markerOrganic[write] = _markerOrganic[read];
                 _markerCrust[write] = _markerCrust[read];
                 _markerOceanicOnly[write] = _markerOceanicOnly[read];
                 _markerCell[write] = _markerCell[read];

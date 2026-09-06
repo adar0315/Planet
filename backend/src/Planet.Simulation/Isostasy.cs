@@ -1,4 +1,4 @@
-namespace Planet.Simulation;
+﻿namespace Planet.Simulation;
 
 /// <summary>
 /// 地殼均衡（Isostasy）：由地殼厚度與年齡換算地表高度。
@@ -87,6 +87,9 @@ public static class Isostasy
     public const float SedimentDensity = 2500f;
 
     /// <summary>有機沉積（珊瑚礁的碳酸鈣、石灰岩）的密度。比碎屑沉積物略高。</summary>
+    // 目前沒有地方用到——礁灰岩刻意不算在 LoadDepressionMeters 的載重裡，理由見那個方法
+    // 的說明（撓曲波長）。留著是因為它是真實的物理常數，等岩石圈撓曲做出來就會用到；
+    // **不要因為「沒人用」就把礁體加回局部均衡**，那會讓礁體長到14公里。
     public const float OrganicDensity = 2600f;
 
     /// <summary>冰的密度。</summary>
@@ -111,14 +114,29 @@ public static class Isostasy
     /// 驗算：南極3公里厚的冰壓下 3000 × 917/3300 ≈ 833 公尺，與實測的量級相符。
     ///
     /// 植被的質量小到可以忽略，不計入。
+    ///
+    /// ## ⚠️ 珊瑚礁**不算**在載重裡（2026-09-07 量測後決定）
+    ///
+    /// 局部 Airy 均衡只對「比岩石圈撓曲波長（約100~200公里）**寬得多**」的載重成立。
+    /// 冰蓋（數千公里）與沉積盆地（數百公里）符合；珊瑚礁不符合——一格才15公里（n=150）
+    /// 到93公里（n=24），這種尺度的載重是被岩石圈的**剛性**撐住的，不是被地函浮力。
+    ///
+    /// 算進來的話每長1公尺礁灰岩會壓下 2600/3300 = 0.79 公尺、淨升只有0.21，
+    /// 於是要填1公尺的空間得長 1/0.21 = **4.76 公尺**，而那4.76公尺又壓出新的空間。
+    /// 實測（n=24，100 Myr）：地殼冷卻的總下沉是 350×√100 = 3,500 公尺，
+    /// 礁體卻長到 14,347 公尺——比值 4.1，就是這個倍率。
+    ///
+    /// 真實世界給得出正確的比值：恩尼威托克環礁底下有1.4公里的礁灰岩，
+    /// 對應的冷卻下沉約1.0公里，比值 **1.4**，不是4.76。差在岩石圈的撓曲支撐。
+    /// 排除礁體等於取比值1.0，比留著的4.76接近事實得多。
+    ///
+    /// 正解是加上岩石圈撓曲（用彈性板取代局部補償），那是還沒做的機制；
+    /// 在那之前，排除比套一個量測上明顯錯誤的補償好。
     /// </summary>
     /// <param name="sedimentMeters">沉積物厚度（公尺）。</param>
-    /// <param name="organicMeters">有機沉積厚度（公尺）。</param>
     /// <param name="iceMeters">冰蓋厚度（公尺）。</param>
-    public static float LoadDepressionMeters(float sedimentMeters, float organicMeters, float iceMeters) =>
-        (sedimentMeters * SedimentDensity
-            + organicMeters * OrganicDensity
-            + iceMeters * IceDensity) / MantleDensity;
+    public static float LoadDepressionMeters(float sedimentMeters, float iceMeters) =>
+        (sedimentMeters * SedimentDensity + iceMeters * IceDensity) / MantleDensity;
 
     /// <summary>
     /// 由地殼類型、厚度、年齡、密度算出基岩表面高度（公尺，相對海平面）。

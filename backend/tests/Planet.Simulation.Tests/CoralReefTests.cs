@@ -1,4 +1,4 @@
-using Planet.Simulation;
+﻿using Planet.Simulation;
 using Xunit;
 
 namespace Planet.Simulation.Tests;
@@ -84,7 +84,14 @@ public class CoralReefTests
         Assert.All(state.OrganicThickness, thickness => Assert.InRange(thickness, 20f, 30f));
     }
 
-    /// <summary>在完整的模擬裡，珊瑚礁必須集中在低緯度的溫暖海域。</summary>
+    /// <summary>
+    /// 在完整的模擬裡，珊瑚**生長**必須只發生在低緯度的溫暖海域。
+    ///
+    /// **守的是「哪裡在長」，不是「哪裡有礁灰岩」**（2026-09-07 改）：礁灰岩掛在標記上、
+    /// 會隨板塊漂移，熱帶長成的礁體漂到高緯度是真實現象——板塊每百萬年移動約50公里，
+    /// 2億年足以跨越90個緯度，地球上也確實有這種漂離熱帶的碳酸鹽台地。
+    /// 所以「高緯度不存在礁灰岩」是錯的不變量，會在礁體正確漂移之後開始誤報。
+    /// </summary>
     [Fact]
     public void Step_ReefsAreConfinedToWarmLowLatitudes()
     {
@@ -92,15 +99,19 @@ public class CoralReefTests
         var engine = new SimulationEngine(grid, 42);
         engine.Step(2000);
 
-        var reefCells = Enumerable.Range(0, engine.State.CellCount)
-            .Where(cell => engine.State.OrganicThickness[cell] > 1f)
+        // 記下這一刻的礁體，再推進一步，比較出「這一步長高的格子」
+        var before = engine.State.OrganicThickness.ToArray();
+        engine.Step(1);
+
+        var grew = Enumerable.Range(0, engine.State.CellCount)
+            .Where(cell => engine.State.OrganicThickness[cell] > before[cell] + 0.01f)
             .ToArray();
 
-        Assert.NotEmpty(reefCells);
+        Assert.NotEmpty(grew);
 
-        var maxLatitude = reefCells.Max(cell => Math.Abs(grid.Latitude[cell]));
+        var maxLatitude = grew.Max(cell => Math.Abs(grid.Latitude[cell]));
         Assert.True(maxLatitude < 50,
-            $"有珊瑚礁長在緯度 {maxLatitude:F0} 度——18°C 的水溫下限沒有生效");
+            $"有珊瑚長在緯度 {maxLatitude:F0} 度——18°C 的水溫下限沒有生效");
     }
 
     /// <summary>

@@ -1,4 +1,4 @@
-namespace Planet.Simulation;
+﻿namespace Planet.Simulation;
 
 /// <summary>
 /// 把網格、狀態、板塊與各種地質作用組裝起來，提供「推進 N 步」的介面。
@@ -123,46 +123,14 @@ public sealed class SimulationEngine
     /// 各種地質作用先改地殼（厚度、類型、年齡），最後才由均衡統一換算成高度、再注水。
     /// 火山排在均衡之前，堆出來的地殼才會在同一步就浮起來變成島。
     /// </summary>
-    /// <summary>診斷用：各階段對「大陸格平均地殼厚度」的貢獻（公里）。校準完會拿掉。</summary>
-    public double[] PhaseDeltas { get; } = new double[6];
-
-    /// <summary>診斷用的階段名稱，與 <see cref="PhaseDeltas"/> 對應。</summary>
-    public static readonly string[] PhaseNames =
-        ["板塊(含取樣/島弧/擴展)", "熱柱", "裂縫火山", "造礁", "侵蝕", "回寫標記"];
-
-    private double MeanContinentalThickness()
-    {
-        var total = 0.0;
-        var count = 0;
-        for (var cell = 0; cell < State.CellCount; cell++)
-        {
-            if (State.Crust[cell] != CrustType.Oceanic) continue;
-            total += State.CrustThickness[cell];
-            count++;
-        }
-        return count > 0 ? total / count : 0;
-    }
-
     private void StepOnce()
     {
         DecayVolcanicActivity();
 
-        var mark = MeanContinentalThickness();
-        double Phase(int index)
-        {
-            var now = MeanContinentalThickness();
-            PhaseDeltas[index] += now - mark;
-            mark = now;
-            return now;
-        }
-
         _tectonics.Step(Grid, State, Plates, YearsPerStep);
-        Phase(0);
         _plumes.Step(Grid, State, YearsPerStep / 1_000_000.0);
-        Phase(1);
         // 裂縫火山要讀這一步剛分類好的板塊邊界（斷層帶在哪），所以排在板塊運動之後
         _fissures.Step(Grid, State, Plates, YearsPerStep / 1_000_000.0);
-        Phase(2);
 
         // 造礁與侵蝕排在均衡注水**之前**，用的是上一步的水深／水溫／逕流。
         //
@@ -171,9 +139,7 @@ public sealed class SimulationEngine
         // 排在前面，下面那一次求解就會把造礁堆高、侵蝕削低、沉積墊高全部一起算進去。
         // 用上一步的水深判斷海陸有一步的延遲，但一步是5萬年、地形變化極小，完全可以接受。
         _reefs.Step(State, YearsPerStep);
-        Phase(3);
         _erosion.Step(State, YearsPerStep);
-        Phase(4);
 
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
         // 求解裡從總水量扣掉——冰長海平面就降、冰融海平面就升。
@@ -184,7 +150,6 @@ public sealed class SimulationEngine
         // 原本回寫寫在 PlateTectonics.Step 結尾，排在它後面的火山與侵蝕就會被下一次
         // Rasterize 靜靜蓋掉——n=150 大約每2步取樣一次，等於一半的產出憑空消失（2026-09-06）。
         _tectonics.WriteGridBackToMarkers(State);
-        Phase(5);
 
         ApplyIsostasyAndFillWater();
 
@@ -200,11 +165,6 @@ public sealed class SimulationEngine
             _climate.Solve(State);
             _yearsSinceClimateSolve = 0;
         }
-
-        // 造礁要用到**這一步算好的**水深與水溫，所以排在均衡注水與氣候之後。
-        // 礁體長高會改變地表高度，所以要重算一次水深；海平面本身不重算——
-        // 礁體排開的水量小到可以忽略，而下一步本來就會重新解一次海平面。
-
 
         // 板塊範圍每步都在動（PlateSet.Advance），顯示用的副本要跟著，
         // 不然畫出來的板塊邊界會落後到上一次取樣的位置
@@ -247,7 +207,7 @@ public sealed class SimulationEngine
             State.BedrockElevation[cell] = Isostasy.BedrockElevation(
                     State.Crust[cell], State.CrustThickness[cell], State.CrustAge[cell], State.CrustDensity[cell])
                 - Isostasy.LoadDepressionMeters(
-                    State.SedimentThickness[cell], State.OrganicThickness[cell], State.IceThickness[cell]);
+                    State.SedimentThickness[cell], State.IceThickness[cell]);
         });
 
         // 地表高度先算一次存起來：二分搜尋要掃描全球十幾次，每次都重算「基岩＋沉積＋有機＋植被」
