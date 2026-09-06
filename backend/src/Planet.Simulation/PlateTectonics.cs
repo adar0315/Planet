@@ -139,6 +139,13 @@ public sealed class PlateTectonics
     private const float AccretedFractionOfSubductedCrust = 0.03f;
 
     /// <summary>
+    /// 兩塊大陸對撞時，被擠掉的那一塊有多少厚度轉移到留下的那一塊。
+    /// 取0.5：大陸地殼太輕、誰都沉不下去，物質只能往上下擠成山脈與山根——
+    /// 這是大陸變厚最主要的機制（喜馬拉雅型造山），跟隱沒的3%增生完全不同量級。
+    /// </summary>
+    private const float ContinentalCollisionTransfer = 0.5f;
+
+    /// <summary>
     /// 取樣錯配的空格向鄰居借地殼時，實際從鄰居扣掉幾成（見 <see cref="BorrowFromNeighbours"/>）。
     ///
     /// 取0（借了不扣，等同標準 MPM 的重新播種）：1.0 是完全守恆，但實測會讓整顆星球被磨到
@@ -635,9 +642,28 @@ public sealed class PlateTectonics
                 var loser = _markersByCell[from + lowest];
                 var winner = _markersByCell[from + highest];
 
-                LastAccretionCrustKm += _markerThickness[loser] * AccretedFractionOfSubductedCrust;
-                LastSubductedCrustKm += _markerThickness[loser];
-                Accrete(winner, _markerThickness[loser]);
+                if (_markerCrust[loser] == CrustType.Continental
+                    && _markerCrust[winner] == CrustType.Continental)
+                {
+                    // **兩塊大陸對撞：物質無處可去，只能往上下增厚（山脈＋山根）。**
+                    //
+                    // 這一段在改寫 Rasterize 時整個漏掉了（2026-09-06/07）：原本寫在
+                    // ResolveCollision 裡，把擁擠處理內聯之後那個方法就沒人呼叫了，
+                    // 大陸對撞從「吃掉對方一半的厚度」退化成只有增生的3%——**少了16倍**。
+                    // 症狀是大陸長不大也長不厚：2億年後只有168格、碎成116塊、最大10格。
+                    // 喜馬拉雅型造山是大陸變厚最主要的機制，缺了它大陸就只能靠島弧慢慢增生。
+                    _markerThickness[winner] = MathF.Min(
+                        _markerThickness[winner] + _markerThickness[loser] * ContinentalCollisionTransfer,
+                        Isostasy.MaxCrustThicknessKm);
+                }
+                else
+                {
+                    // 一邊是海洋地殼：隱沒下去，但一部分會被刮下來增生到上盤
+                    LastAccretionCrustKm += _markerThickness[loser] * AccretedFractionOfSubductedCrust;
+                    LastSubductedCrustKm += _markerThickness[loser];
+                    Accrete(winner, _markerThickness[loser]);
+                }
+
                 _markerAlive[loser] = false;
 
                 // 從桶裡移除：把最後一個搬過來補洞
@@ -883,10 +909,15 @@ public sealed class PlateTectonics
     /// 地質作用（增生、造山、重力擴展、火山、侵蝕）改的是格子上的值，要寫回標記，
     /// 否則下一次取樣就會用舊的標記內容把這些改動整個蓋掉。
     ///
-    /// **寫回的是「差值」而不是絕對值**（2026-09-06 改成一格多個標記時一併改的）：
-    /// 一格現在有好幾個標記，把格子的值直接覆蓋到每一個上面，它們會瞬間變成一模一樣，
-    /// 多個標記帶來的次格解析度就全部消失、退化成一格一個標記。
-    /// 加上差值則保留了標記之間原本的差異，這是 MPM 的標準做法（FLIP 而不是 PIC）。
+    /// **一格一個標記時要寫「絕對值」，不能寫差值**（2026-09-07 追出來的）。
+    ///
+    /// 差值寫回（FLIP）是為了保留「同一格裡多個標記之間的差異」才加的，
+    /// 在 <see cref="MarkersPerCell"/> = 1 時那個差異根本不存在，而副作用很嚴重：
+    /// 負的差值會把標記一路壓到 <see cref="Isostasy.MinCrustThicknessKm"/> 的下限再也回不來。
+    /// 實測改回絕對值之後，**大陸從168格變成461格、最大陸塊從10格變成45格、
+    /// 大陸厚度從31.4變成38.6公里**（地球是35~40）。
+    ///
+    /// 之後若要再走多標記，這裡要跟著改回差值——兩者是綁在一起的。
     /// </summary>
     public void WriteGridBackToMarkers(SimulationState state)
     {
@@ -902,10 +933,9 @@ public sealed class PlateTectonics
             for (var i = 0; i < count; i++)
             {
                 var marker = MarkerAt(cell, i);
-                _markerThickness[marker] = MathF.Max(
-                    Isostasy.MinCrustThicknessKm, _markerThickness[marker] + deltaThickness);
-                _markerAge[marker] = MathF.Max(0f, _markerAge[marker] + deltaAge);
-                _markerDensity[marker] += deltaDensity;
+                _markerThickness[marker] = state.CrustThickness[cell];
+                _markerAge[marker] = state.CrustAge[cell];
+                _markerDensity[marker] = state.CrustDensity[cell];
                 // 型別與旗標是類別值，沒有差值可言，直接跟著格子走
                 _markerCrust[marker] = state.Crust[cell];
                 _markerOceanicOnly[marker] = state.OceanicOnly[cell];
