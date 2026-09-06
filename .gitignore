@@ -1,0 +1,25 @@
+# .NET
+backend/**/bin/
+backend/**/obj/
+backend/**/*.user
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+
+# 機密設定：連線字串與管理金鑰一律走 user-secrets 或環境變數，不要進版控。
+# 這幾條是萬一有人習慣性地把值寫回設定檔時的最後一道防線。
+backend/**/appsettings.Production.json
+backend/**/appsettings.*.local.json
+backend/**/secrets.json
+*.pfx
+
+# Editor
+.vs/
+*.suo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Planet.Service (.NET)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "backend: build",
+      // 路徑一定要含 win-x64：csproj 設了 <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+      // （自封裝部署用），輸出就會落在 net10.0/win-x64/ 而不是 net10.0/。
+      // 少了這一段，F5 會直接跳「program ... does not exist」。
+      "program": "${workspaceFolder}/backend/src/Planet.Service/bin/Debug/net10.0/win-x64/Planet.Service.dll",
+      "cwd": "${workspaceFolder}/backend/src/Planet.Service",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        // 這個設定是直接啟動 DLL，**不會**套用 Properties/launchSettings.json 的 applicationUrl，
+        // 不明寫的話會綁到預設的 5000 埠，前端（寫死打 5202）就連不上。
+        "ASPNETCORE_URLS": "http://localhost:5202"
+      }
+    }
+  ]
+}

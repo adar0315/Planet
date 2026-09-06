@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- 開發時的連線字串／管理金鑰放這裡（存在 %APPDATA%\Microsoft\UserSecrets，不在repo內）。 -->
+    <UserSecretsId>planet-service-dev-secrets</UserSecretsId>
+    <AssemblyTitle>Planet Service</AssemblyTitle>
+    <Product>Planet</Product>
+    <Description>Planet 星球地圖走動系統後端：Goldberg多面體星球生成、地塊查詢REST API、玩家移動SignalR Hub。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.17.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Planet.Domain\Planet.Domain.csproj" />
+    <ProjectReference Include="..\Planet.Generation\Planet.Generation.csproj" />
+    <ProjectReference Include="..\Planet.Simulation\Planet.Simulation.csproj" />
+    <ProjectReference Include="..\Planet.Data\Planet.Data.csproj" />
+    <ProjectReference Include="..\Planet.Shared\Planet.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

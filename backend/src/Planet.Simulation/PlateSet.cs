@@ -1,0 +1,386 @@
+namespace Planet.Simulation;
+
+/// <summary>
+/// 一個板塊的剛體運動。
+///
+/// 球面上任何剛體運動都可以表示成「繞著某條通過球心的軸旋轉」，那條軸與球面的交點就是
+/// **歐拉極（Euler pole）**——這是真實板塊構造學描述板塊運動的標準做法，不是簡化近似。
+/// 板塊上任一點的速度 v = ω × r，離歐拉極90度的地方最快、極點本身不動。
+/// </summary>
+/// <param name="Id">板塊編號。</param>
+/// <param name="PoleX">歐拉極單位向量X。</param>
+/// <param name="PoleY">歐拉極單位向量Y。</param>
+/// <param name="PoleZ">歐拉極單位向量Z。</param>
+/// <param name="AngularVelocityDegPerMyr">角速度（度／百萬年），正值為右手定則方向。</param>
+/// <param name="DensityAnomalyKgPerM3">
+/// 這個板塊的地殼密度相對典型海洋地殼（<see cref="Isostasy.OceanicCrustDensity"/>）差多少。
+/// 正值＝比周圍重，見 <see cref="PlateSet.DensePlateCount"/>。
+/// </param>
+public readonly record struct Plate(
+    int Id,
+    double PoleX,
+    double PoleY,
+    double PoleZ,
+    double AngularVelocityDegPerMyr,
+    float DensityAnomalyKgPerM3 = 0f);
+
+/// <summary>
+/// 整顆星球的板塊配置：每個板塊的歐拉極與角速度，以及「每一格屬於哪個板塊」。
+/// </summary>
+public sealed class PlateSet
+{
+    /// <summary>
+    /// 預設板塊數。地球目前是7大板塊＋約8個小板塊，取15是同一個量級。
+    /// 太少會讓每個板塊大到看不出邊界作用，太多則每個板塊都很小、大陸長不起來。
+    /// </summary>
+    public const int DefaultPlateCount = 15;
+
+    /// <summary>
+    /// 有幾個板塊一開始就比周圍的海洋板塊**重**。
+    ///
+    /// 重的板塊在均衡上沉得更低（densityLift 是負的），所以形成更深的海盆——
+    /// **陸地不是來自這些板塊自己浮起來，而是來自堆在它們上面的火山**：
+    /// 負浮力讓板塊持續承受拉張與剪切應力，斷層帶因此裂開，岩漿沿裂縫上湧堆成火山島
+    /// （見 <see cref="FissureVolcanism"/>）。地球上的夏威夷就是坐落在又老又重的太平洋板塊上。
+    /// </summary>
+    public const int DensePlateCount = 2;
+
+    /// <summary>
+    /// 重板塊比典型海洋地殼重多少（公斤／立方公尺）。
+    ///
+    /// 取250：以7公里厚的地殼計算，Airy 均衡的下沉量是 7000×250/3300 ≈ 530公尺。
+    /// 原本取150（約320公尺），但海洋深度本來就會因為年齡差出好幾公里
+    /// （深度 ∝ √年齡），320公尺根本蓋不過那個變異，看不出「這是比較深的海盆」。
+    /// </summary>
+    public const float DensePlateAnomalyKgPerM3 = 250f;
+
+    /// <summary>所有板塊，索引即 <see cref="Plate.Id"/>。</summary>
+    public Plate[] Plates { get; }
+
+    /// <summary>每一格屬於哪個板塊（長度 = 格數）。會隨著板塊移動而改變。</summary>
+    public int[] PlateIdByCell { get; }
+
+    // 球面 Voronoi 的種子點，會跟著各自的歐拉極一起旋轉，見 Advance
+    private readonly double[] _seedX;
+    private readonly double[] _seedY;
+    private readonly double[] _seedZ;
+
+    private PlateSet(Plate[] plates, int[] plateIdByCell, double[] seedX, double[] seedY, double[] seedZ)
+    {
+        Plates = plates;
+        PlateIdByCell = plateIdByCell;
+        _seedX = seedX;
+        _seedY = seedY;
+        _seedZ = seedZ;
+    }
+
+    /// <summary>
+    /// 把板塊往前推進：種子點各自繞自己的歐拉極旋轉，再重新分配每一格屬於哪個板塊。
+    ///
+    /// **板塊的範圍是幾何決定的，不是逐格搬運出來的**，這裡踩過一次坑（2026-09-05）：
+    /// 原本板塊歸屬跟著地殼的標記一起移動，但「最近格」映射對非均勻的 Goldberg 網格
+    /// 不是完美的一對一，每次取樣都會有少量錯配，累積下來把板塊編號攪成胡椒鹽——
+    /// **94%的格子都被判定成板塊邊界**，於是整個地表不斷被當成張裂處重置成新生地殼，
+    /// 平均地殼厚度一路下滑、撞擊留下的不均勻也被洗掉，而且完全沒有錯誤訊息。
+    ///
+    /// 板塊是剛體，讓種子點旋轉就能得到平滑、無雜訊、而且會隨相對運動自然增減的邊界。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    /// <param name="deltaMyr">要推進多少百萬年。</param>
+    public void Advance(SimulationGrid grid, double deltaMyr)
+    {
+        var maxAngleRad = 0.0;
+        for (var p = 0; p < Plates.Length; p++)
+        {
+            var plate = Plates[p];
+            var angle = plate.AngularVelocityDegPerMyr * Math.PI / 180.0 * deltaMyr;
+            var (x, y, z) = RotateAboutAxis(
+                _seedX[p], _seedY[p], _seedZ[p],
+                plate.PoleX, plate.PoleY, plate.PoleZ,
+                angle);
+
+            // 每步重新正規化：幾萬步累積下來的浮點誤差會讓種子點慢慢離開單位球面
+            var length = Math.Sqrt(x * x + y * y + z * z);
+            _seedX[p] = x / length;
+            _seedY[p] = y / length;
+            _seedZ[p] = z / length;
+
+            maxAngleRad = Math.Max(maxAngleRad, Math.Abs(angle));
+        }
+
+        // **旋轉每步都做，重新分配歸屬只在種子真的移動夠遠時才做。**
+        // 重新分配是 15個板塊 × 22.5萬格的內積掃描，一步5萬年種子只移動不到1公里、
+        // 結果根本不會變，每步都做的話光這件事就佔掉大半的運算時間。
+        // 種子位置一直是精確的連續值，所以延後分配不會累積任何誤差。
+        _seedDriftMeters += maxAngleRad * grid.PlanetRadiusMeters;
+        var threshold = ReassignThresholdInCellSpacings * EstimateCellSpacingMeters(grid);
+        if (_seedDriftMeters < threshold) return;
+
+        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ);
+        _seedDriftMeters = 0;
+    }
+
+    /// <summary>
+    /// 種子點漂移超過幾倍的「格子中心間距」才重新分配板塊歸屬。
+    /// 取0.25：遠小於一格，所以邊界的移動看起來仍然是連續的，但掃描次數少了一個數量級。
+    /// </summary>
+    private const double ReassignThresholdInCellSpacings = 0.25;
+
+    private double _seedDriftMeters;
+
+    /// <summary>相鄰格子的中心間距（公尺）：由平均面積當正六邊形反推邊長，再乘√3。</summary>
+    private static double EstimateCellSpacingMeters(SimulationGrid grid) =>
+        Math.Sqrt(grid.AverageCellAreaSquareMeters / (3.0 * Math.Sqrt(3.0) / 2.0)) * Math.Sqrt(3.0);
+
+    /// <summary>羅德里格旋轉公式：把單位向量繞著另一條軸旋轉指定角度。</summary>
+    private static (double X, double Y, double Z) RotateAboutAxis(
+        double vx, double vy, double vz,
+        double kx, double ky, double kz,
+        double angleRad)
+    {
+        var cos = Math.Cos(angleRad);
+        var sin = Math.Sin(angleRad);
+
+        var crossX = ky * vz - kz * vy;
+        var crossY = kz * vx - kx * vz;
+        var crossZ = kx * vy - ky * vx;
+        var factor = (kx * vx + ky * vy + kz * vz) * (1 - cos);
+
+        return (
+            vx * cos + crossX * sin + kx * factor,
+            vy * cos + crossY * sin + ky * factor,
+            vz * cos + crossZ * sin + kz * factor);
+    }
+
+    /// <summary>
+    /// 隨機生成板塊配置：在球面上灑 <paramref name="plateCount"/> 個種子點做球面 Voronoi 分割，
+    /// 每個板塊再給一個隨機的歐拉極與角速度。
+    ///
+    /// **角速度的範圍是依這顆星球的半徑換算的，不是照抄地球的數字。**
+    /// 地球板塊速度約 1~10 公分/年，而線速度 = 半徑 × 角速度：
+    /// 這顆星球半徑1,852公里（地球的0.29倍），1度/百萬年在赤道約等於 3.2 公分/年，
+    /// 所以要得到地球量級的速度，角速度要取 0.3~2.5 度/百萬年。
+    /// 直接抄地球的角速度（0.1~0.9）會讓板塊慢上三倍多。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    /// <param name="seed">亂數種子，同種子會產生同一組板塊。</param>
+    /// <param name="plateCount">板塊數量。</param>
+    /// <param name="densePlateCount">
+    /// 有幾個板塊一開始就比較重（見 <see cref="DensePlateCount"/>）。
+    /// 可以指定成0來做對照實驗，確認某個現象是不是重板塊造成的。
+    /// </param>
+    public static PlateSet CreateRandom(
+        SimulationGrid grid, int seed, int plateCount = DefaultPlateCount, int densePlateCount = DensePlateCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(plateCount, 2);
+        ArgumentOutOfRangeException.ThrowIfNegative(densePlateCount);
+
+        var rng = new Random(seed);
+        var plates = new Plate[plateCount];
+        var seedX = new double[plateCount];
+        var seedY = new double[plateCount];
+        var seedZ = new double[plateCount];
+
+        for (var p = 0; p < plateCount; p++)
+        {
+            var (sx, sy, sz) = RandomUnitVector(rng);
+            seedX[p] = sx;
+            seedY[p] = sy;
+            seedZ[p] = sz;
+
+            var (px, py, pz) = RandomPoleBiasedToSpinAxis(rng);
+            // 0.3~2.5 度/百萬年 ＝ 這顆星球上約 1~8 公分/年
+            var omega = 0.3 + rng.NextDouble() * 2.2;
+            plates[p] = new Plate(p, px, py, pz, omega);
+        }
+
+        AssignDensePlates(plates, rng, densePlateCount);
+
+        var plateIdByCell = new int[grid.CellCount];
+        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ);
+
+        RemoveNetRotation(plates, plateIdByCell);
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ);
+    }
+
+    /// <summary>
+    /// 隨機挑 <see cref="DensePlateCount"/> 個板塊，讓它們的地殼比周圍的海洋板塊重。
+    ///
+    /// 用 Fisher–Yates 洗牌取前幾個，而不是「隨機抽直到湊滿」——後者在板塊數少的時候
+    /// 可能反覆抽到同一個而空轉，而且抽樣不均勻。
+    /// </summary>
+    private static void AssignDensePlates(Plate[] plates, Random rng, int densePlateCount)
+    {
+        if (densePlateCount <= 0) return;
+
+        var order = Enumerable.Range(0, plates.Length).ToArray();
+        for (var i = order.Length - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (order[i], order[j]) = (order[j], order[i]);
+        }
+
+        var count = Math.Min(densePlateCount, plates.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var id = order[i];
+            plates[id] = plates[id] with { DensityAnomalyKgPerM3 = DensePlateAnomalyKgPerM3 };
+        }
+    }
+
+    /// <summary>
+    /// 把各板塊的密度異常寫進地殼狀態。
+    ///
+    /// 必須在 <c>PlateTectonics.Reset</c> **之前**呼叫——標記（marker）的密度是從
+    /// <see cref="SimulationState.CrustDensity"/> 拷貝過去的，順序反了的話異常永遠不會生效。
+    /// </summary>
+    /// <param name="state">要套用的模擬狀態。</param>
+    public void ApplyDensityAnomaliesTo(SimulationState state)
+    {
+        for (var cell = 0; cell < state.CellCount; cell++)
+        {
+            var anomaly = Plates[PlateIdByCell[cell]].DensityAnomalyKgPerM3;
+            if (anomaly <= 0f) continue;
+
+            state.CrustDensity[cell] += anomaly;
+            state.OceanicOnly[cell] = true;
+
+            // 早期大轟炸可能已經在這裡放了原始高地（那一步跑在板塊指派之前），
+            // 落在重板塊上的要降回海洋地殼，否則「維持一片海洋」從第0步就不成立。
+            state.Crust[cell] = CrustType.Oceanic;
+        }
+    }
+
+    /// <summary>
+    /// 球面 Voronoi：每格歸給最接近的種子點。板塊數很少，直接暴力比對即可
+    /// （15個板塊 × 22.5萬格 ≈ 340萬次內積，跟最近格搜尋比起來便宜得多）。
+    /// </summary>
+    private static void AssignCellsToNearestSeed(
+        SimulationGrid grid, int[] plateIdByCell, double[] seedX, double[] seedY, double[] seedZ)
+    {
+        var plateCount = seedX.Length;
+        Parallel.For(0, grid.CellCount, cell =>
+        {
+            var x = grid.UnitVector[cell * 3];
+            var y = grid.UnitVector[cell * 3 + 1];
+            var z = grid.UnitVector[cell * 3 + 2];
+
+            var best = 0;
+            var bestDot = double.NegativeInfinity;
+            for (var p = 0; p < plateCount; p++)
+            {
+                var dot = x * seedX[p] + y * seedY[p] + z * seedZ[p];
+                if (dot > bestDot)
+                {
+                    bestDot = dot;
+                    best = p;
+                }
+            }
+            plateIdByCell[cell] = best;
+        });
+    }
+
+    /// <summary>
+    /// 換到**無淨旋轉參考系**：扣掉全體板塊（依面積加權）的平均角速度。
+    ///
+    /// 板塊運動只有**相對**運動是物理的，絕對旋轉取決於選哪個參考系，真實的板塊模型
+    /// 也是用這個參考系發表數字的。但在這個模擬裡，絕對旋轉不是無害的自由度——
+    /// <c>PlateTectonics.Advect</c> 是把地殼搬過離散的格子網格，每搬一次就產生取整誤差、
+    /// 空格與假碰撞。若全體帶著一個共同的旋轉，整片地殼會一起掃過網格製造滿地雜訊，
+    /// 而物理上什麼事都沒發生。
+    ///
+    /// 生成時 <c>omega</c> 恆為正、歐拉極隨機，15個向量相加是隨機漫步、不會自己抵消，
+    /// 所以這個扣除是必要的。**不要改成「把其中一塊板塊固定住」**——那也能消掉淨旋轉，
+    /// 但會讓那一塊變成唯一沒有取整雜訊的板塊，不成比例地容易長出大陸。
+    /// </summary>
+    private static void RemoveNetRotation(Plate[] plates, int[] plateIdByCell)
+    {
+        var cellsPerPlate = new int[plates.Length];
+        foreach (var plate in plateIdByCell) cellsPerPlate[plate]++;
+
+        double meanX = 0, meanY = 0, meanZ = 0;
+        for (var p = 0; p < plates.Length; p++)
+        {
+            var weight = (double)cellsPerPlate[p] / plateIdByCell.Length;
+            meanX += plates[p].PoleX * plates[p].AngularVelocityDegPerMyr * weight;
+            meanY += plates[p].PoleY * plates[p].AngularVelocityDegPerMyr * weight;
+            meanZ += plates[p].PoleZ * plates[p].AngularVelocityDegPerMyr * weight;
+        }
+
+        for (var p = 0; p < plates.Length; p++)
+        {
+            var x = plates[p].PoleX * plates[p].AngularVelocityDegPerMyr - meanX;
+            var y = plates[p].PoleY * plates[p].AngularVelocityDegPerMyr - meanY;
+            var z = plates[p].PoleZ * plates[p].AngularVelocityDegPerMyr - meanZ;
+
+            var omega = Math.Sqrt(x * x + y * y + z * z);
+            // 扣完之後剛好靜止的板塊沒有歐拉極可言，保留原本的極、角速度歸零即可
+            plates[p] = omega < 1e-12
+                ? plates[p] with { AngularVelocityDegPerMyr = 0 }
+                // 密度異常一定要帶過去——這裡是用 new Plate(...) 重建的，漏掉的話重板塊會被靜靜地變回普通板塊
+            : new Plate(p, x / omega, y / omega, z / omega, omega, plates[p].DensityAnomalyKgPerM3);
+        }
+    }
+
+    /// <summary>
+    /// 某一格的板塊運動速度（公尺／百萬年），v = ω × r。
+    /// 回傳的是三維向量，本身已經與該點的地表相切（外積的結果必定垂直於 r）。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    /// <param name="cell">格子索引。</param>
+    public (double X, double Y, double Z) VelocityAt(SimulationGrid grid, int cell)
+    {
+        var plate = Plates[PlateIdByCell[cell]];
+        var omegaRad = plate.AngularVelocityDegPerMyr * Math.PI / 180.0;
+
+        // r 用實際半徑，算出來的速度才有公尺/百萬年的物理意義
+        var rx = grid.UnitVector[cell * 3] * grid.PlanetRadiusMeters;
+        var ry = grid.UnitVector[cell * 3 + 1] * grid.PlanetRadiusMeters;
+        var rz = grid.UnitVector[cell * 3 + 2] * grid.PlanetRadiusMeters;
+
+        var wx = plate.PoleX * omegaRad;
+        var wy = plate.PoleY * omegaRad;
+        var wz = plate.PoleZ * omegaRad;
+
+        return (wy * rz - wz * ry, wz * rx - wx * rz, wx * ry - wy * rx);
+    }
+
+    /// <summary>
+    /// 歐拉極要偏向自轉軸多少（0＝完全隨機，1＝正好落在自轉軸上）。
+    ///
+    /// 板塊繞著靠近自轉軸的歐拉極旋轉時，地表的運動就沿著緯線——也就是**以東西向為主**。
+    ///
+    /// **這是這顆星球的設定，不是照抄地球。** 地球的板塊運動主要由地函對流驅動
+    /// （板片拉力、洋脊推力），跟自轉沒有直接關係，所以印度板塊往北、太平洋板塊往西北、
+    /// 納茲卡板塊往東，方向各異。真正跟自轉有關的是「岩石圈西向漂移」
+    /// （相對地函約0.2度/百萬年的淨西向旋轉，一般歸因於潮汐減速），但那是小的疊加分量、不是主導。
+    /// 取0.7而不是1.0：保留一些南北向分量，否則所有板塊邊界都會變成平行的水平線，
+    /// 長不出斜向的隱沒帶與轉形斷層。
+    /// </summary>
+    private const double EulerPoleSpinAxisBias = 0.7;
+
+    /// <summary>
+    /// 取一個偏向自轉軸（±Z）的隨機歐拉極，讓板塊運動以東西向為主，見 <see cref="EulerPoleSpinAxisBias"/>。
+    /// </summary>
+    private static (double X, double Y, double Z) RandomPoleBiasedToSpinAxis(Random rng)
+    {
+        var (x, y, z) = RandomUnitVector(rng);
+
+        // 把 |z| 往 1 推，再把水平分量等比例縮小以維持單位長度
+        var sign = z < 0 ? -1.0 : 1.0;
+        var biasedAbsZ = 1.0 - (1.0 - Math.Abs(z)) * (1.0 - EulerPoleSpinAxisBias);
+        var horizontalScale = Math.Sqrt(Math.Max(0.0, 1.0 - biasedAbsZ * biasedAbsZ))
+            / Math.Max(Math.Sqrt(Math.Max(0.0, 1.0 - z * z)), 1e-12);
+
+        return (x * horizontalScale, y * horizontalScale, sign * biasedAbsZ);
+    }
+
+    /// <summary>在球面上取一個均勻分布的隨機單位向量（用z均勻分布法，直接對經緯度取隨機會在極區聚集）。</summary>
+    private static (double X, double Y, double Z) RandomUnitVector(Random rng)
+    {
+        var z = rng.NextDouble() * 2.0 - 1.0;
+        var theta = rng.NextDouble() * 2.0 * Math.PI;
+        var r = Math.Sqrt(1.0 - z * z);
+        return (r * Math.Cos(theta), r * Math.Sin(theta), z);
+    }
+}

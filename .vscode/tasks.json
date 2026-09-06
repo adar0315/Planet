@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "backend: build",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/backend/Planet.Backend.slnx"],
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "backend: run Planet.Service",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/backend/src/Planet.Service/Planet.Service.csproj"],
+      "problemMatcher": "$msCompile",
+      "isBackground": true
+    },
+    {
+      "label": "frontend: dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

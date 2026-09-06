@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Planet.Data/Planet.Data.csproj" />
+    <Project Path="src/Planet.Domain/Planet.Domain.csproj" />
+    <Project Path="src/Planet.Generation/Planet.Generation.csproj" />
+    <Project Path="src/Planet.Service/Planet.Service.csproj" />
+    <Project Path="src/Planet.Simulation/Planet.Simulation.csproj" />
+    <Project Path="src/Planet.Shared/Planet.Shared.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Planet.Data.Tests/Planet.Data.Tests.csproj" />
+    <Project Path="tests/Planet.Generation.Tests/Planet.Generation.Tests.csproj" />
+    <Project Path="tests/Planet.Simulation.Tests/Planet.Simulation.Tests.csproj" />
+  </Folder>
+</Solution>
