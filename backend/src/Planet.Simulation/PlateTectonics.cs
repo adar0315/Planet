@@ -966,8 +966,15 @@ public sealed class PlateTectonics
         {
             var neighbor = grid.Neighbors[baseIndex + s];
             if (neighbor == SimulationGrid.NoNeighbor) continue;
-            var donor = _ownerMarker[neighbor];
-            if (donor < 0) continue;
+            // **要用分桶找標記，不能用 _ownerMarker**（2026-09-07 踩過）：
+            // _ownerMarker 在 Rasterize 開頭就被清成 -1，要到第5段（寫進格子）才填回去，
+            // 而這個方法是在第4段（補空格）呼叫的——那時它全部是 -1，
+            // 於是 donors 永遠是 0、每一次都掉進下面「借不到就給最薄地殼」的退路。
+            // 實測每步觸發14次、跟「錯配空格裡沒被配對走的數量」完全吻合（50×28%），
+            // 4,000步下來把海洋地殼打成3公里的次數平均每格10次——
+            // 中洋脊明明生出7公里，海洋地殼的中位數卻只有3.8。
+            if (_cellMarkerCount[neighbor] <= 0) continue;
+            var donor = MarkerAt(neighbor, 0);
 
             donors++;
             thickness += _markerThickness[donor];
@@ -998,8 +1005,8 @@ public sealed class PlateTectonics
         {
             var neighbor = grid.Neighbors[baseIndex + s];
             if (neighbor == SimulationGrid.NoNeighbor) continue;
-            var donor = _ownerMarker[neighbor];
-            if (donor < 0) continue;
+            if (_cellMarkerCount[neighbor] <= 0) continue;
+            var donor = MarkerAt(neighbor, 0);
 
             _markerThickness[donor] = MathF.Max(
                 Isostasy.MinCrustThicknessKm, _markerThickness[donor] - perDonor);
