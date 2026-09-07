@@ -87,6 +87,18 @@ public sealed class PlateSet
     private readonly double[] _seedZ;
     private readonly int[] _seedPlate;
 
+    /// <summary>
+    /// 每一格「最近的種子」贏第二名多少（內積差）。上一次**全掃**時算的。
+    /// 見 <see cref="AssignCellsToNearestSeed"/> 裡的說明。
+    /// </summary>
+    private float[]? _assignMargin;
+
+    /// <summary>上一次全掃之後，種子累積轉了多少角度（弧度）。</summary>
+    private double _driftAngleSinceFullScan;
+
+    /// <summary>這一次重新分配實際重掃了幾格。診斷與「該不該改回全掃」的判斷用。</summary>
+    private int _lastRescanCount;
+
     private PlateSet(
         Plate[] plates, int[] plateIdByCell,
         double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate)
@@ -134,6 +146,8 @@ public sealed class PlateSet
             maxAngleRad = Math.Max(maxAngleRad, Math.Abs(angle));
         }
 
+        _driftAngleSinceFullScan += maxAngleRad;
+
         // **旋轉每步都做，重新分配歸屬只在種子真的移動夠遠時才做。**
         // 重新分配是 15個板塊 × 22.5萬格的內積掃描，一步5萬年種子只移動不到1公里、
         // 結果根本不會變，每步都做的話光這件事就佔掉大半的運算時間。
@@ -142,7 +156,7 @@ public sealed class PlateSet
         var threshold = ReassignThresholdInCellSpacings * EstimateCellSpacingMeters(grid);
         if (_seedDriftMeters < threshold) return;
 
-        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate);
+        Reassign(grid);
         _seedDriftMeters = 0;
     }
 
@@ -247,10 +261,87 @@ public sealed class PlateSet
         AssignDensePlates(plates, rng, densePlateCount);
 
         var plateIdByCell = new int[grid.CellCount];
-        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ, seedPlate);
+        var margin = new float[grid.CellCount];
+        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ, seedPlate, margin);
 
         RemoveNetRotation(plates, plateIdByCell);
-        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate);
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate)
+        {
+            _assignMargin = margin,
+        };
+    }
+
+    /// <summary>
+    /// 重掃的格數超過總數這個比例時，就改成全掃並重置基準。
+    ///
+    /// 需要重掃的集合會隨著累積漂移單調變大（見 <see cref="Reassign"/>），
+    /// 大到一定程度時全掃反而比較划算，而且能把勝負差的基準重新算準。
+    /// </summary>
+    private const double FullScanWhenRescanFractionExceeds = 0.5;
+
+    /// <summary>
+    /// 重新分配板塊歸屬——只重算**可能翻面**的格子。
+    ///
+    /// ## 判準是可以證明的界，不是幾何直覺
+    ///
+    /// 一開始寫成「只重掃邊界附近幾格」，被 <c>PlateAssignmentTests</c> 當場抓到錯
+    /// （2026-09-07，25百萬年後13格不一致）。漏掉的情況是：一個子種子可能先被鄰居壓過去、
+    /// 完全不擁有任何格子，之後隨著旋轉「浮出來」，於是它的領域**憑空出現在另一個板塊的內部**，
+    /// 跟既有邊界完全不相鄰。
+    ///
+    /// 正確的判準來自內積本身：種子轉了角度 Δ，任一格對它的內積最多變化 Δ；
+    /// 最佳與次佳的差最多變化 2Δ。所以**勝負差大於 2×累積漂移的格子不可能翻面**——
+    /// 這是保守的上界，涵蓋了上面那種憑空出現的情形，不需要對幾何做任何假設。
+    ///
+    /// 勝負差是上一次**全掃**時算的，累積漂移也是從那時開始算，所以要重掃的集合
+    /// 會隨時間單調變大；超過 <see cref="FullScanWhenRescanFractionExceeds"/> 就全掃、重置基準。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    private void Reassign(SimulationGrid grid)
+    {
+        _assignMargin ??= new float[grid.CellCount];
+
+        var threshold = 2.0 * _driftAngleSinceFullScan;
+        _lastRescanCount = AssignCellsToNearestSeed(
+            grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate,
+            margin: null, skipMarginAbove: threshold, previousMargin: _assignMargin);
+
+        if (_lastRescanCount <= grid.CellCount * FullScanWhenRescanFractionExceeds) return;
+
+        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate, _assignMargin);
+        _driftAngleSinceFullScan = 0;
+    }
+
+    /// <summary>診斷用：上一次重新分配實際重掃了幾格（全掃是總格數）。</summary>
+    public int LastRescanCount => _lastRescanCount;
+
+    /// <summary>
+    /// 守門用：把目前的板塊歸屬跟「完整重掃所有格子」的結果逐格比對，回傳不一致的格數。
+    ///
+    /// 增量分配（見 <see cref="Reassign"/>）如果推論錯了，症狀是板塊歸屬安靜地算錯、
+    /// 沒有任何錯誤訊息，所以必須有測試直接比對。
+    ///
+    /// **會先強制跑一次增量重新分配**，否則量到的是另一回事：<see cref="Advance"/> 本來就
+    /// 只在種子漂移超過 <see cref="ReassignThresholdInCellSpacings"/> 才重新分配，
+    /// 所以任何時刻的歸屬相對於「用當下種子位置完整重掃」都會落後幾格——那是刻意的延遲，
+    /// 不是增量跳過造成的錯誤。2026-09-07 就是沒有先跑這一步，13格的延遲被誤判成
+    /// 增量分配壞掉，白改了一版。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    /// <returns>與完整重掃不一致的格數。正確時應該是0。</returns>
+    public int CountAssignmentMismatchesAgainstFullScan(SimulationGrid grid)
+    {
+        Reassign(grid);
+
+        var reference = new int[grid.CellCount];
+        AssignCellsToNearestSeed(grid, reference, _seedX, _seedY, _seedZ, _seedPlate, null);
+
+        var mismatches = 0;
+        for (var cell = 0; cell < grid.CellCount; cell++)
+        {
+            if (reference[cell] != PlateIdByCell[cell]) mismatches++;
+        }
+        return mismatches;
     }
 
     /// <summary>
@@ -353,33 +444,70 @@ public sealed class PlateSet
     /// 球面 Voronoi：每格歸給最接近的種子點。板塊數很少，直接暴力比對即可
     /// （15個板塊 × 22.5萬格 ≈ 340萬次內積，跟最近格搜尋比起來便宜得多）。
     /// </summary>
-    private static void AssignCellsToNearestSeed(
+    /// <summary>
+    /// 把每一格指派給最近的種子，並（可選）記下「贏第二名多少」。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    /// <param name="plateIdByCell">輸出：每格屬於哪個板塊。</param>
+    /// <param name="seedX">種子的X座標。</param>
+    /// <param name="seedY">種子的Y座標。</param>
+    /// <param name="seedZ">種子的Z座標。</param>
+    /// <param name="seedPlate">每個種子屬於哪個板塊。</param>
+    /// <param name="margin">
+    /// 輸出：最佳與次佳種子的內積差。null 代表不需要。
+    /// 這個差值是增量重新分配的依據，見 <see cref="Reassign"/>。
+    /// </param>
+    /// <param name="skipMarginAbove">
+    /// 勝負差大於這個值的格子直接跳過不重算（配合 <paramref name="margin"/> 使用的舊值）。
+    /// 負數代表全部都要算。
+    /// </param>
+    /// <param name="previousMargin">判斷是否跳過時要看的舊勝負差。</param>
+    private static int AssignCellsToNearestSeed(
         SimulationGrid grid, int[] plateIdByCell,
-        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate)
+        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate,
+        float[]? margin, double skipMarginAbove = -1, float[]? previousMargin = null)
     {
         var seedCount = seedX.Length;
-        Parallel.For(0, grid.CellCount, cell =>
+        var scanned = 0;
+        Parallel.For(0, grid.CellCount, () => 0, (cell, _, local) =>
         {
+            if (skipMarginAbove >= 0 && previousMargin is not null
+                && previousMargin[cell] > skipMarginAbove)
+            {
+                return local;
+            }
+
             var x = grid.UnitVector[cell * 3];
             var y = grid.UnitVector[cell * 3 + 1];
             var z = grid.UnitVector[cell * 3 + 2];
 
             var best = 0;
             var bestDot = double.NegativeInfinity;
+            var secondDot = double.NegativeInfinity;
             for (var i = 0; i < seedCount; i++)
             {
                 var dot = x * seedX[i] + y * seedY[i] + z * seedZ[i];
                 if (dot > bestDot)
                 {
+                    secondDot = bestDot;
                     bestDot = dot;
                     best = i;
+                }
+                else if (dot > secondDot)
+                {
+                    secondDot = dot;
                 }
             }
 
             // 屬於哪個板塊由子種子映射回去——邊界因此是子種子之間的不規則段落，
             // 而不是兩個板塊種子之間那條乾淨的大圓平分線
             plateIdByCell[cell] = seedPlate[best];
-        });
+            if (margin is not null) margin[cell] = (float)(bestDot - secondDot);
+            return local + 1;
+        },
+        local => Interlocked.Add(ref scanned, local));
+
+        return scanned;
     }
 
     /// <summary>

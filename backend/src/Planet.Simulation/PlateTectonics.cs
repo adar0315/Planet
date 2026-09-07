@@ -210,6 +210,9 @@ public sealed class PlateTectonics
     /// <summary>泛洪用的佇列。每條線段重複使用，成員就是它的前 count 個元素。</summary>
     private readonly int[] _floodQueue;
 
+    /// <summary>量「離線段端點幾格」用的廣度優先佇列。</summary>
+    private readonly int[] _endDistanceQueue;
+
     /// <summary>這一格這一步供應多少地殼（公里）。只有聚合線上的上盤格子是正值。</summary>
     private readonly double[] _orogenBudget;
 
@@ -339,6 +342,7 @@ public sealed class PlateTectonics
         _convergenceWeight = new float[grid.CellCount];
         _segmentMeanConvergence = new double[grid.CellCount];
         _floodQueue = new int[grid.CellCount];
+        _endDistanceQueue = new int[grid.CellCount];
         _orogenBudget = new double[grid.CellCount];
         _orogenSegment = new int[grid.CellCount];
         _orogenHops = new int[grid.CellCount];
@@ -1512,32 +1516,27 @@ public sealed class PlateTectonics
                 // 封閉的環沒有端點，那時全部標成「離端點無限遠」＝不衰減
                 var isEnd = sameSegmentNeighbors < 2;
                 _hopsToSegmentEnd[cell] = isEnd ? 0 : int.MaxValue;
-                if (isEnd) ends++;
+                if (isEnd) _endDistanceQueue[ends++] = cell;
             }
 
-            if (ends > 0)
+            // **用廣度優先佇列，不要用「反覆鬆弛到不再變動」**（2026-09-07 踩過）：
+            // 鬆弛法每一輪都要重掃整段的成員，而距離每輪只前進一格，
+            // 一條 n 格的長鏈要 n/2 輪 × n 格 ＝ O(n²)。實測那是這一段的主要成本。
+            // 佇列版每一格只進出一次，是 O(n)。
+            for (var head = 0; head < ends; head++)
             {
-                var changed = true;
-                while (changed)
-                {
-                    changed = false;
-                    for (var i = 0; i < count; i++)
-                    {
-                        var cell = _floodQueue[i];
-                        var hops = _hopsToSegmentEnd[cell];
-                        if (hops == int.MaxValue) continue;
+                var cell = _endDistanceQueue[head];
+                var hops = _hopsToSegmentEnd[cell];
 
-                        var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
-                        for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
-                        {
-                            var neighbor = grid.Neighbors[baseIndex + n];
-                            if (neighbor == SimulationGrid.NoNeighbor) continue;
-                            if (_segmentId[neighbor] != segments) continue;
-                            if (_hopsToSegmentEnd[neighbor] <= hops + 1) continue;
-                            _hopsToSegmentEnd[neighbor] = hops + 1;
-                            changed = true;
-                        }
-                    }
+                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+                {
+                    var neighbor = grid.Neighbors[baseIndex + n];
+                    if (neighbor == SimulationGrid.NoNeighbor) continue;
+                    if (_segmentId[neighbor] != segments) continue;
+                    if (_hopsToSegmentEnd[neighbor] != int.MaxValue) continue;
+                    _hopsToSegmentEnd[neighbor] = hops + 1;
+                    _endDistanceQueue[ends++] = neighbor;
                 }
             }
 
