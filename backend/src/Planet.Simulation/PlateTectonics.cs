@@ -189,6 +189,27 @@ public sealed class PlateTectonics
 
     private readonly double[] _convergenceRate; // 公尺／百萬年，每步重算
     private readonly int[] _convergingNeighbor; // 這格主要在跟哪一格聚合，-1 表示沒有
+    /// <summary>
+    /// 這個邊界格分隔的「另一個」板塊。用來判斷兩個相鄰的邊界格是不是在**同一條邊**上——
+    /// 不是的話它們就分屬兩條邊，中間那個轉折就是接合點。非邊界格是 −1。
+    /// </summary>
+    private readonly int[] _boundaryOtherPlate;
+
+    /// <summary>這個聚合格屬於哪一條線段。非聚合格是 −1。見 <c>TraceConvergentSegments</c>。</summary>
+    private readonly int[] _segmentId;
+
+    /// <summary>這一格離所屬線段端點有幾格（泛洪距離）。用來讓效果在線段兩端衰減。</summary>
+    private readonly int[] _hopsToSegmentEnd;
+
+    /// <summary>線段的作用權重（0~1）：長度不足或靠近端點就打折。</summary>
+    private readonly float[] _convergenceWeight;
+
+    /// <summary>整條線段的平均聚合速率（公尺／百萬年）。取代逐格各自為政的值。</summary>
+    private readonly double[] _segmentMeanConvergence;
+
+    /// <summary>泛洪用的佇列。每條線段重複使用，成員就是它的前 count 個元素。</summary>
+    private readonly int[] _floodQueue;
+
     private readonly CrustType[] _crustSnapshot;
 
     /// <summary>
@@ -294,6 +315,12 @@ public sealed class PlateTectonics
 
         _convergenceRate = new double[grid.CellCount];
         _convergingNeighbor = new int[grid.CellCount];
+        _boundaryOtherPlate = new int[grid.CellCount];
+        _segmentId = new int[grid.CellCount];
+        _hopsToSegmentEnd = new int[grid.CellCount];
+        _convergenceWeight = new float[grid.CellCount];
+        _segmentMeanConvergence = new double[grid.CellCount];
+        _floodQueue = new int[grid.CellCount];
         _crustSnapshot = new CrustType[grid.CellCount];
         _liftSnapshot = new float[grid.CellCount];
         _spreadBuffer = new float[grid.CellCount];
@@ -1240,6 +1267,7 @@ public sealed class PlateTectonics
             state.Boundary[cell] = BoundaryType.None;
             _convergenceRate[cell] = 0;
             _convergingNeighbor[cell] = -1;
+            _boundaryOtherPlate[cell] = -1;
 
             var myPlate = plates.PlateIdByCell[cell];
             var (vx, vy, vz) = plates.VelocityAt(grid, cell);
@@ -1290,6 +1318,8 @@ public sealed class PlateTectonics
             var isMostlyShear = strongestRelative > 0
                 && Math.Abs(strongestNormal) / strongestRelative < NormalComponentRatioForTransform;
 
+            _boundaryOtherPlate[cell] = plates.PlateIdByCell[strongestNeighbor];
+
             if (isMostlyShear)
             {
                 state.Boundary[cell] = BoundaryType.Transform;
@@ -1305,6 +1335,201 @@ public sealed class PlateTectonics
                 state.Boundary[cell] = BoundaryType.Divergent;
             }
         });
+
+        TraceConvergentSegments(grid, state, plates);
+    }
+
+    /// <summary>
+    /// 一條聚合線段要多長，才建得起完整強度的造山帶（公里）。
+    ///
+    /// 真實的造山帶／隱沒邊界都是**很長的線**：喜馬拉雅約2,400公里、日本島弧約1,500公里、
+    /// 安地斯約7,000公里。幾百公里的短段落不會長出山脈——應變在那種尺度上是被
+    /// 旋轉與走滑消化掉的，不會累積成持續的縮短。取1,500，日本島弧那個量級。
+    /// </summary>
+    private const double FullOrogenyLengthKm = 1500;
+
+    /// <summary>
+    /// 線段末端的衰減長度（公里）。
+    ///
+    /// 邊界不會在端點戛然而止：末端是傳遞帶（transfer zone），縮短量在那裡逐漸交棒給
+    /// 旁邊的構造，所以造山帶的兩端是尖滅的、不是齊頭切斷。三重接合點正是這種端點，
+    /// 於是「接合點要打折」變成這條規則的自然結果，不必另外寫一條。取300公里。
+    /// </summary>
+    private const double SegmentTipTaperKm = 300;
+
+    /// <summary>診斷用：目前的聚合線段數量。</summary>
+    public int LastSegmentCount { get; private set; }
+
+    /// <summary>診斷用：最長的聚合線段有多長（公里）。</summary>
+    public double LastLongestSegmentKm { get; private set; }
+
+    /// <summary>診斷用：聚合格的作用權重平均值。用來判斷總造陸量掉了多少。</summary>
+    public double LastMeanConvergenceWeight { get; private set; }
+
+    /// <summary>
+    /// 把聚合邊界連成**線段**，讓作用以整條線為單位，而不是逐格各自為政。
+    ///
+    /// ## 為什麼要有線段這個層次
+    ///
+    /// 板塊構造不是「一塊區域撞上另一塊區域」，而是**很多條線，線的兩側在互相推擠或拉開**。
+    /// 原本每個邊界格各自從自己最強的鄰居算出聚合速率、各自增厚，等於把一條連續的隱沒帶
+    /// 當成幾百個互不相干的小事件；線段的長度、連續性、兩端怎麼收尾，全部沒有被表達出來。
+    ///
+    /// 而且板塊是球面 Voronoi 胞，邊界是「直邊＋三重接合點」構成的網。逐格獨立作用時，
+    /// 接合點就成了三條邊的效果疊加處，畫出來是一顆顆 Y 形放射狀團塊——
+    /// 那是**鑲嵌的幾何被印到星球上**，不是地質。
+    ///
+    /// ## 一條線段是什麼
+    ///
+    /// 相鄰、都是聚合、而且**分隔同一對板塊**的格子。分隔的板塊對變了就代表跨到另一條邊去了，
+    /// 中間那個轉折正是接合點——所以接合點自然成為線段的端點，不必另外偵測。
+    ///
+    /// ## 三個效果
+    ///
+    /// - **長度門檻**：線段短於 <see cref="FullOrogenyLengthKm"/> 就按比例打折。
+    /// - **末端衰減**：離端點 <see cref="SegmentTipTaperKm"/> 以內逐漸尖滅（三重接合點就是端點）。
+    /// - **沿線平均**：用整條線段的平均聚合速率，取代逐格各自算出來的值。逐格的值是從
+    ///   「自己最強的那個鄰居」來的、在格子尺度上很跳；一條線段整體被推擠的速率才有物理意義。
+    ///
+    /// 長度一律換算成**公里**再比較，不是格數——n=150 與 n=24 的格距差6倍（見 CLAUDE.md）。
+    /// </summary>
+    private void TraceConvergentSegments(SimulationGrid grid, SimulationState state, PlateSet plates)
+    {
+        Array.Fill(_segmentId, -1, 0, grid.CellCount);
+        Array.Clear(_convergenceWeight, 0, grid.CellCount);
+        Array.Clear(_segmentMeanConvergence, 0, grid.CellCount);
+
+        var spacingKm = grid.AverageCellSpacingMeters / 1000.0;
+        var segments = 0;
+        var longestKm = 0.0;
+        var weightSum = 0.0;
+        var convergentCells = 0;
+
+        for (var seed = 0; seed < grid.CellCount; seed++)
+        {
+            if (state.Boundary[seed] != BoundaryType.Convergent) continue;
+            if (_segmentId[seed] >= 0) continue;
+
+            var plateA = plates.PlateIdByCell[seed];
+            var plateB = _boundaryOtherPlate[seed];
+
+            // 1. 泛洪找出整條線段。走訪順序由格子索引決定，所以結果與執行緒排程無關。
+            var count = 0;
+            _floodQueue[count++] = seed;
+            _segmentId[seed] = segments;
+
+            for (var head = 0; head < count; head++)
+            {
+                var cell = _floodQueue[head];
+                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+                {
+                    var neighbor = grid.Neighbors[baseIndex + n];
+                    if (neighbor == SimulationGrid.NoNeighbor) continue;
+                    if (_segmentId[neighbor] >= 0) continue;
+                    if (state.Boundary[neighbor] != BoundaryType.Convergent) continue;
+
+                    // 同一條線段 ＝ 分隔同樣的兩個板塊（兩側各記一邊，所以順序無關）
+                    var theirPlate = plates.PlateIdByCell[neighbor];
+                    var theirOther = _boundaryOtherPlate[neighbor];
+                    var sameEdge = (theirPlate == plateA && theirOther == plateB)
+                        || (theirPlate == plateB && theirOther == plateA);
+                    if (!sameEdge) continue;
+
+                    _segmentId[neighbor] = segments;
+                    _floodQueue[count++] = neighbor;
+                }
+            }
+
+            // 2. 從端點往內泛洪，量每一格離端點幾格。
+            //    端點 ＝ 同段鄰居少於2個的格子（線的盡頭，三重接合點旁邊那一格就是）。
+            var ends = 0;
+            for (var i = 0; i < count; i++)
+            {
+                var cell = _floodQueue[i];
+                var sameSegmentNeighbors = 0;
+                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+                {
+                    var neighbor = grid.Neighbors[baseIndex + n];
+                    if (neighbor != SimulationGrid.NoNeighbor && _segmentId[neighbor] == segments)
+                    {
+                        sameSegmentNeighbors++;
+                    }
+                }
+
+                // 封閉的環沒有端點，那時全部標成「離端點無限遠」＝不衰減
+                var isEnd = sameSegmentNeighbors < 2;
+                _hopsToSegmentEnd[cell] = isEnd ? 0 : int.MaxValue;
+                if (isEnd) ends++;
+            }
+
+            if (ends > 0)
+            {
+                var changed = true;
+                while (changed)
+                {
+                    changed = false;
+                    for (var i = 0; i < count; i++)
+                    {
+                        var cell = _floodQueue[i];
+                        var hops = _hopsToSegmentEnd[cell];
+                        if (hops == int.MaxValue) continue;
+
+                        var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                        for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+                        {
+                            var neighbor = grid.Neighbors[baseIndex + n];
+                            if (neighbor == SimulationGrid.NoNeighbor) continue;
+                            if (_segmentId[neighbor] != segments) continue;
+                            if (_hopsToSegmentEnd[neighbor] <= hops + 1) continue;
+                            _hopsToSegmentEnd[neighbor] = hops + 1;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // 3. 線段長度：一條 n 格的鏈，中點離端點 (n−1)/2 格，所以 2×最遠+1 就是 n。
+            //    環（沒有端點）直接用格數。寬度超過一格的團塊會被低估，那是保守的方向。
+            var farthest = 0;
+            var convergenceSum = 0.0;
+            for (var i = 0; i < count; i++)
+            {
+                var cell = _floodQueue[i];
+                convergenceSum += _convergenceRate[cell];
+                if (_hopsToSegmentEnd[cell] != int.MaxValue && _hopsToSegmentEnd[cell] > farthest)
+                {
+                    farthest = _hopsToSegmentEnd[cell];
+                }
+            }
+
+            var lengthCells = ends > 0 ? 2 * farthest + 1 : count;
+            var lengthKm = lengthCells * spacingKm;
+            var lengthWeight = Math.Min(1.0, lengthKm / FullOrogenyLengthKm);
+            var meanConvergence = convergenceSum / count;
+
+            for (var i = 0; i < count; i++)
+            {
+                var cell = _floodQueue[i];
+                var hops = _hopsToSegmentEnd[cell];
+                var taper = hops == int.MaxValue
+                    ? 1.0
+                    : Math.Min(1.0, hops * spacingKm / SegmentTipTaperKm);
+
+                _convergenceWeight[cell] = (float)(lengthWeight * taper);
+                _segmentMeanConvergence[cell] = meanConvergence;
+                weightSum += lengthWeight * taper;
+                convergentCells++;
+            }
+
+            if (lengthKm > longestKm) longestKm = lengthKm;
+            segments++;
+        }
+
+        LastSegmentCount = segments;
+        LastLongestSegmentKm = longestKm;
+        LastMeanConvergenceWeight = convergentCells > 0 ? weightSum / convergentCells : 0;
     }
 
     /// <summary>
@@ -1364,9 +1589,12 @@ public sealed class PlateTectonics
 
             if (!isOverriding) return;
 
-            // 聚合速率是公尺/百萬年，換成公里再乘增厚係數
-            var convergenceKm = _convergenceRate[cell] / 1000.0 * deltaMyr;
-            var addedKm = convergenceKm * ThickeningPerConvergence;
+            // **速率取整條線段的平均，不是這一格自己的**：逐格的值是從「自己最強的那個鄰居」
+            // 算出來的，在格子尺度上很跳；一條隱沒帶整體被推擠的速率才是有物理意義的量。
+            // 權重則來自線段的長度與離端點的距離（見 TraceConvergentSegments）。
+            var convergenceKm = _segmentMeanConvergence[cell] / 1000.0 * deltaMyr;
+            var addedKm = convergenceKm * ThickeningPerConvergence * _convergenceWeight[cell];
+            if (addedKm <= 0) return;
             _arcAdded[cell] = addedKm;
             state.CrustThickness[cell] = MathF.Min(
                 state.CrustThickness[cell] + (float)addedKm, Isostasy.MaxCrustThicknessKm);
