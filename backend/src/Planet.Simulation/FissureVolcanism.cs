@@ -1,4 +1,4 @@
-namespace Planet.Simulation;
+﻿namespace Planet.Simulation;
 
 /// <summary>
 /// 裂縫火山：重板塊的斷層帶裂開，岩漿沿裂縫上湧，堆成火山島。
@@ -23,17 +23,29 @@ namespace Planet.Simulation;
 ///
 /// 如果讓斷層帶上每一格都噴，堆出來的是一道連續的牆而不是「島嶼」。真實的裂隙噴發集中在
 /// 少數幾個火山中心（岩漿要有夠大的通道才上得來），所以這裡用格子索引的雜湊挑出
-/// 約 1/<see cref="VentSpacing"/> 的格子當噴發口。用雜湊而不是亂數是為了**位置穩定**：
+/// 一部分的格子當噴發口。用雜湊而不是亂數是為了**位置穩定**：
 /// 同一個地方會持續噴上百萬年，才堆得起一座島；每步重新亂數挑的話只會抹出一片薄薄的均勻層。
 /// </summary>
 public sealed class FissureVolcanism
 {
     /// <summary>
-    /// 每幾格挑一個當噴發口。取40：斷層帶上大約每40格出現一座火山中心，
-    /// 在 n=150（格距約15公里）相當於每600公里一座——比真實的島鏈疏，
-    /// 但這裡的「一格」代表225平方公里，噴發口太密會讓島連成一道牆而不是一串島。
+    /// 一座火山中心涵蓋多少平方公里。
+    ///
+    /// **這個值一定要是面積、不能是「每幾格」**（2026-09-07 踩過，正是 CLAUDE.md
+    /// 那條「凡是幾格的參數都要改寫成物理量」的實例）：原本寫死成「每40格挑一個」，
+    /// 而符合噴發條件的格子（重板塊＋位在斷層/張裂帶）在兩種解析度下數量差很多——
+    /// n=150 有329格、1/40 抽出13座噴發口；n=24 只有47格、期望值1.2、**實際抽中0**。
+    /// 也就是**整個裂縫火山在所有測試裡從來沒有執行過一次**。
+    ///
+    /// 後果不只是機制沒作用：`VentStrengthKmPerMyr` 被連續三次「實測校準」，
+    /// 而校準時它根本沒在動——把強度從0.25掃到0.8、甚至整個關成0，
+    /// 重板塊的厚度都停在25公里不動（那25公里其實來自聚合處的標記堆疊）。
+    /// **死掉的參數會讓人以為自己在調模型，其實在調一個沒接線的旋鈕。**
+    ///
+    /// 取7,665：等於 n=150 原本的行為（40 × 該解析度每格191.6平方公里），
+    /// 換算成一座噴發口約每88公里一座。
     /// </summary>
-    private const int VentSpacing = 40;
+    private const double AreaPerVentSquareKm = 7_665;
 
     /// <summary>
     /// 噴發強度（公里地殼／百萬年），對應 <see cref="PlateSet.DensePlateAnomalyKgPerM3"/> 那個密度異常。
@@ -71,6 +83,11 @@ public sealed class FissureVolcanism
     public void Step(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr)
     {
         LastAddedCrustKm = 0;
+
+        // 把「每座噴發口涵蓋多少面積」換算回這個解析度的「每幾格挑一個」
+        var ventSpacing = Math.Max(1,
+            (int)Math.Round(AreaPerVentSquareKm / (grid.AverageCellAreaSquareMeters / 1e6)));
+
         for (var cell = 0; cell < state.CellCount; cell++)
         {
             var anomaly = plates.Plates[plates.PlateIdByCell[cell]].DensityAnomalyKgPerM3;
@@ -81,7 +98,7 @@ public sealed class FissureVolcanism
             var boundary = state.Boundary[cell];
             if (boundary is not (BoundaryType.Transform or BoundaryType.Divergent)) continue;
 
-            if (!IsVent(cell)) continue;
+            if (!IsVent(cell, ventSpacing)) continue;
 
             // 密度異常越大 → 負浮力越大 → 應力越大 → 裂縫越發達
             var scale = anomaly / PlateSet.DensePlateAnomalyKgPerM3;
@@ -126,11 +143,13 @@ public sealed class FissureVolcanism
 
     /// <summary>
     /// 這一格是不是噴發口。用格子索引的雜湊而不是亂數，位置才會穩定（見類別說明）。
-    /// 直接用 <c>cell % VentSpacing</c> 不行——網格的索引有空間規律，那樣會挑出一條條的直線。
+    /// 直接用 <c>cell % spacing</c> 不行——網格的索引有空間規律，那樣會挑出一條條的直線。
     /// </summary>
-    private static bool IsVent(int cell)
+    /// <param name="cell">格子索引。</param>
+    /// <param name="spacing">每幾格挑一個，由 <see cref="AreaPerVentSquareKm"/> 換算而來。</param>
+    private static bool IsVent(int cell, int spacing)
     {
         var hash = (uint)cell * 2654435761u; // Knuth 的乘法雜湊
-        return hash % VentSpacing == 0;
+        return hash % (uint)spacing == 0;
     }
 }

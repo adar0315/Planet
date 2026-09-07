@@ -1,4 +1,4 @@
-using Planet.Simulation;
+﻿using Planet.Simulation;
 using Xunit;
 
 namespace Planet.Simulation.Tests;
@@ -129,6 +129,22 @@ public class DensePlateTests
             .Count(c => state.OceanicOnly[c] && state.WaterDepth[c] <= 0f);
 
         Assert.True(islands > 0, "重板塊上一座火山島都沒有——裂縫火山沒有堆到露出水面");
+
+        // **光看島數不足以證明是裂縫火山造的**（2026-09-07 實測）：把 VentStrengthKmPerMyr
+        // 設成 0、裂縫火山完全關閉，重板塊上照樣有232座島（聚合處的標記堆疊就足以把地殼
+        // 頂出水面）。也就是說這個測試原本即使裂縫火山整個壞掉也會通過。
+        // 所以另外檢查它真的有在堆積——這道檢查擋得住「裂縫火山安靜地停止運作」。
+        // LastAddedCrustKm 是「最近一步」的值，單一步剛好沒有噴發口滿足條件是正常的
+        //（噴發口要同時是重板塊、位在斷層/張裂帶、又被雜湊挑中），所以累計一段時間再看。
+        var addedOverTime = 0.0;
+        for (var i = 0; i < 40; i++)
+        {
+            engine.Step(1);
+            addedOverTime += engine.Fissures.LastAddedCrustKm;
+        }
+
+        Assert.True(addedOverTime > 0,
+            "裂縫火山連續40步一公里地殼都沒堆——噴發口條件（重板塊＋斷層帶）從來沒有格子滿足");
     }
 
     /// <summary>

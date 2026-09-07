@@ -190,6 +190,12 @@ public sealed class PlateTectonics
     private readonly double[] _convergenceRate; // 公尺／百萬年，每步重算
     private readonly int[] _convergingNeighbor; // 這格主要在跟哪一格聚合，-1 表示沒有
     private readonly CrustType[] _crustSnapshot;
+
+    /// <summary>
+    /// 聚合判定用的基岩高度快照。跟 <c>_crustSnapshot</c> 同樣的理由——
+    /// <c>ApplyConvergence</c> 的平行迴圈會寫自己的厚度、又要讀鄰居的厚度。
+    /// </summary>
+    private readonly float[] _liftSnapshot;
     private readonly float[] _spreadBuffer; // 重力擴展的 out-of-place 暫存
     private readonly double[] _arcAdded;   // 診斷用：每格島弧增厚了多少
 
@@ -289,6 +295,7 @@ public sealed class PlateTectonics
         _convergenceRate = new double[grid.CellCount];
         _convergingNeighbor = new int[grid.CellCount];
         _crustSnapshot = new CrustType[grid.CellCount];
+        _liftSnapshot = new float[grid.CellCount];
         _spreadBuffer = new float[grid.CellCount];
         _arcAdded = new double[grid.CellCount];
         _ownerMarker = new int[grid.CellCount];
@@ -805,6 +812,26 @@ public sealed class PlateTectonics
             state.Crust[cell] = _markerCrust[top];
             state.OceanicOnly[cell] = _markerOceanicOnly[top];
 
+            // **不能變成大陸的地殼，也不能厚成大陸**（2026-09-07 踩過）。
+            //
+            // OceanicOnly 的本意是「這塊地殼太重，不會變成大陸」（見 SimulationState.OceanicOnly），
+            // 但原本只在 TryMakeContinental 那道門擋下轉換、沒有擋住**變厚**本身。
+            // 於是重板塊照樣被聚合處的標記堆疊加厚，過了25公里的大陸門檻卻不會被改類別，
+            // 就一路長到42公里還掛在「海洋地殼」，變成站得比一般海洋還高的高原——
+            // 實測重板塊平均水深589公尺、一般海洋908公尺，**密度最高的板塊反而浮得最高**，
+            // 跟這整個設計的前提正好相反。
+            //
+            // 露餡的是厚度分布：一般海洋在25公里以上**一格都沒有**（過門檻就轉成大陸、
+            // 離開這個統計群），重板塊卻有48%的格子在28公里以上。
+            // 平均厚度25公里這個數字本身看不出異常，要跟一般海洋擺在一起比才看得出來。
+            //
+            // 超過門檻的物質在物理上是被隱沒／拆離回收掉的，不會長成山根。
+            if (state.OceanicOnly[cell])
+            {
+                state.CrustThickness[cell] =
+                    MathF.Min(state.CrustThickness[cell], Isostasy.ContinentalThresholdKm);
+            }
+
             _sampledThickness[cell] = state.CrustThickness[cell];
             _sampledAge[cell] = state.CrustAge[cell];
             _sampledDensity[cell] = state.CrustDensity[cell];
@@ -1299,6 +1326,8 @@ public sealed class PlateTectonics
         // 用快照同時也比較物理：每一格的判斷都基於同一個時刻的世界，
         // 而不是取決於鄰居有沒有剛好先被算到。
         Array.Copy(state.Crust, _crustSnapshot, state.CellCount);
+        Parallel.For(0, state.CellCount, cell => _liftSnapshot[cell] = Isostasy.BedrockElevation(
+            state.Crust[cell], state.CrustThickness[cell], state.CrustAge[cell], state.CrustDensity[cell]));
 
         Parallel.For(0, state.CellCount, cell =>
         {
@@ -1315,7 +1344,22 @@ public sealed class PlateTectonics
                 (CrustType.Continental, CrustType.Oceanic) => true,
                 (CrustType.Oceanic, CrustType.Continental) => false,
                 (CrustType.Continental, CrustType.Continental) => true, // 對撞，兩邊都增厚
-                _ => state.CrustAge[cell] <= state.CrustAge[neighbor],  // 都是海洋：年輕的當上盤
+
+                // **都是海洋：浮得高的當上盤，不是年輕的**（2026-09-07 改）。
+                //
+                // 年齡只是密度的代理變數（老的比較冷、比較重），但這個模型裡密度是**明寫的**
+                // ——重板塊有 DensityAnomalyKgPerM3。用年齡判斷等於忽略那個異常，
+                // 於是「密度最高的板塊」只要比對面年輕就變成上盤、被加厚。
+                //
+                // 改用均衡高度也讓兩個層級一致：標記層級的 ResolveCollision 早就是
+                // 「誰浮得高誰留在地表」，只有這裡還在用另一套規則。
+                //
+                // **老實說：這個改動單獨量不出效果**（n=24 跑75百萬年，重板塊厚度
+                // 25.0 vs 25.0 公里）。重板塊變厚的主要路徑不是這裡，而是取樣時
+                // 標記在同一格疊起來（見下面 OceanicOnly 的厚度上限）。
+                // 留著是因為「忽略明寫的密度異常、改用年齡這個代理變數」本身就是錯的，
+                // 不是因為它修好了什麼。
+                _ => _liftSnapshot[cell] >= _liftSnapshot[neighbor],
             };
 
             if (!isOverriding) return;
