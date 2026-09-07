@@ -1,4 +1,4 @@
-namespace Planet.Simulation;
+﻿namespace Planet.Simulation;
 
 /// <summary>
 /// 一個板塊的剛體運動。
@@ -60,18 +60,43 @@ public sealed class PlateSet
     /// <summary>每一格屬於哪個板塊（長度 = 格數）。會隨著板塊移動而改變。</summary>
     public int[] PlateIdByCell { get; }
 
-    // 球面 Voronoi 的種子點，會跟著各自的歐拉極一起旋轉，見 Advance
+    /// <summary>
+    /// 每個板塊有幾個種子點。
+    ///
+    /// **一個板塊一個種子的話，邊界必然是兩個種子之間那條大圓平分線**——乾淨的直邊，
+    /// 三條邊交會在120度的接合點。那個幾何會被整個印到星球上：大陸沿著直邊排成細條、
+    /// 接合點是 Y 形團塊（見 docs 的目視驗證）。真實的板塊邊界不是這樣，它是彎的、
+    /// 不規則的、被轉形斷層錯開的。
+    ///
+    /// 改成一個板塊多個種子之後，邊界變成這些子種子之間許多**短而不規則**的段落，
+    /// 而板塊本身仍然是剛體（所有子種子繞同一個歐拉極旋轉），
+    /// 歸屬仍然是純幾何判定（見 <see cref="Advance"/> 裡那個坑）。
+    ///
+    /// 這也是之後做威爾遜旋迴的基礎：**要裂解一塊大陸，就是把它的種子集合分成兩組**，
+    /// 不需要去追蹤自由的多段線（那會遇到線互相穿越、拉伸後產生缺口讓板塊意外合併、
+    /// 聚合時互相吞噬這些前緣追蹤的失效模式）。
+    ///
+    /// 取6：夠讓邊界明顯不規則，而分配的成本是 15×6=90 次內積／格，仍然只是內積。
+    /// </summary>
+    public const int SeedsPerPlate = 6;
+
+    // 球面 Voronoi 的種子點，會跟著各自的歐拉極一起旋轉，見 Advance。
+    // 長度是 板塊數 × SeedsPerPlate，_seedPlate 記錄每個種子屬於哪個板塊。
     private readonly double[] _seedX;
     private readonly double[] _seedY;
     private readonly double[] _seedZ;
+    private readonly int[] _seedPlate;
 
-    private PlateSet(Plate[] plates, int[] plateIdByCell, double[] seedX, double[] seedY, double[] seedZ)
+    private PlateSet(
+        Plate[] plates, int[] plateIdByCell,
+        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate)
     {
         Plates = plates;
         PlateIdByCell = plateIdByCell;
         _seedX = seedX;
         _seedY = seedY;
         _seedZ = seedZ;
+        _seedPlate = seedPlate;
     }
 
     /// <summary>
@@ -90,20 +115,21 @@ public sealed class PlateSet
     public void Advance(SimulationGrid grid, double deltaMyr)
     {
         var maxAngleRad = 0.0;
-        for (var p = 0; p < Plates.Length; p++)
+        for (var i = 0; i < _seedX.Length; i++)
         {
-            var plate = Plates[p];
+            // 同一個板塊的所有子種子繞**同一個**歐拉極、轉**同一個**角度——板塊仍然是剛體
+            var plate = Plates[_seedPlate[i]];
             var angle = plate.AngularVelocityDegPerMyr * Math.PI / 180.0 * deltaMyr;
             var (x, y, z) = RotateAboutAxis(
-                _seedX[p], _seedY[p], _seedZ[p],
+                _seedX[i], _seedY[i], _seedZ[i],
                 plate.PoleX, plate.PoleY, plate.PoleZ,
                 angle);
 
             // 每步重新正規化：幾萬步累積下來的浮點誤差會讓種子點慢慢離開單位球面
             var length = Math.Sqrt(x * x + y * y + z * z);
-            _seedX[p] = x / length;
-            _seedY[p] = y / length;
-            _seedZ[p] = z / length;
+            _seedX[i] = x / length;
+            _seedY[i] = y / length;
+            _seedZ[i] = z / length;
 
             maxAngleRad = Math.Max(maxAngleRad, Math.Abs(angle));
         }
@@ -116,7 +142,7 @@ public sealed class PlateSet
         var threshold = ReassignThresholdInCellSpacings * EstimateCellSpacingMeters(grid);
         if (_seedDriftMeters < threshold) return;
 
-        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ);
+        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate);
         _seedDriftMeters = 0;
     }
 
@@ -177,16 +203,40 @@ public sealed class PlateSet
 
         var rng = new Random(seed);
         var plates = new Plate[plateCount];
-        var seedX = new double[plateCount];
-        var seedY = new double[plateCount];
-        var seedZ = new double[plateCount];
+        var seedCount = plateCount * SeedsPerPlate;
+        var seedX = new double[seedCount];
+        var seedY = new double[seedCount];
+        var seedZ = new double[seedCount];
+        var seedPlate = new int[seedCount];
 
         for (var p = 0; p < plateCount; p++)
         {
             var (sx, sy, sz) = RandomUnitVector(rng);
-            seedX[p] = sx;
-            seedY[p] = sy;
-            seedZ[p] = sz;
+
+            // 主種子加上散布在它周圍的子種子。第0個就是主種子本身，
+            // 這樣板塊中心一定被自己涵蓋，不會整塊被鄰居吃掉。
+            for (var k = 0; k < SeedsPerPlate; k++)
+            {
+                var index = p * SeedsPerPlate + k;
+                seedPlate[index] = p;
+
+                if (k == 0)
+                {
+                    seedX[index] = sx;
+                    seedY[index] = sy;
+                    seedZ[index] = sz;
+                    continue;
+                }
+
+                var (ox, oy, oz) = RandomUnitVector(rng);
+                var jx = sx + SeedScatter * ox;
+                var jy = sy + SeedScatter * oy;
+                var jz = sz + SeedScatter * oz;
+                var length = Math.Sqrt(jx * jx + jy * jy + jz * jz);
+                seedX[index] = jx / length;
+                seedY[index] = jy / length;
+                seedZ[index] = jz / length;
+            }
 
             var (px, py, pz) = RandomPoleBiasedToSpinAxis(rng);
             // 0.3~2.5 度/百萬年 ＝ 這顆星球上約 1~8 公分/年
@@ -197,10 +247,58 @@ public sealed class PlateSet
         AssignDensePlates(plates, rng, densePlateCount);
 
         var plateIdByCell = new int[grid.CellCount];
-        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ);
+        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ, seedPlate);
 
         RemoveNetRotation(plates, plateIdByCell);
-        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ);
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate);
+    }
+
+    /// <summary>
+    /// 子種子散布在主種子周圍多遠（單位向量相加時的權重，約等於角度的正切）。
+    ///
+    /// 15個板塊時每塊的平均角半徑約30度。取0.20 → 子種子最遠偏離主種子約11度，
+    /// 大約是板塊半徑的三分之一：足以讓邊界明顯不規則，又不至於讓子種子跑進鄰居的領域裡
+    /// 把板塊切成互不相連的碎塊（那會讓「板塊是剛體」這個前提失去意義）。
+    /// 板塊是否仍然連通，用 <c>PlateFragmentCount</c> 量得出來。
+    /// </summary>
+    private const double SeedScatter = 0.20;
+
+    /// <summary>
+    /// 診斷用：板塊被切成幾塊互不相連的區域。理想是等於板塊數
+    /// （每塊板塊自己是連通的）；明顯大於板塊數就代表 <see cref="SeedScatter"/> 太大。
+    /// </summary>
+    /// <param name="grid">網格。</param>
+    public int PlateFragmentCount(SimulationGrid grid)
+    {
+        var visited = new bool[grid.CellCount];
+        var queue = new int[grid.CellCount];
+        var fragments = 0;
+
+        for (var start = 0; start < grid.CellCount; start++)
+        {
+            if (visited[start]) continue;
+            fragments++;
+            var plate = PlateIdByCell[start];
+            var count = 0;
+            queue[count++] = start;
+            visited[start] = true;
+
+            for (var head = 0; head < count; head++)
+            {
+                var cell = queue[head];
+                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+                {
+                    var neighbor = grid.Neighbors[baseIndex + n];
+                    if (neighbor == SimulationGrid.NoNeighbor) continue;
+                    if (visited[neighbor] || PlateIdByCell[neighbor] != plate) continue;
+                    visited[neighbor] = true;
+                    queue[count++] = neighbor;
+                }
+            }
+        }
+
+        return fragments;
     }
 
     /// <summary>
@@ -256,9 +354,10 @@ public sealed class PlateSet
     /// （15個板塊 × 22.5萬格 ≈ 340萬次內積，跟最近格搜尋比起來便宜得多）。
     /// </summary>
     private static void AssignCellsToNearestSeed(
-        SimulationGrid grid, int[] plateIdByCell, double[] seedX, double[] seedY, double[] seedZ)
+        SimulationGrid grid, int[] plateIdByCell,
+        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate)
     {
-        var plateCount = seedX.Length;
+        var seedCount = seedX.Length;
         Parallel.For(0, grid.CellCount, cell =>
         {
             var x = grid.UnitVector[cell * 3];
@@ -267,16 +366,19 @@ public sealed class PlateSet
 
             var best = 0;
             var bestDot = double.NegativeInfinity;
-            for (var p = 0; p < plateCount; p++)
+            for (var i = 0; i < seedCount; i++)
             {
-                var dot = x * seedX[p] + y * seedY[p] + z * seedZ[p];
+                var dot = x * seedX[i] + y * seedY[i] + z * seedZ[i];
                 if (dot > bestDot)
                 {
                     bestDot = dot;
-                    best = p;
+                    best = i;
                 }
             }
-            plateIdByCell[cell] = best;
+
+            // 屬於哪個板塊由子種子映射回去——邊界因此是子種子之間的不規則段落，
+            // 而不是兩個板塊種子之間那條乾淨的大圓平分線
+            plateIdByCell[cell] = seedPlate[best];
         });
     }
 

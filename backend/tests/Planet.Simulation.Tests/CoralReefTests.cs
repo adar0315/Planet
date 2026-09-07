@@ -99,9 +99,15 @@ public class CoralReefTests
         var engine = new SimulationEngine(grid, 42);
         engine.Step(2000);
 
-        // 記下這一刻的礁體，再推進一步，比較出「這一步長高的格子」
+        // 記下這一刻的礁體，然後**只**跑造礁這一個模型，比較出「珊瑚長高的格子」。
+        //
+        // **不可以改成 engine.Step(1) 再比差值**（2026-09-07 踩過）：礁灰岩掛在標記上、
+        // 會隨板塊漂移，所以一塊帶著礁體的標記漂進某一格，那一格的數值也會增加——
+        // 那是搬過來的，不是長出來的。實測極區就出現過這種格子，訊息是
+        // 「有珊瑚長在緯度90度」，但水溫下限其實完全正常。
+        // 單獨呼叫 CoralReefs.Step 才能把生長跟漂移分開。
         var before = engine.State.OrganicThickness.ToArray();
-        engine.Step(1);
+        new CoralReefs().Step(engine.State, 50_000);
 
         var grew = Enumerable.Range(0, engine.State.CellCount)
             .Where(cell => engine.State.OrganicThickness[cell] > before[cell] + 0.01f)

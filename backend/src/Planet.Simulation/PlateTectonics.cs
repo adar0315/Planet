@@ -1381,6 +1381,26 @@ public sealed class PlateTectonics
     /// </summary>
     private const double SegmentTipTaperKm = 300;
 
+    /// <summary>
+    /// 同一條線段內，聚合速率容許差異多少比例。
+    ///
+    /// **作用線不可能是連續的一整條**（使用者指出，2026-09-07）：球面上剛體旋轉的相對速度
+    /// 正比於 sin(離歐拉極的角距)，所以一條長邊界各處的速率本來就不同。
+    /// 真實的中洋脊因此不是一條連續曲線，而是一段一段垂直於運動方向的擴張段，
+    /// 被平行於運動方向的轉形斷層錯開——階梯狀。隱沒帶同理（阿留申、湯加都是分段的）。
+    ///
+    /// 原本沿著整條線取平均速率，等於把造成分段的那個變化抹掉了。
+    /// 現在泛洪時只有速率跟種子格相近的鄰居才併入同一段，差太多就斷成另一段，
+    /// 各段各自用自己的平均速率——沿線平均去掉的仍然是格子尺度的雜訊，
+    /// 但**沿走向的真實變化被保留下來**。
+    ///
+    /// 轉形段落其實已經在斷了（線段只收聚合格，所以「聚合→轉形→聚合」本來就會斷成兩段），
+    /// 這裡補的是**純聚合段落內部**的速率變化。
+    ///
+    /// 取0.25：速率變化超過四分之一就算換了一段。
+    /// </summary>
+    private const double SegmentRateCoherence = 0.25;
+
     /// <summary>診斷用：目前的聚合線段數量。</summary>
     public int LastSegmentCount { get; private set; }
 
@@ -1437,6 +1457,10 @@ public sealed class PlateTectonics
             var plateA = plates.PlateIdByCell[seed];
             var plateB = _boundaryOtherPlate[seed];
 
+            // 這一段的參考速率。速率差太多的鄰居會被排除，於是線在速率變化處自然斷開。
+            var seedRate = _convergenceRate[seed];
+            var rateTolerance = Math.Abs(seedRate) * SegmentRateCoherence;
+
             // 1. 泛洪找出整條線段。走訪順序由格子索引決定，所以結果與執行緒排程無關。
             var count = 0;
             _floodQueue[count++] = seed;
@@ -1459,6 +1483,9 @@ public sealed class PlateTectonics
                     var sameEdge = (theirPlate == plateA && theirOther == plateB)
                         || (theirPlate == plateB && theirOther == plateA);
                     if (!sameEdge) continue;
+
+                    // 速率差太多就不是同一段（見 SegmentRateCoherence）
+                    if (Math.Abs(_convergenceRate[neighbor] - seedRate) > rateTolerance) continue;
 
                     _segmentId[neighbor] = segments;
                     _floodQueue[count++] = neighbor;
