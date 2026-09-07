@@ -210,6 +210,24 @@ public sealed class PlateTectonics
     /// <summary>泛洪用的佇列。每條線段重複使用，成員就是它的前 count 個元素。</summary>
     private readonly int[] _floodQueue;
 
+    /// <summary>這一格這一步供應多少地殼（公里）。只有聚合線上的上盤格子是正值。</summary>
+    private readonly double[] _orogenBudget;
+
+    /// <summary>這一格屬於哪一條線段的造山帶。不在任何帶內是 −1。</summary>
+    private readonly int[] _orogenSegment;
+
+    /// <summary>這一格離造山帶所屬的那條線幾格。線上是0。</summary>
+    private readonly int[] _orogenHops;
+
+    /// <summary>造山帶泛洪用的佇列。</summary>
+    private readonly int[] _orogenQueue;
+
+    /// <summary>每條線段這一步的地殼預算（公里）。索引是線段編號。</summary>
+    private readonly double[] _segmentBudget;
+
+    /// <summary>每條線段的造山帶上，分配曲線的總和。用來把預算正規化，總量才不會變。</summary>
+    private readonly double[] _segmentProfileSum;
+
     private readonly CrustType[] _crustSnapshot;
 
     /// <summary>
@@ -321,6 +339,12 @@ public sealed class PlateTectonics
         _convergenceWeight = new float[grid.CellCount];
         _segmentMeanConvergence = new double[grid.CellCount];
         _floodQueue = new int[grid.CellCount];
+        _orogenBudget = new double[grid.CellCount];
+        _orogenSegment = new int[grid.CellCount];
+        _orogenHops = new int[grid.CellCount];
+        _orogenQueue = new int[grid.CellCount];
+        _segmentBudget = new double[grid.CellCount];
+        _segmentProfileSum = new double[grid.CellCount];
         _crustSnapshot = new CrustType[grid.CellCount];
         _liftSnapshot = new float[grid.CellCount];
         _spreadBuffer = new float[grid.CellCount];
@@ -443,10 +467,10 @@ public sealed class PlateTectonics
         ClassifyBoundaries(grid, state, plates);
 
         MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);
-        Array.Clear(_arcAdded);
-        ApplyConvergence(state, deltaMyr);
+        ApplyConvergence(grid, state, plates, deltaMyr);
         for (var cell = 0; cell < grid.CellCount; cell++) LastArcCrustKm += _arcAdded[cell];
         SpreadOverthickenedCrust(grid, state, deltaMyr);
+        FlowWithinOrogenBand(grid, state, deltaMyr);
 
         // **這裡刻意不回寫標記**——回寫由 SimulationEngine 在「所有」會改地殼的作用跑完之後統一做。
         // 原本在這裡就回寫，導致排在後面的火山與侵蝕改完地殼之後，下一次 Rasterize 會用
@@ -1540,7 +1564,26 @@ public sealed class PlateTectonics
     /// 兩塊海洋地殼相遇則是年輕的一方長出島弧。**島弧不斷增厚超過門檻後會轉成大陸地殼**——
     /// 這就是一顆全是海洋的星球長出第一塊陸地的機制。
     /// </summary>
-    private void ApplyConvergence(SimulationState state, double deltaMyr)
+    /// <summary>
+    /// 造山帶的寬度（公里）——線後方有多寬的區域會跟著抬升。
+    ///
+    /// **變形不會只發生在邊界那一格上。** 真實的造山帶是寬帶：安地斯連同阿爾蒂普拉諾高原
+    /// 約500公里寬、西藏高原約1,000公里、日本島弧約200公里。而 n=150 一格只有15公里——
+    /// 原本把整份增厚都堆在邊界那一格，蓋出來的是一道15公里寬的**牆**，不是造山**帶**，
+    /// 這正是大陸在地殼類型圖上看起來像細條的直接原因。
+    ///
+    /// 取400公里，安地斯與日本之間。
+    ///
+    /// **總量不變、只改分布**：聚合供應的物質量由縮短速率決定，是固定的；
+    /// 帶寬只決定它攤在多寬的範圍上。所以這裡是把同一份預算沿著帶重新分配，
+    /// 不是憑空多造地殼——否則量到的差異會分不清是形狀變了還是總量變了。
+    /// </summary>
+    private const double OrogenWidthKm = 400;
+
+    /// <summary>診斷用：這一步有多少格落在造山帶內（含邊界那一格）。</summary>
+    public int LastOrogenCellCount { get; private set; }
+
+    private void ApplyConvergence(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr)
     {
         // 先把地殼類型拍一張快照，平行迴圈裡讀鄰居一律讀快照。
         //
@@ -1554,6 +1597,8 @@ public sealed class PlateTectonics
         Parallel.For(0, state.CellCount, cell => _liftSnapshot[cell] = Isostasy.BedrockElevation(
             state.Crust[cell], state.CrustThickness[cell], state.CrustAge[cell], state.CrustDensity[cell]));
 
+        // 1. 每條線段這一步供應多少地殼。這裡只算預算，還不動地殼。
+        Array.Clear(_orogenBudget, 0, state.CellCount);
         Parallel.For(0, state.CellCount, cell =>
         {
             if (state.Boundary[cell] != BoundaryType.Convergent) return;
@@ -1573,15 +1618,12 @@ public sealed class PlateTectonics
                 // **都是海洋：浮得高的當上盤，不是年輕的**（2026-09-07 改）。
                 //
                 // 年齡只是密度的代理變數（老的比較冷、比較重），但這個模型裡密度是**明寫的**
-                // ——重板塊有 DensityAnomalyKgPerM3。用年齡判斷等於忽略那個異常，
-                // 於是「密度最高的板塊」只要比對面年輕就變成上盤、被加厚。
+                // ——重板塊有 DensityAnomalyKgPerM3。用年齡判斷等於忽略那個異常。
                 //
                 // 改用均衡高度也讓兩個層級一致：標記層級的 ResolveCollision 早就是
                 // 「誰浮得高誰留在地表」，只有這裡還在用另一套規則。
                 //
-                // **老實說：這個改動單獨量不出效果**（n=24 跑75百萬年，重板塊厚度
-                // 25.0 vs 25.0 公里）。重板塊變厚的主要路徑不是這裡，而是取樣時
-                // 標記在同一格疊起來（見下面 OceanicOnly 的厚度上限）。
+                // **老實說：這個改動單獨量不出效果**（重板塊厚度 25.0 vs 25.0 公里）。
                 // 留著是因為「忽略明寫的密度異常、改用年齡這個代理變數」本身就是錯的，
                 // 不是因為它修好了什麼。
                 _ => _liftSnapshot[cell] >= _liftSnapshot[neighbor],
@@ -1595,12 +1637,49 @@ public sealed class PlateTectonics
             var convergenceKm = _segmentMeanConvergence[cell] / 1000.0 * deltaMyr;
             var addedKm = convergenceKm * ThickeningPerConvergence * _convergenceWeight[cell];
             if (addedKm <= 0) return;
+
+            _orogenBudget[cell] = addedKm;
+
+            // **島弧火山留在線上，不跟著攤開。** 變形帶是寬的，火山弧卻是窄的
+            // （日本、安地斯的火山鏈只有幾十公里寬）——脫水熔融發生在板片到達特定深度的那條線上。
+            state.VolcanicActivity[cell] += (float)(addedKm / Math.Max(deltaMyr, 1e-9));
+        });
+
+        // 2. 從線往**自己這一側的內陸**泛洪，畫出造山帶的範圍。
+        //    只往同一個板塊擴散——「線後方」指的就是上盤那一側。
+        var spacingKm = grid.AverageCellSpacingMeters / 1000.0;
+        var maxHops = Math.Max(1, (int)(OrogenWidthKm / spacingKm));
+        var bandCells = BuildOrogenBand(grid, state, plates, maxHops);
+        LastOrogenCellCount = bandCells;
+
+        // 3. 每條線段的預算，攤到它所屬的帶上。權重在線上最大、往內陸線性遞減到0。
+        Array.Clear(_segmentBudget, 0, LastSegmentCount);
+        Array.Clear(_segmentProfileSum, 0, LastSegmentCount);
+        for (var cell = 0; cell < state.CellCount; cell++)
+        {
+            if (_orogenBudget[cell] > 0) _segmentBudget[_segmentId[cell]] += _orogenBudget[cell];
+
+            var segment = _orogenSegment[cell];
+            if (segment < 0) continue;
+            _segmentProfileSum[segment] += OrogenProfile(_orogenHops[cell], maxHops);
+        }
+
+        Array.Clear(_arcAdded, 0, state.CellCount);
+        Parallel.For(0, state.CellCount, cell =>
+        {
+            var segment = _orogenSegment[cell];
+            if (segment < 0) return;
+
+            var profileSum = _segmentProfileSum[segment];
+            if (profileSum <= 0) return;
+
+            var share = OrogenProfile(_orogenHops[cell], maxHops) / profileSum;
+            var addedKm = _segmentBudget[segment] * share;
+            if (addedKm <= 0) return;
+
             _arcAdded[cell] = addedKm;
             state.CrustThickness[cell] = MathF.Min(
                 state.CrustThickness[cell] + (float)addedKm, Isostasy.MaxCrustThicknessKm);
-
-            // 島弧火山：隱沒下去的板片脫水、使地函熔融，岩漿上升造出火山弧（日本、安地斯山）
-            state.VolcanicActivity[cell] += (float)(addedKm / Math.Max(deltaMyr, 1e-9));
 
             // 岩漿分異：島弧的岩漿是分異過的，加上去的物質比原本的海洋地殼輕，
             // 所以地殼一邊變厚一邊**變輕**。這是海洋地殼能真的轉成大陸地殼的化學面，
@@ -1609,13 +1688,81 @@ public sealed class PlateTectonics
             state.CrustDensity[cell] +=
                 (Isostasy.ContinentalCrustDensity - state.CrustDensity[cell]) * MathF.Min(addedFraction, 1f);
 
-            // 島弧增生到夠厚就變成大陸地殼——全海洋星球長出陸地的關鍵一步
+            // 增生到夠厚就變成大陸地殼——全海洋星球長出陸地的關鍵一步
             if (_crustSnapshot[cell] == CrustType.Oceanic
                 && state.CrustThickness[cell] >= Isostasy.ContinentalThresholdKm)
             {
                 state.TryMakeContinental(cell);
             }
         });
+    }
+
+    /// <summary>
+    /// 造山帶內的分配曲線：線上最大、往內陸線性遞減到帶緣為0。
+    /// 真實的變形強度也是從隱沒帶往內陸遞減的（安地斯的地殼厚度從海岸往東遞減）。
+    /// </summary>
+    private static double OrogenProfile(int hops, int maxHops) =>
+        Math.Max(0.0, 1.0 - (double)hops / (maxHops + 1));
+
+    /// <summary>
+    /// 從聚合線往上盤內陸泛洪，畫出造山帶的範圍，並記下每一格離線幾格、屬於哪一條線段。
+    ///
+    /// 只往**同一個板塊**擴散——「線後方」指的就是上盤那一側；跨過線就是另一塊板塊，
+    /// 那邊是隱沒下去的一方，不會被抬升。
+    ///
+    /// 走訪是逐層的廣度優先，種子依格子索引排序放入，所以結果與執行緒排程無關。
+    /// </summary>
+    /// <returns>落在造山帶內的格數。</returns>
+    private int BuildOrogenBand(SimulationGrid grid, SimulationState state, PlateSet plates, int maxHops)
+    {
+        Array.Fill(_orogenSegment, -1, 0, grid.CellCount);
+        Array.Fill(_orogenHops, 0, 0, grid.CellCount);
+
+        var count = 0;
+        for (var cell = 0; cell < grid.CellCount; cell++)
+        {
+            if (_orogenBudget[cell] <= 0) continue;
+            _orogenSegment[cell] = _segmentId[cell];
+            _orogenHops[cell] = 0;
+            _orogenQueue[count++] = cell;
+        }
+
+        for (var head = 0; head < count; head++)
+        {
+            var cell = _orogenQueue[head];
+            var hops = _orogenHops[cell];
+            if (hops >= maxHops) continue;
+
+            var plate = plates.PlateIdByCell[cell];
+            var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+            for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
+            {
+                var neighbor = grid.Neighbors[baseIndex + n];
+                if (neighbor == SimulationGrid.NoNeighbor) continue;
+                if (_orogenSegment[neighbor] >= 0) continue;
+                if (plates.PlateIdByCell[neighbor] != plate) continue;
+
+                // **只往大陸地殼裡擴散**（2026-09-07 量測後加的）。
+                //
+                // 縮短量攤進海洋地殼是沒有用的：以1公里/百萬年跑5,000萬年是50公里的縮短量，
+                // 全部由15公里寬的最前排吸收，那一格縮短超過100%、厚度翻倍、越過大陸門檻；
+                // 攤到400公里寬的帶上只縮短12.5%，7公里變成7.9公里，永遠不會變成大陸。
+                // **均勻分攤的縮短造不出大陸，集中的縮短才行。**
+                // 實測把帶開放給海洋地殼時，大陸格數 22,965 → 14,962（流速0.05）→ 12,413（0.40），
+                // 三種流速全都是稀釋。
+                //
+                // 但抬升發生在**既有的大陸**上就完全正確：西藏是寬闊高原，是因為印度撞進來時
+                // 後面本來就已經是大陸。而且大陸岩石圈遠比海洋岩石圈軟——
+                // 這正是高原長在大陸上、而海洋上的島弧總是窄的原因。
+                if (_crustSnapshot[neighbor] != CrustType.Continental) continue;
+
+                _orogenSegment[neighbor] = _orogenSegment[cell];
+                _orogenHops[neighbor] = hops + 1;
+                _orogenQueue[count++] = neighbor;
+            }
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -1631,6 +1778,81 @@ public sealed class PlateTectonics
     /// 結果是10億年後陸地只佔0.23%（地球是29%）。把超厚的部分擴散給鄰居，
     /// 才會把「厚度」換成「面積」。
     /// </summary>
+    /// <summary>
+    /// 造山帶內地殼側向流動的速率（每百萬年抹平厚度差的比例）。
+    ///
+    /// ## 為什麼只在造山帶內流
+    ///
+    /// 這是使用者提出的「推動的時候，線的後面一片區塊也要一起抬升」實際生效的那一步。
+    /// 縮短量原本全部由最前排那一格吸收——因為板塊是**剛體**旋轉，整塊板塊每個標記都用
+    /// 同一個歐拉旋轉在動，後面完全不變形。真實的板塊只有內部是剛性的，
+    /// 邊界附近會內部變形，所以造山帶是寬帶：安地斯約500公里、西藏約1,000公里。
+    ///
+    /// **先前試過「用厚度差驅動流動」而且失敗過**（見 <see cref="GravitationalSpreadingThresholdKm"/>
+    /// 的說明）：失敗原因是它作用在**每一個**地方，於是正常的大陸邊緣永遠在流失——
+    /// 一塊35公里的大陸旁邊必然貼著7公里的海洋地殼，落差28公里超過任何合理門檻，
+    /// 實測起始4.55%的陸地到6億年只剩0.35%。
+    ///
+    /// 這裡的差別是**把它限制在活躍的造山帶內**（<c>_orogenSegment</c> 標出來的那條帶）。
+    /// 物理上正是這樣：活躍造山帶的地殼是熱的、軟的、會流（西藏的地殼流 channel flow，
+    /// 也是西藏成為一片寬闊高原而不是一根尖峰的原因）；穩定的克拉通邊緣是冷的、硬的，不流。
+    ///
+    /// 也試過用重力擴展的門檻來加寬（把 40 降到 34、28），那條路**行不通**：
+    /// 一格40公里的地殼分給6個7公里的海洋鄰居，鄰居只變成7.5公里、離25公里的大陸門檻還很遠，
+    /// 而來源自己掉下去了——實測大陸格數 22,965 → 19,771 → 18,568，是稀釋不是加寬。
+    /// 差別在於造山帶內的鄰居本來就厚，流過去才推得過門檻。
+    /// </summary>
+    private const double OrogenFlowRatePerMyr = 0.15;
+
+    /// <summary>
+    /// 造山帶內的地殼側向流動：把最前排吸收掉的縮短量攤到線後方整條帶上。
+    ///
+    /// 只在同一條造山帶內、而且只從厚流到薄，所以是守恆的重分配，不會憑空生出地殼。
+    /// 帶外一律不動——那是這個作法跟先前失敗那版最關鍵的差別（見 <see cref="OrogenFlowRatePerMyr"/>）。
+    /// </summary>
+    private void FlowWithinOrogenBand(SimulationGrid grid, SimulationState state, double deltaMyr)
+    {
+        Array.Copy(state.CrustThickness, _spreadBuffer, grid.CellCount);
+
+        // 上限0.1跟重力擴展同一個理由：一格最多6個鄰居，每個都流出這個比例的話總流出0.6倍，
+        // 再大就會流過頭、在相鄰兩格之間來回震盪而不是擴散開。
+        var factor = (float)Math.Min(OrogenFlowRatePerMyr * deltaMyr, 0.1);
+
+        for (var cell = 0; cell < grid.CellCount; cell++)
+        {
+            var segment = _orogenSegment[cell];
+            if (segment < 0) continue;
+
+            var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+            for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+            {
+                var neighbor = grid.Neighbors[baseIndex + s];
+                if (neighbor == SimulationGrid.NoNeighbor) continue;
+                if (_orogenSegment[neighbor] != segment) continue;
+
+                var difference = state.CrustThickness[cell] - state.CrustThickness[neighbor];
+                if (difference <= 0f) continue;
+
+                var flow = difference * factor;
+                _spreadBuffer[cell] -= flow;
+                _spreadBuffer[neighbor] += flow;
+            }
+        }
+
+        for (var cell = 0; cell < grid.CellCount; cell++)
+        {
+            if (_orogenSegment[cell] < 0) continue;
+            state.CrustThickness[cell] = MathF.Min(_spreadBuffer[cell], Isostasy.MaxCrustThicknessKm);
+
+            // 流過來的地殼一樣可以厚到變成大陸地殼——這就是「線後面一片區塊跟著抬升」
+            if (state.Crust[cell] == CrustType.Oceanic
+                && state.CrustThickness[cell] >= Isostasy.ContinentalThresholdKm)
+            {
+                state.TryMakeContinental(cell);
+            }
+        }
+    }
+
     private void SpreadOverthickenedCrust(SimulationGrid grid, SimulationState state, double deltaMyr)
     {
         Array.Copy(state.CrustThickness, _spreadBuffer, grid.CellCount);
