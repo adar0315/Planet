@@ -139,6 +139,92 @@ public static class Isostasy
         (sedimentMeters * SedimentDensity + iceMeters * IceDensity) / MantleDensity;
 
     /// <summary>
+    /// 海洋岩石圈地函的厚度成長係數（公里／√百萬年）。
+    ///
+    /// **板塊不等於地殼**：板塊是**岩石圈**——地殼加上它下方那層已經冷到具有剛性的地函。
+    /// 這一層在模型裡原本完全不存在，而它才是隱沒的主角。
+    ///
+    /// 海洋岩石圈離開中洋脊後由上往下冷卻，厚度隨時間的平方根成長，
+    /// 跟海深隨 √年齡變深是同一個半空間冷卻機制。
+    /// 取10：100百萬年時約100公里，與地球的觀測相符。
+    /// </summary>
+    public const float LithosphereThicknessPerSqrtMyrKm = 10f;
+
+    /// <summary>
+    /// 海洋岩石圈地函的厚度上限（公里）。
+    ///
+    /// 冷卻到某個深度之後，底下的地函對流會把熱補回來，厚度就不再成長
+    /// （「板塊模型」相對於純半空間冷卻的修正）。地球上大約在80~125公里之間停住。
+    /// </summary>
+    public const float MaxLithosphereThicknessKm = 125f;
+
+    /// <summary>
+    /// 岩石圈地函比軟流圈重多少（公斤／立方公尺）。
+    ///
+    /// 成分相同，差別純粹是**溫度**：岩石圈地函比較冷，因此熱收縮而密度較高。
+    /// 由熱膨脹係數推出：ρ × α × ΔT = 3,300 × 3×10⁻⁵ × 675 ≈ 66。
+    /// （ΔT 取675 K：岩石圈從地表的0°C到底部的約1,350°C，整層的平均溫差是一半。）
+    ///
+    /// **這個值不是調出來的，是算出來的**，而且它決定了一個很關鍵的時刻——見
+    /// <see cref="LithosphereBuoyancyMeters"/>。
+    /// </summary>
+    public const float LithosphereMantleDensityExcess = 66f;
+
+    /// <summary>
+    /// 整個岩石圈柱相對於軟流圈的**淨浮力**（公尺，正值代表浮得起來）。
+    ///
+    /// ## 這跟地表高度是兩件事
+    ///
+    /// 原本模型用 <see cref="BedrockElevation"/>（地表高度）當作「會不會隱沒」的判準，
+    /// 那是把兩個不同的積分混為一談：地表高度是整根柱子的均衡結果，
+    /// 能不能隱沒則是「整個岩石圈相對於軟流圈的淨密度」。兩者相關但不相等。
+    ///
+    /// ## 為什麼非有岩石圈地函不可
+    ///
+    /// 海洋地殼的密度是 2,900、地函是 3,300——**地殼比地函輕**。
+    /// 光靠地殼，海洋地殼永遠不會隱沒。真實世界會沉下去的是**整個岩石圈**：
+    /// 冷卻後增厚的地函部分密度超過軟流圈，把上面比較輕的地殼一起拖下去。
+    ///
+    /// ## 一個自己浮現出來的時刻
+    ///
+    /// 海洋地殼提供的正浮力是 7 × (3,300 − 2,900) = 2,800；
+    /// 岩石圈地函提供的負浮力是 L × 66。兩者相等時 L ≈ 42 公里，
+    /// 對應年齡 (42/10)² ≈ **18 百萬年**。
+    ///
+    /// 也就是說：**年輕的海洋岩石圈是浮的、老的才會沉**，轉折點約在18百萬年。
+    /// 這個數字落在地球的觀測範圍（一般認為10~30百萬年）之內，
+    /// 而且**沒有任何一個常數是為了湊出它而調的**——它是密度、厚度、冷卻速率的必然結果。
+    ///
+    /// ## 大陸為什麼沉不下去
+    ///
+    /// 大陸的岩石圈地函是**化學上虧損的**（早期熔融抽走了較重的鐵鎂成分），
+    /// 所以即使又冷又厚，密度仍然不高於軟流圈。這裡把它當成淨中性處理，
+    /// 於是大陸的浮力就只剩地殼那一項——又厚又輕，浮力極大，隱沒不下去。
+    /// 這正是大陸碰撞會縫合成高山而不是一邊沉下去的原因。
+    /// </summary>
+    /// <param name="crust">地殼類型。</param>
+    /// <param name="crustThicknessKm">地殼厚度（公里）。</param>
+    /// <param name="crustDensityKgPerM3">地殼密度。</param>
+    /// <param name="ageMyr">地殼年齡（百萬年）。海洋岩石圈的厚度由它決定。</param>
+    /// <returns>淨浮力（公尺）。正值浮、負值沉。</returns>
+    public static float LithosphereBuoyancyMeters(
+        CrustType crust, float crustThicknessKm, float crustDensityKgPerM3, float ageMyr)
+    {
+        // 地殼比軟流圈輕多少 → 正浮力
+        var crustLift = crustThicknessKm * 1000f * (MantleDensity - crustDensityKgPerM3) / MantleDensity;
+
+        // 大陸的岩石圈地函化學上虧損，淨中性，不提供負浮力
+        if (crust == CrustType.Continental) return crustLift;
+
+        var lithosphereKm = MathF.Min(
+            LithosphereThicknessPerSqrtMyrKm * MathF.Sqrt(MathF.Max(ageMyr, 0f)),
+            MaxLithosphereThicknessKm);
+
+        var mantleDrag = lithosphereKm * 1000f * LithosphereMantleDensityExcess / MantleDensity;
+        return crustLift - mantleDrag;
+    }
+
+    /// <summary>
     /// 由地殼類型、厚度、年齡、密度算出基岩表面高度（公尺，相對海平面）。
     ///
     /// 密度是以「相對於該類型的典型密度」的方式加成的：密度低於典型值就浮得更高，

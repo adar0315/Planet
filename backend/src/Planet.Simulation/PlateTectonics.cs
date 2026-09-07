@@ -616,7 +616,7 @@ public sealed class PlateTectonics
                 var worstLift = float.MaxValue;
                 for (var i = 0; i < _cellMarkerCount[cell]; i++)
                 {
-                    var lift = BuoyancyOf(_markersByCell[from0 + i]);
+                    var lift = SubductionBuoyancyOf(_markersByCell[from0 + i]);
                     if (lift >= worstLift) continue;
                     worstLift = lift;
                     worst = i;
@@ -662,7 +662,7 @@ public sealed class PlateTectonics
                 for (var i = 0; i < _cellMarkerCount[cell]; i++)
                 {
                     var m = _markersByCell[from + i];
-                    var lift = BuoyancyOf(m);
+                    var lift = SubductionBuoyancyOf(m);
                     if (lift < lowestLift) { lowestLift = lift; lowest = i; }
                     if (lift > highestLift) { highestLift = lift; highest = i; }
                 }
@@ -826,7 +826,7 @@ public sealed class PlateTectonics
             {
                 var m = MarkerAt(cell, i);
                 if (first < 0) first = m;
-                var lift = BuoyancyOf(m);
+                var lift = SurfaceLiftOf(m);
                 if (lift > topLift) { topLift = lift; top = m; }
 
                 // 地殼歸屬於「現在覆蓋在它上面」的那個板塊——板塊邊界會掃過地殼，
@@ -1222,7 +1222,7 @@ public sealed class PlateTectonics
             // 「多的丟掉、少的憑空生」等於同時開了一個沒被計數的沉與一個沒被計數的源，
             // 而那個源實測注入 50~351 km³/年，是整顆星球失控變成厚地殼的引擎。
             // 把兩者配對就天生守恆：同一塊地殼，只是重新指派到正確的格子。
-            var keepIncoming = BuoyancyOf(incoming) > BuoyancyOf(occupant);
+            var keepIncoming = SubductionBuoyancyOf(incoming) > SubductionBuoyancyOf(occupant);
             var spare = keepIncoming ? occupant : incoming;
             if (keepIncoming) _ownerMarker[target] = incoming;
 
@@ -1243,8 +1243,8 @@ public sealed class PlateTectonics
 
         // 誰留在地表就是誰浮得高——直接比均衡高度，厚度、密度、年齡三個因素會自動一起考慮進去，
         // 不需要再寫一串優先順序的規則（「大陸不會沉」本來就是這條的必然結果，因為大陸又厚又輕）。
-        var incomingLift = BuoyancyOf(incoming);
-        var occupantLift = BuoyancyOf(occupant);
+        var incomingLift = SubductionBuoyancyOf(incoming);
+        var occupantLift = SubductionBuoyancyOf(occupant);
         var incomingWins = MathF.Abs(incomingLift - occupantLift) > BuoyancyToleranceMeters
             ? incomingLift > occupantLift
             : _markerAge[incoming] < _markerAge[occupant]; // 浮力相當才比年齡（老的比較冷、密度大）
@@ -1260,8 +1260,25 @@ public sealed class PlateTectonics
     }
 
     /// <summary>這個標記的地殼浮得多高（公尺）。就是均衡高度，用來決定碰撞時誰隱沒。</summary>
-    private float BuoyancyOf(int marker) => Isostasy.BedrockElevation(
+    /// <summary>
+    /// 這個標記的地表高度。用來決定**誰露在表面**（同一格擠了好幾個標記時看得到哪一個）。
+    ///
+    /// **不要拿它來判斷誰會隱沒**——那是另一件事，用 <see cref="SubductionBuoyancyOf"/>。
+    /// 混用是 2026-09-07 修掉的一個概念錯誤：地表高度是整根柱子的均衡結果，
+    /// 能不能隱沒則是整個岩石圈相對於軟流圈的淨密度，兩個不同的積分。
+    /// </summary>
+    private float SurfaceLiftOf(int marker) => Isostasy.BedrockElevation(
         _markerCrust[marker], _markerThickness[marker], _markerAge[marker], _markerDensity[marker]);
+
+    /// <summary>
+    /// 這個標記的岩石圈淨浮力（正值浮、負值沉）。**隱沒與碰撞的勝負一律用這個判**。
+    ///
+    /// 它跟地表高度最關鍵的差別是：海洋岩石圈有一個**符號翻轉的年齡**（約18百萬年）——
+    /// 年輕的浮、老的沉。地表高度只是單調變深，表達不出「年輕洋殼抗拒隱沒」這件事。
+    /// 見 <see cref="Isostasy.LithosphereBuoyancyMeters"/>。
+    /// </summary>
+    private float SubductionBuoyancyOf(int marker) => Isostasy.LithosphereBuoyancyMeters(
+        _markerCrust[marker], _markerThickness[marker], _markerDensity[marker], _markerAge[marker]);
 
     /// <summary>
     /// 把隱沒掉的地殼的一部分堆到留在地表的那一格上。
