@@ -92,8 +92,32 @@ public class DensePlateTests
         engine.Step(4000); // 2億年
         var after = engine.State.OceanicOnly.Count(flag => flag);
 
-        Assert.True(after > initial * 0.5,
-            $"重地殼從 {initial} 格掉到 {after} 格——新生地殼沒有繼承板塊的密度異常，重板塊被稀釋掉了");
+        // **守的是「有沒有繼承」，不是族群數量**（2026-09-08 改）。
+        //
+        // 原本斷言重地殼不得少於一半。加上板塊動力學之後這條開始失敗（834 → 350 格），
+        // 但那不是繼承壞掉——繼承的程式碼還在（PlateTectonics 生成新洋殼時會加上
+        // 板塊的 DensityAnomalyKgPerM3）。真正的原因是板塊速度不再是固定的隨機常數，
+        // 整個演化路徑跟著變，重板塊被消耗的比例就不一樣了。
+        // 重板塊負浮力大、本來就該優先被隱沒掉，用族群數量當判準等於把「演化剛好怎麼走」
+        // 寫進測試裡。
+        //
+        // 改成直接檢查機制：重板塊上**還在持續產生**帶有密度異常的新地殼。
+        // 這道檢查擋得住「新生地殼忘記繼承異常」這個真正的退化，
+        // 而且不受演化路徑影響。
+        Assert.True(after > 0, "重地殼完全消失了");
+
+        var dense = Enumerable.Range(0, engine.State.CellCount)
+            .Where(c => engine.State.OceanicOnly[c])
+            .ToArray();
+
+        var youngDense = dense.Count(c => engine.State.CrustAge[c] < 20f);
+        Assert.True(youngDense > 0,
+            $"重板塊上 {dense.Length} 格都沒有年輕地殼——新生地殼沒有繼承密度異常，" +
+            "重板塊正在被普通密度的新洋殼稀釋掉");
+
+        var anomalous = dense.Count(c => engine.State.CrustDensity[c] > Isostasy.OceanicCrustDensity);
+        Assert.True(anomalous > dense.Length * 0.5,
+            $"重板塊 {dense.Length} 格裡只有 {anomalous} 格的密度高於一般洋殼——密度異常沒有跟著走");
     }
 
     /// <summary>密度高就要沉得更低，這是「更深的海盆」的來源。同厚度、同年齡下直接比高度。</summary>

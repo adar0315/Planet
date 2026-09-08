@@ -470,6 +470,10 @@ public sealed class PlateTectonics
         plates.Advance(grid, deltaMyr);
         ClassifyBoundaries(grid, state, plates);
 
+        // **邊界分類完才更新板塊速度**：驅動力來自邊界（板片拉力在隱沒帶、洋脊推力在張裂帶），
+        // 所以要先知道邊界在哪、哪一側在隱沒。解出來的速度下一步生效。
+        Dynamics.UpdateVelocities(grid, state, plates, _convergingNeighbor, deltaMyr);
+
         MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);
         ApplyConvergence(grid, state, plates, deltaMyr);
         for (var cell = 0; cell < grid.CellCount; cell++) LastArcCrustKm += _arcAdded[cell];
@@ -1421,6 +1425,9 @@ public sealed class PlateTectonics
     /// 取0.25：速率變化超過四分之一就算換了一段。
     /// </summary>
     private const double SegmentRateCoherence = 0.25;
+
+    /// <summary>板塊動力學：由力矩平衡解出歐拉極與角速度。診斷時可以讀它的每板塊力。</summary>
+    public PlateDynamics Dynamics { get; } = new();
 
     /// <summary>診斷用：目前的聚合線段數量。</summary>
     public int LastSegmentCount { get; private set; }

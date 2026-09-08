@@ -511,6 +511,43 @@ public sealed class PlateSet
     }
 
     /// <summary>
+    /// 用求解出來的**角速度向量**更新所有板塊：方向就是新的歐拉極、大小就是新的角速度。
+    ///
+    /// **這是「歐拉極也能改變」的入口**。只縮放角速度的話板塊永遠繞著同一根軸轉，
+    /// 板塊重組不可能發生。求解見 <see cref="PlateDynamics"/>。
+    ///
+    /// 更新後一定要重新扣掉淨旋轉（見 <see cref="RemoveNetRotation"/>）——
+    /// 力矩解出來的角速度沒有理由自己加總成零，而殘留的全球共同旋轉會讓整片地殼
+    /// 一起掃過網格製造滿地雜訊，物理上卻什麼都沒發生。
+    /// </summary>
+    /// <param name="angularVelocities">每個板塊的角速度向量（度／百萬年）。</param>
+    public void ApplyAngularVelocities(ReadOnlySpan<(double X, double Y, double Z)> angularVelocities)
+    {
+        for (var p = 0; p < Plates.Length; p++)
+        {
+            var (x, y, z) = angularVelocities[p];
+            var omega = Math.Sqrt(x * x + y * y + z * z);
+
+            // 角速度趨近零時歐拉極沒有定義，保留原本的極、只把速率設成零
+            if (omega < 1e-12)
+            {
+                Plates[p] = Plates[p] with { AngularVelocityDegPerMyr = 0 };
+                continue;
+            }
+
+            Plates[p] = Plates[p] with
+            {
+                PoleX = x / omega,
+                PoleY = y / omega,
+                PoleZ = z / omega,
+                AngularVelocityDegPerMyr = omega,
+            };
+        }
+
+        RemoveNetRotation(Plates, PlateIdByCell);
+    }
+
+    /// <summary>
     /// 換到**無淨旋轉參考系**：扣掉全體板塊（依面積加權）的平均角速度。
     ///
     /// 板塊運動只有**相對**運動是物理的，絕對旋轉取決於選哪個參考系，真實的板塊模型
