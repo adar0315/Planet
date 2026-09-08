@@ -44,14 +44,20 @@ public class DensePlateTests
         var engine = new SimulationEngine(CreateGrid(), 42);
         var state = engine.State;
 
-        var heavy = Enumerable.Range(0, state.CellCount).Where(c => state.OceanicOnly[c]).ToArray();
+        // **「重」跟「永遠是海洋」是兩件事**（2026-09-08 解耦）：泛大洋遺存板塊
+        // （PlateSet.SuperoceanPlateId）是 OceanicOnly 但**一點都不重**，太平洋板塊也不重。
+        // 所以要選「重板塊上的格子」必須看板塊的密度異常，不能拿 OceanicOnly 當代名詞。
+        var heavy = Enumerable.Range(0, state.CellCount)
+            .Where(c => engine.Plates.Plates[engine.Plates.PlateIdByCell[c]].DensityAnomalyKgPerM3 > 0f)
+            .ToArray();
         Assert.NotEmpty(heavy);
 
         Assert.All(heavy, cell =>
         {
             Assert.True(state.CrustDensity[cell] > Isostasy.OceanicCrustDensity,
-                "被標成 OceanicOnly 的格子密度沒有比普通海洋地殼重");
+                "重板塊上的格子密度沒有比普通海洋地殼重");
             Assert.Equal(CrustType.Oceanic, state.Crust[cell]);
+            Assert.True(state.OceanicOnly[cell], "重板塊上的格子沒有被標成永遠是海洋");
         });
     }
 
@@ -86,11 +92,16 @@ public class DensePlateTests
     public void Step_DenseCrustPersistsInsteadOfBeingDilutedAway()
     {
         var engine = new SimulationEngine(CreateGrid(), 42);
-        var initial = engine.State.OceanicOnly.Count(flag => flag);
+
+        // 選重板塊要看密度異常，不能用 OceanicOnly（泛大洋遺存板塊也是 OceanicOnly 但不重）
+        bool IsOnDensePlate(int cell) =>
+            engine.Plates.Plates[engine.Plates.PlateIdByCell[cell]].DensityAnomalyKgPerM3 > 0f;
+
+        var initial = Enumerable.Range(0, engine.State.CellCount).Count(IsOnDensePlate);
         Assert.True(initial > 0);
 
         engine.Step(4000); // 2億年
-        var after = engine.State.OceanicOnly.Count(flag => flag);
+        var after = Enumerable.Range(0, engine.State.CellCount).Count(IsOnDensePlate);
 
         // **守的是「有沒有繼承」，不是族群數量**（2026-09-08 改）。
         //
@@ -106,9 +117,7 @@ public class DensePlateTests
         // 而且不受演化路徑影響。
         Assert.True(after > 0, "重地殼完全消失了");
 
-        var dense = Enumerable.Range(0, engine.State.CellCount)
-            .Where(c => engine.State.OceanicOnly[c])
-            .ToArray();
+        var dense = Enumerable.Range(0, engine.State.CellCount).Where(IsOnDensePlate).ToArray();
 
         var youngDense = dense.Count(c => engine.State.CrustAge[c] < 20f);
         Assert.True(youngDense > 0,
@@ -198,7 +207,27 @@ public class DensePlateTests
         var engine = new SimulationEngine(CreateGrid(), 42, densePlateCount: 0);
         engine.Step(500);
 
-        Assert.All(engine.State.OceanicOnly, flag => Assert.False(flag));
         Assert.All(engine.Plates.Plates, plate => Assert.Equal(0f, plate.DensityAnomalyKgPerM3));
+
+        // **不能斷言「沒有 OceanicOnly」**（2026-09-08 解耦）：泛大洋遺存板塊永遠是海洋地殼，
+        // 那跟「重不重」無關——太平洋板塊也一點都不重。
+        // 所以這裡守的是：剩下的 OceanicOnly 格子**全部**屬於泛大洋板塊，沒有別的來源。
+        //
+        // 也不能斷言「地殼密度只有 2,900 或 2,700 兩種」——早期大轟炸刻意製造了連續的
+        // 大尺度密度不均勻（低密度區塊就是後來大陸生長的核心），密度本來就是連續分布的。
+        var oceanicOnly = Enumerable.Range(0, engine.State.CellCount)
+            .Where(c => engine.State.OceanicOnly[c])
+            .ToArray();
+
+        Assert.NotEmpty(oceanicOnly);
+
+        // 守的是這個旗標**定義上**保證的事，不用門檻：被標成永遠是海洋的地殼，
+        // 就不可以是大陸地殼。
+        //
+        // **不要斷言「這些格子都在泛大洋板塊上」**（2026-09-08 試過，78格失敗）：
+        // 旗標掛在標記上，而標記會跨越板塊邊界漂移，地殼移動時保留自己的性質——
+        // 那是正確的物理，不是漏洞。板塊歸屬是幾何判定的，會掃過地殼。
+        Assert.All(oceanicOnly,
+            cell => Assert.Equal(CrustType.Oceanic, engine.State.Crust[cell]));
     }
 }

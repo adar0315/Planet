@@ -783,7 +783,7 @@ public sealed class PlateTectonics
                     Isostasy.OceanicCrustDensity + plates.Plates[_markerPlate[marker]].DensityAnomalyKgPerM3;
                 _markerCrust[marker] = CrustType.Oceanic;
                 _markerOceanicOnly[marker] =
-                    plates.Plates[_markerPlate[marker]].DensityAnomalyKgPerM3 > 0f;
+                    plates.Plates[_markerPlate[marker]].IsOceanicOnly;
 
                 // 中洋脊火山：速率的分母是「上次取樣到現在」而不是單一步長，
                 // 否則會得到比島弧大兩個數量級的尖峰，畫出來只剩中洋脊在一閃一閃。
@@ -919,7 +919,7 @@ public sealed class PlateTectonics
         _markerDensity[marker] =
             Isostasy.OceanicCrustDensity + plates.Plates[_markerPlate[marker]].DensityAnomalyKgPerM3;
         _markerCrust[marker] = CrustType.Oceanic;
-        _markerOceanicOnly[marker] = plates.Plates[_markerPlate[marker]].DensityAnomalyKgPerM3 > 0f;
+        _markerOceanicOnly[marker] = plates.Plates[_markerPlate[marker]].IsOceanicOnly;
 
         // 中洋脊火山：速率的分母是「上次取樣到現在」而不是單一步長，
         // 否則會得到比島弧大兩個數量級的尖峰，畫出來只剩中洋脊在一閃一閃。

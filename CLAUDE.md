@@ -171,6 +171,15 @@ CORS（`Program.cs` 的 `AddCors`）目前允許兩個來源：`http://localhost
 那三個岩石圈常數（厚度成長率、上限、密度超出量）**彼此耦合**，合起來決定了浮力翻轉的年齡
 （約18百萬年，地球觀測是10~30）。`LithosphereTests` 會抓到單獨調動其中任何一個。
 
+**3.45 `record` 一律用 `with` 複製，不要用位置參數 `new Plate(...)` 重建。**
+2026-09-08 踩過：`PlateSet.RemoveNetRotation` 用 `new Plate(p, ..., plates[p].DensityAnomalyKgPerM3)`
+重建，只手動帶了密度異常。後來加了 `IsOceanicOnly`，那個旗標**每次扣淨旋轉都被預設值蓋掉**。
+
+**失效方式特別陰險**：因為密度異常有被手動帶過去，症狀是「設定看起來只生效一半」
+（`anomaly=250` 但 `oceanicOnly=False`），第一反應會是懷疑自己的編輯沒寫對、或組件過期，
+而不是懷疑幾百行外的另一個方法。而且**那行上面就有註解在警告同一個風險**——
+註解只能提醒讀到它的人，擋不住在別的檔案加欄位的人。`with` 才擋得住。
+
 **3.5 「參數改了結果不動」＝這條路沒接上，不是這個參數不重要。**
 已經踩過三次：`oceanDepthMeters` 曾經是死的（3,000調到5,000，海面佔比一個百分點都沒動）、
 `FissureVolcanism.VentStrengthKmPerMyr` 是死的（強度掃3.2倍、甚至整個關成0，重板塊厚度

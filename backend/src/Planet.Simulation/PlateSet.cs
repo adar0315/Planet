@@ -16,13 +16,21 @@
 /// 這個板塊的地殼密度相對典型海洋地殼（<see cref="Isostasy.OceanicCrustDensity"/>）差多少。
 /// 正值＝比周圍重，見 <see cref="PlateSet.DensePlateCount"/>。
 /// </param>
+/// <param name="IsOceanicOnly">
+/// 這個板塊上的地殼永遠不會轉成大陸地殼。
+///
+/// **跟密度異常是兩回事**（2026-09-08 解耦）：原本這件事是從「密度異常 &gt; 0」推導出來的，
+/// 但太平洋板塊並不特別重，它只是**沒有大陸地殼**。
+/// 泛大洋遺存型的板塊（見 <see cref="PlateSet.SuperoceanPlateId"/>）需要後者而不需要前者。
+/// </param>
 public readonly record struct Plate(
     int Id,
     double PoleX,
     double PoleY,
     double PoleZ,
     double AngularVelocityDegPerMyr,
-    float DensityAnomalyKgPerM3 = 0f);
+    float DensityAnomalyKgPerM3 = 0f,
+    bool IsOceanicOnly = false);
 
 /// <summary>
 /// 整顆星球的板塊配置：每個板塊的歐拉極與角速度，以及「每一格屬於哪個板塊」。
@@ -88,6 +96,14 @@ public sealed class PlateSet
     private readonly int[] _seedPlate;
 
     /// <summary>
+    /// 每個種子的權重，直接加在內積上。權重大的板塊會佔到更大的領域。
+    ///
+    /// 用來造出一個**泛大洋遺存**級的巨大海洋板塊，見 <see cref="SuperoceanSeedBias"/>。
+    /// 權重不隨時間改變，所以增量重新分配的那個界（見 <see cref="Reassign"/>）仍然成立。
+    /// </summary>
+    private readonly double[] _seedBias;
+
+    /// <summary>
     /// 每一格「最近的種子」贏第二名多少（內積差）。上一次**全掃**時算的。
     /// 見 <see cref="AssignCellsToNearestSeed"/> 裡的說明。
     /// </summary>
@@ -101,7 +117,7 @@ public sealed class PlateSet
 
     private PlateSet(
         Plate[] plates, int[] plateIdByCell,
-        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate)
+        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate, double[] seedBias)
     {
         Plates = plates;
         PlateIdByCell = plateIdByCell;
@@ -109,6 +125,7 @@ public sealed class PlateSet
         _seedY = seedY;
         _seedZ = seedZ;
         _seedPlate = seedPlate;
+        _seedBias = seedBias;
     }
 
     /// <summary>
@@ -222,6 +239,7 @@ public sealed class PlateSet
         var seedY = new double[seedCount];
         var seedZ = new double[seedCount];
         var seedPlate = new int[seedCount];
+        var seedBias = new double[seedCount];
 
         for (var p = 0; p < plateCount; p++)
         {
@@ -233,6 +251,9 @@ public sealed class PlateSet
             {
                 var index = p * SeedsPerPlate + k;
                 seedPlate[index] = p;
+
+                // 第0個板塊是泛大洋遺存，領域比其他板塊大得多
+                seedBias[index] = p == SuperoceanPlateId ? SuperoceanSeedBias : 0.0;
 
                 if (k == 0)
                 {
@@ -254,18 +275,21 @@ public sealed class PlateSet
 
             var (px, py, pz) = RandomPoleBiasedToSpinAxis(rng);
             // 0.3~2.5 度/百萬年 ＝ 這顆星球上約 1~8 公分/年
+            // （動力學接手之後這只是初始值，見 PlateDynamics）
             var omega = 0.3 + rng.NextDouble() * 2.2;
-            plates[p] = new Plate(p, px, py, pz, omega);
+
+            // 泛大洋遺存：巨大、而且永遠是海洋地殼（太平洋板塊上幾乎沒有大陸）
+            plates[p] = new Plate(p, px, py, pz, omega, IsOceanicOnly: p == SuperoceanPlateId);
         }
 
         AssignDensePlates(plates, rng, densePlateCount);
 
         var plateIdByCell = new int[grid.CellCount];
         var margin = new float[grid.CellCount];
-        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ, seedPlate, margin);
+        AssignCellsToNearestSeed(grid, plateIdByCell, seedX, seedY, seedZ, seedPlate, seedBias, margin);
 
         RemoveNetRotation(plates, plateIdByCell);
-        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate)
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate, seedBias)
         {
             _assignMargin = margin,
         };
@@ -303,12 +327,12 @@ public sealed class PlateSet
 
         var threshold = 2.0 * _driftAngleSinceFullScan;
         _lastRescanCount = AssignCellsToNearestSeed(
-            grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate,
+            grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate, _seedBias,
             margin: null, skipMarginAbove: threshold, previousMargin: _assignMargin);
 
         if (_lastRescanCount <= grid.CellCount * FullScanWhenRescanFractionExceeds) return;
 
-        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate, _assignMargin);
+        AssignCellsToNearestSeed(grid, PlateIdByCell, _seedX, _seedY, _seedZ, _seedPlate, _seedBias, _assignMargin);
         _driftAngleSinceFullScan = 0;
     }
 
@@ -334,7 +358,7 @@ public sealed class PlateSet
         Reassign(grid);
 
         var reference = new int[grid.CellCount];
-        AssignCellsToNearestSeed(grid, reference, _seedX, _seedY, _seedZ, _seedPlate, null);
+        AssignCellsToNearestSeed(grid, reference, _seedX, _seedY, _seedZ, _seedPlate, _seedBias, null);
 
         var mismatches = 0;
         for (var cell = 0; cell < grid.CellCount; cell++)
@@ -343,6 +367,26 @@ public sealed class PlateSet
         }
         return mismatches;
     }
+
+    /// <summary>哪一個板塊是泛大洋遺存。</summary>
+    public const int SuperoceanPlateId = 0;
+
+    /// <summary>
+    /// 泛大洋遺存板塊的種子權重（直接加在內積上，內積本身的範圍是 −1~1）。
+    ///
+    /// **太平洋不是大陸裂開產生的新海盆，而是泛大洋（Panthalassa）的直接遺存**——
+    /// 它從超大陸時代就存在，是被**繼承**下來的，不是後來的作用造出來的
+    /// （見 `地球科學/太平洋的成因.md`）。所以在這個模型裡它是**初始條件**，
+    /// 而不是某個機制的產物。
+    ///
+    /// 這也是目前唯一可行的做法：板塊的種子不會生也不會滅，
+    /// 所以板塊數與大小分布永遠凍結在初始值，大板塊不可能後天長出來。
+    /// 等威爾遜旋迴（種子的分裂與合併）做出來之後，這個初始條件可以退場。
+    ///
+    /// 校準目標是太平洋佔地球表面的比例（約20%）。15個板塊平均佔6.7%，
+    /// 所以這一塊要大約3倍大。
+    /// </summary>
+    public const double SuperoceanSeedBias = 0.20;
 
     /// <summary>
     /// 子種子散布在主種子周圍多遠（單位向量相加時的權重，約等於角度的正切）。
@@ -413,7 +457,11 @@ public sealed class PlateSet
         for (var i = 0; i < count; i++)
         {
             var id = order[i];
-            plates[id] = plates[id] with { DensityAnomalyKgPerM3 = DensePlateAnomalyKgPerM3 };
+            plates[id] = plates[id] with
+            {
+                DensityAnomalyKgPerM3 = DensePlateAnomalyKgPerM3,
+                IsOceanicOnly = true,
+            };
         }
     }
 
@@ -428,15 +476,24 @@ public sealed class PlateSet
     {
         for (var cell = 0; cell < state.CellCount; cell++)
         {
-            var anomaly = Plates[PlateIdByCell[cell]].DensityAnomalyKgPerM3;
-            if (anomaly <= 0f) continue;
+            var plate = Plates[PlateIdByCell[cell]];
 
-            state.CrustDensity[cell] += anomaly;
+            if (plate.DensityAnomalyKgPerM3 > 0f) state.CrustDensity[cell] += plate.DensityAnomalyKgPerM3;
+            if (!plate.IsOceanicOnly) continue;
+
             state.OceanicOnly[cell] = true;
 
             // 早期大轟炸可能已經在這裡放了原始高地（那一步跑在板塊指派之前），
-            // 落在重板塊上的要降回海洋地殼，否則「維持一片海洋」從第0步就不成立。
+            // 落在「永遠是海洋」的板塊上要整個降回海洋地殼，
+            // 否則「這塊板塊沒有大陸」從第0步就不成立。
+            //
+            // **厚度也要一起重設**（2026-09-08 補）：原本只改型別、不改厚度，
+            // 被大轟炸加厚的地殼仍然留在那裡，很快又會越過25公里的門檻轉回大陸。
+            // 實測泛大洋板塊上的大陸格從第0步的3,447格一路長到80百萬年的14,128格，
+            // 而它本該一格都沒有；那些大陸的浮力還讓它在邊界上常常變成上盤，
+            // 跟太平洋「幾乎整圈都在隱沒下去」正好相反。
             state.Crust[cell] = CrustType.Oceanic;
+            state.CrustThickness[cell] = Isostasy.OceanicCrustThicknessKm;
         }
     }
 
@@ -453,6 +510,7 @@ public sealed class PlateSet
     /// <param name="seedY">種子的Y座標。</param>
     /// <param name="seedZ">種子的Z座標。</param>
     /// <param name="seedPlate">每個種子屬於哪個板塊。</param>
+    /// <param name="seedBias">每個種子的權重，直接加在內積上。</param>
     /// <param name="margin">
     /// 輸出：最佳與次佳種子的內積差。null 代表不需要。
     /// 這個差值是增量重新分配的依據，見 <see cref="Reassign"/>。
@@ -464,7 +522,7 @@ public sealed class PlateSet
     /// <param name="previousMargin">判斷是否跳過時要看的舊勝負差。</param>
     private static int AssignCellsToNearestSeed(
         SimulationGrid grid, int[] plateIdByCell,
-        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate,
+        double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate, double[] seedBias,
         float[]? margin, double skipMarginAbove = -1, float[]? previousMargin = null)
     {
         var seedCount = seedX.Length;
@@ -486,7 +544,8 @@ public sealed class PlateSet
             var secondDot = double.NegativeInfinity;
             for (var i = 0; i < seedCount; i++)
             {
-                var dot = x * seedX[i] + y * seedY[i] + z * seedZ[i];
+                // 權重直接加在內積上：權重大的板塊，邊界會往外推
+                var dot = x * seedX[i] + y * seedY[i] + z * seedZ[i] + seedBias[i];
                 if (dot > bestDot)
                 {
                     secondDot = bestDot;
@@ -581,11 +640,26 @@ public sealed class PlateSet
             var z = plates[p].PoleZ * plates[p].AngularVelocityDegPerMyr - meanZ;
 
             var omega = Math.Sqrt(x * x + y * y + z * z);
-            // 扣完之後剛好靜止的板塊沒有歐拉極可言，保留原本的極、角速度歸零即可
+
+            // **一律用 `with`，不要用 `new Plate(...)` 重建**（2026-09-08 踩過）。
+            //
+            // 原本這裡是位置參數重建，只手動帶了密度異常，而且上面還留了一條註解警告
+            // 「漏掉的話重板塊會被靜靜地變回普通板塊」。後來加了 IsOceanicOnly，
+            // 這裡沒跟著更新，於是那個旗標每次扣淨旋轉都被預設值蓋掉——
+            // 症狀是泛大洋板塊上照樣長出大陸，而且**完全沒有錯誤訊息**，
+            // 連密度異常都還在（因為它有被手動帶過去），看起來像是設定根本沒生效。
+            //
+            // 註解擋不住第二次；`with` 才擋得住，因為新欄位會自動跟著走。
+            // 扣完之後剛好靜止的板塊沒有歐拉極可言，保留原本的極、角速度歸零即可。
             plates[p] = omega < 1e-12
                 ? plates[p] with { AngularVelocityDegPerMyr = 0 }
-                // 密度異常一定要帶過去——這裡是用 new Plate(...) 重建的，漏掉的話重板塊會被靜靜地變回普通板塊
-            : new Plate(p, x / omega, y / omega, z / omega, omega, plates[p].DensityAnomalyKgPerM3);
+                : plates[p] with
+                {
+                    PoleX = x / omega,
+                    PoleY = y / omega,
+                    PoleZ = z / omega,
+                    AngularVelocityDegPerMyr = omega,
+                };
         }
     }
 
