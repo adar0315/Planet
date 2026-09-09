@@ -143,7 +143,7 @@ public sealed class SimulationEngine
 
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
         // 求解裡從總水量扣掉——冰長海平面就降、冰融海平面就升。
-        _ice.Step(State);
+        _ice.Step(State, _totalWaterVolume, Grid.AverageCellAreaSquareMeters);
 
         // **所有會改地殼的作用都跑完了才回寫標記。**
         // 這一步不能省、也不能提前：地殼的性質掛在標記上，而 Rasterize 會用標記覆蓋格子。
@@ -251,8 +251,47 @@ public sealed class SimulationEngine
         // 這就是「冰期海平面下降」的來源——地球上冰期時海平面比現在低約120公尺。
         var liquid = _totalWaterVolume - Cryosphere.LockedWaterVolume(State, Grid.AverageCellAreaSquareMeters);
 
-        while (WaterVolumeAt(low) > liquid) low -= (high - low);
-        while (WaterVolumeAt(high) < liquid) high += (high - low);
+        // **液態水量不可以是負的。** 冰鎖住的水比整顆星球擁有的還多時就會發生，
+        // 而 WaterVolumeAt 最小只能是 0，`0 > 負數` 恆成立，下面往下擴張的迴圈
+        // 就永遠跳不出去。2026-09-09 實測 liquid = −4.96e15 立方公尺，
+        // 括號一路掉到 −5.9e20 公尺，測試空轉了 9 小時、沒有任何訊息。
+        // 供給上限現在擋在 Cryosphere.Step 裡（冰只能從現有的水來），這裡是第二道防線。
+        if (liquid < 0.0)
+        {
+            throw new InvalidOperationException(
+                $"液態水量是負的（{liquid} 立方公尺）——冰蓋鎖住的水超過總水量 "
+                + $"{_totalWaterVolume}，Cryosphere 的供給上限沒有生效。");
+        }
+
+        // **倍增一定要有上限。** 地表高度只要出現 NaN，內層的 `depth > 0f` 就恆為 false、
+        // WaterVolumeAt 永遠回傳 0，`0 < liquid` 於是恆成立，括號怎麼往外加都跳不出去——
+        // 而每一圈都掃過全部格子。**無窮迴圈比例外難查太多**，所以寧可炸掉。
+        // 正常情況用不到 5 圈；60 圈之後 float 早就溢位成無窮大了。
+        const int maxExpansions = 60;
+
+        var expansions = 0;
+        while (WaterVolumeAt(low) > liquid)
+        {
+            low -= high - low;
+            if (++expansions > maxExpansions)
+            {
+                throw new InvalidOperationException(
+                    $"海平面括號往下擴張 {maxExpansions} 次仍未包住液態水量"
+                    + $"（low={low}、liquid={liquid}）——地形高度或水量很可能已經是 NaN。");
+            }
+        }
+
+        expansions = 0;
+        while (WaterVolumeAt(high) < liquid)
+        {
+            high += high - low;
+            if (++expansions > maxExpansions)
+            {
+                throw new InvalidOperationException(
+                    $"海平面括號往上擴張 {maxExpansions} 次仍未包住液態水量"
+                    + $"（high={high}、liquid={liquid}）——地形高度或水量很可能已經是 NaN。");
+            }
+        }
 
         for (var iteration = 0; iteration < SeaLevelIterations; iteration++)
         {

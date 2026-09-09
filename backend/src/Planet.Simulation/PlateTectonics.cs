@@ -22,7 +22,7 @@
 ///
 /// 於是空缺與碰撞只會出現在流場真的發散／收斂的地方，也就是**真正的板塊邊界**：
 ///
-/// - 兩個標記落在同一格 → 聚合，依浮力決定誰隱沒（<see cref="ResolveCollision"/>）
+/// - 兩個標記落在同一格 → 聚合，依浮力決定誰隱沒（見 <see cref="Rasterize"/> 步驟3的聚合格迴圈）
 /// - 一格裡一個標記都沒有 → 張裂 → 新生海洋地殼，年齡歸零（海底擴張）
 ///
 /// 地質作用改的是**格子**上的值（那裡才有鄰居關係可用），改完再依 <c>_ownerMarker</c>
@@ -33,7 +33,8 @@
 /// 這一段每一項都是實測踩出來的，缺任何一項的症狀都是「跑幾億年還是一片海洋」或
 /// 「長出滿天單格孤島而不是大陸」，而且都**不會有任何錯誤訊息**（2026-09-05）：
 ///
-/// 1. 碰撞的勝負要看**浮力（厚度）**而不只是年齡 —— <see cref="ResolveCollision"/>
+/// 1. 碰撞的勝負要看**浮力（厚度）**而不只是年齡 —— <see cref="SubductionBuoyancyOf"/>，
+///    用在 <see cref="Rasterize"/> 步驟3的聚合格迴圈
 /// 2. 隱沒的地殼要有一部分**增生**到上盤，而不是整塊消失 —— <see cref="Accrete"/>
 /// 3. 搬動不能有量化誤差，否則假的張裂／聚合會淹沒真的 —— 見上面的 marker-in-cell 那節
 /// 4. 板塊配置要在**無淨旋轉參考系**下，否則整片地殼一起掃過網格製造雜訊
@@ -284,6 +285,28 @@ public sealed class PlateTectonics
     /// <summary>診斷用：隱沒消耗掉的地殼厚度總和（公里·格，正值代表移除）。</summary>
     public double LastSubductedCrustKm { get; private set; }
 
+    /// <summary>
+    /// 診斷用：聚合格三種結局各發生幾次——**海洋隱沒**。
+    ///
+    /// 這三個計數器要一起看。聚合處的擁擠只有三條出路：一邊是洋殼就隱沒
+    /// （這一個）、兩邊都是大陸就對撞增厚（<see cref="LastContinentCollisionCount"/>）、
+    /// 浮力差不夠大就什麼都不做、留著擠成山（<see cref="LastCollisionThickeningCount"/>）。
+    /// **光看隱沒的體積看不出系統走哪條路**：體積下降可能是隱沒變少，
+    /// 也可能是每次隱沒的量變小，兩者要修的地方完全不同。
+    /// </summary>
+    public int LastOceanSubductionCount { get; private set; }
+
+    /// <summary>診斷用：聚合格三種結局之一——兩塊大陸對撞增厚（造山）。見 <see cref="LastOceanSubductionCount"/>。</summary>
+    public int LastContinentCollisionCount { get; private set; }
+
+    /// <summary>
+    /// 診斷用：聚合格三種結局之一——**浮力差不夠大，不隱沒也不對撞，留著擠著**。
+    ///
+    /// 這一條是最容易被忽略的出路，因為它「什麼都沒做」，在任何質量通量的統計裡都是隱形的。
+    /// 見 <see cref="LastOceanSubductionCount"/>。
+    /// </summary>
+    public int LastCollisionThickeningCount { get; private set; }
+
     /// <summary>診斷用：目前存活的標記數量。跟格數比對可以看出標記有沒有異常增生。</summary>
     public int MarkerCount => _markerCount;
 
@@ -314,7 +337,7 @@ public sealed class PlateTectonics
 
     /// <summary>
     /// 每一格「擠不下、暫時無主」的標記（-1 表示沒有）。取樣錯配造成的多餘標記先放這裡，
-    /// 稍後配給附近的錯配空格，見 <see cref="ResolveCollision"/>。
+    /// 稍後配給附近的錯配空格，見 <see cref="Rasterize"/> 步驟3a 與 <see cref="TryTakeSpare"/>。
     /// </summary>
     private readonly int[] _spareAtCell;
 
@@ -463,6 +486,9 @@ public sealed class PlateTectonics
         LastArcCrustKm = 0;
         LastAccretionCrustKm = 0;
         LastSubductedCrustKm = 0;
+        LastOceanSubductionCount = 0;
+        LastContinentCollisionCount = 0;
+        LastCollisionThickeningCount = 0;
 
         // 板塊的範圍與邊界類型只取決於板塊的幾何與速度，跟地殼無關，所以先算。
         // **順序很重要**：取樣時要靠邊界類型才能分辨「這個空格是真的張裂，還是只是取樣的錯配」，
@@ -610,6 +636,12 @@ public sealed class PlateTectonics
         // 3a. 非聚合邊界的擁擠：那只是取樣錯配，不是隱沒。
         //     留下浮得最高的，其餘放進暫存區，稍後補給附近的錯配空格——
         //     同一塊地殼重新指派到正確的格子，天生守恆。
+        //
+        //     **多出來的標記不可以直接丟掉**（2026-09-06 踩過）：錯配的碰撞與錯配的空格
+        //     其實是同一件事的兩面——球面旋轉映射到離散網格不是完美的排列，
+        //     所以有些格子拿到兩個標記、有些拿到零個。「多的丟掉、少的憑空生」
+        //     等於同時開了一個沒被計數的沉與一個沒被計數的源，而那個源實測注入
+        //     50~351 km³/年，是整顆星球失控變成厚地殼的引擎。把兩者配對就天生守恆。
         for (var cell = 0; cell < grid.CellCount; cell++)
         {
             if (state.Boundary[cell] == BoundaryType.Convergent) continue;
@@ -658,7 +690,18 @@ public sealed class PlateTectonics
             // 反而把標記掃光）。
             while (_cellMarkerCount[cell] > MarkersPerCell)
             {
-                // 找浮得最低的（最容易隱沒）與最高的（上盤，接收增生物）
+                // 找浮得最低的（最容易隱沒）與最高的（上盤，接收增生物）。
+                //
+                // **判準是浮力（厚度），不是年齡；「厚的留下」這條不能省，
+                // 島弧會不會保存下來全看它**（2026-09-05 踩過，當時還寫在 ResolveCollision 裡）：
+                // 原本只比年齡、而且贏家會把自己的厚度直接蓋到目標格上，於是聚合邊界上
+                // ApplyConvergence 好不容易增厚的島弧，只要碰到一塊比較年輕的普通海洋地殼
+                // 就被打回7公里。增厚只發生在聚合邊界，那裡正好也是碰撞最密集的地方，
+                // 結果是一邊長一邊被砍：跑5億年最大厚度只在10~14公里之間震盪、
+                // 平均值完全不動、一塊陸地都長不出來，而且沒有任何錯誤訊息。
+                //
+                // 用厚度當判準不是為了讓測試過，是因為浮力本來就取決於厚度而不是年齡——
+                // 「大陸不會沉」其實就是這條規則的特例，原本只是被寫死成型別判斷、沒有推廣到厚度。
                 var lowest = -1;
                 var highest = -1;
                 var lowestLift = float.MaxValue;
@@ -677,6 +720,7 @@ public sealed class PlateTectonics
                 if (highestLift - lowestLift < SubductionBuoyancyContrastMeters
                     && CellThicknessFromMarkers(cell) <= Isostasy.MaxCrustThicknessKm)
                 {
+                    LastCollisionThickeningCount++;
                     break;
                 }
 
@@ -689,7 +733,8 @@ public sealed class PlateTectonics
                     // **兩塊大陸對撞：物質無處可去，只能往上下增厚（山脈＋山根）。**
                     //
                     // 這一段在改寫 Rasterize 時整個漏掉了（2026-09-06/07）：原本寫在
-                    // ResolveCollision 裡，把擁擠處理內聯之後那個方法就沒人呼叫了，
+                    // ResolveCollision 裡，把擁擠處理內聯之後那個方法就沒人呼叫了
+                    // （那個死方法已於 2026-09-09 移除，它的歷史註解搬到上面與步驟3a），
                     // 大陸對撞從「吃掉對方一半的厚度」退化成只有增生的3%——**少了16倍**。
                     // 症狀是大陸長不大也長不厚：2億年後只有168格、碎成116塊、最大10格。
                     // 喜馬拉雅型造山是大陸變厚最主要的機制，缺了它大陸就只能靠島弧慢慢增生。
@@ -697,12 +742,14 @@ public sealed class PlateTectonics
                         _markerThickness[winner] + _markerThickness[loser] * ContinentalCollisionTransfer,
                         Isostasy.MaxCrustThicknessKm);
 
+                    LastContinentCollisionCount++;
                 }
                 else
                 {
                     // 一邊是海洋地殼：隱沒下去，但一部分會被刮下來增生到上盤
                     LastAccretionCrustKm += _markerThickness[loser] * AccretedFractionOfSubductedCrust;
                     LastSubductedCrustKm += _markerThickness[loser];
+                    LastOceanSubductionCount++;
                     Accrete(winner, _markerThickness[loser]);
                 }
 
@@ -820,7 +867,7 @@ public sealed class PlateTectonics
             // （低於25公里的大陸門檻），陸地永遠停在1.5~2.8%。
             //
             // 取最高的則跟這個模型原本的物理一致：**誰浮得高誰留在地表**
-            // （見 ResolveCollision）。格子顯示的是「表面看得到的那一塊」，
+            // （見上面步驟3的聚合格迴圈）。格子顯示的是「表面看得到的那一塊」，
             // 其餘標記仍然存在、仍然跟著板塊移動，等上面那塊離開就換它們露出來。
             var top = -1;
             var topLift = float.MinValue;
@@ -1188,81 +1235,6 @@ public sealed class PlateTectonics
         _markerCount = write;
     }
 
-    /// <summary>
-    /// 兩塊地殼被擠到同一格時，誰留在地表。這就是隱沒的判準，物理依據是**浮力**：
-    ///
-    /// - 大陸 vs 海洋：大陸留下（大陸地殼太輕，沉不下去，這也是大陸能保存數十億年的原因）
-    /// - 大陸 vs 大陸：誰都沉不下去 → 對撞增厚，這就是喜馬拉雅型造山
-    /// - 海洋 vs 海洋：**厚的留下**；一樣厚才比年齡（老的比較冷、密度大，會先沉）
-    ///
-    /// **「厚的留下」這條不能省，島弧會不會保存下來全看它**（2026-09-05 踩過）：
-    /// 原本這裡只比年齡、而且贏家會把自己的厚度直接蓋到目標格上，於是聚合邊界上
-    /// <see cref="ApplyConvergence"/> 好不容易增厚的島弧，只要碰到一塊比較年輕的普通海洋地殼
-    /// 就被打回7公里。增厚只發生在聚合邊界，那裡正好也是碰撞最密集的地方，
-    /// 結果是一邊長一邊被砍：跑5億年最大厚度只在10~14公里之間震盪、平均值完全不動、
-    /// 一塊陸地都長不出來，而且沒有任何錯誤訊息。
-    ///
-    /// 用厚度當判準不是為了讓測試過，是因為浮力本來就取決於厚度而不是年齡——
-    /// 「大陸不會沉」其實就是這條規則的特例，原本只是被寫死成型別判斷、沒有推廣到厚度。
-    /// </summary>
-    /// <param name="incoming">後落到這一格的標記。</param>
-    /// <param name="occupant">已經佔住這一格的標記。</param>
-    /// <param name="target">兩者擠在一起的格子。</param>
-    /// <param name="isRealConvergence">
-    /// 這一格是不是真的在聚合邊界上。**不是的話只是取樣的錯配**，
-    /// 兩個標記剛好落進同一格而已，不能當成隱沒去增厚上盤，否則板塊內部到處都會憑空造山。
-    /// </param>
-    private void ResolveCollision(int incoming, int occupant, int target, bool isRealConvergence)
-    {
-        var incomingCrust = _markerCrust[incoming];
-        var occupantCrust = _markerCrust[occupant];
-
-        if (!isRealConvergence)
-        {
-            // 取樣錯配：留下浮得高的那個，另一個**先留著**放進多餘暫存區，等一下配給附近的空格。
-            //
-            // **不可以直接丟掉**（2026-09-06 踩過）：錯配的碰撞與錯配的空格其實是同一件事的兩面
-            // ——球面旋轉映射到離散網格不是完美的排列，所以有些格子拿到兩個標記、有些拿到零個。
-            // 「多的丟掉、少的憑空生」等於同時開了一個沒被計數的沉與一個沒被計數的源，
-            // 而那個源實測注入 50~351 km³/年，是整顆星球失控變成厚地殼的引擎。
-            // 把兩者配對就天生守恆：同一塊地殼，只是重新指派到正確的格子。
-            var keepIncoming = SubductionBuoyancyOf(incoming) > SubductionBuoyancyOf(occupant);
-            var spare = keepIncoming ? occupant : incoming;
-            if (keepIncoming) _ownerMarker[target] = incoming;
-
-            if (_spareAtCell[target] < 0) _spareAtCell[target] = spare;
-            else _markerAlive[spare] = false; // 同一格擠了三個以上，罕見
-            return;
-        }
-
-        if (incomingCrust == CrustType.Continental && occupantCrust == CrustType.Continental)
-        {
-            // 兩塊大陸對撞：誰都沉不下去，物質無處可去，只能往上下增厚（山脈＋山根）
-            _markerThickness[occupant] = MathF.Min(
-                _markerThickness[occupant] + _markerThickness[incoming] * 0.5f,
-                Isostasy.MaxCrustThicknessKm);
-            _markerAlive[incoming] = false;
-            return;
-        }
-
-        // 誰留在地表就是誰浮得高——直接比均衡高度，厚度、密度、年齡三個因素會自動一起考慮進去，
-        // 不需要再寫一串優先順序的規則（「大陸不會沉」本來就是這條的必然結果，因為大陸又厚又輕）。
-        var incomingLift = SubductionBuoyancyOf(incoming);
-        var occupantLift = SubductionBuoyancyOf(occupant);
-        var incomingWins = MathF.Abs(incomingLift - occupantLift) > BuoyancyToleranceMeters
-            ? incomingLift > occupantLift
-            : _markerAge[incoming] < _markerAge[occupant]; // 浮力相當才比年齡（老的比較冷、密度大）
-
-        // 輸的那塊隱沒下去，但不是整塊消失——一部分會被刮下來堆到上盤（增生楔／增生地體）
-        var (winner, loser) = incomingWins ? (incoming, occupant) : (occupant, incoming);
-
-        LastAccretionCrustKm += _markerThickness[loser] * AccretedFractionOfSubductedCrust;
-        LastSubductedCrustKm += _markerThickness[loser];
-        Accrete(winner, _markerThickness[loser]);
-        _markerAlive[loser] = false;
-        _ownerMarker[target] = winner;
-    }
-
     /// <summary>這個標記的地殼浮得多高（公尺）。就是均衡高度，用來決定碰撞時誰隱沒。</summary>
     /// <summary>
     /// 這個標記的地表高度。用來決定**誰露在表面**（同一格擠了好幾個標記時看得到哪一個）。
@@ -1609,7 +1581,7 @@ public sealed class PlateTectonics
     /// <summary>
     /// 聚合邊界的造山：上盤增厚。
     ///
-    /// 誰是上盤由密度決定（跟 <see cref="ResolveCollision"/> 同一套判準）：
+    /// 誰是上盤由密度決定（跟 <see cref="SubductionBuoyancyOf"/> 同一套判準）：
     /// 海洋地殼隱沒到大陸底下，上方的大陸因為岩漿上升與增生楔而增厚（安地斯山型）；
     /// 兩塊海洋地殼相遇則是年輕的一方長出島弧。**島弧不斷增厚超過門檻後會轉成大陸地殼**——
     /// 這就是一顆全是海洋的星球長出第一塊陸地的機制。
@@ -1670,7 +1642,7 @@ public sealed class PlateTectonics
                 // 年齡只是密度的代理變數（老的比較冷、比較重），但這個模型裡密度是**明寫的**
                 // ——重板塊有 DensityAnomalyKgPerM3。用年齡判斷等於忽略那個異常。
                 //
-                // 改用均衡高度也讓兩個層級一致：標記層級的 ResolveCollision 早就是
+                // 改用均衡高度也讓兩個層級一致：標記層級的聚合格迴圈（Rasterize 步驟3）早就是
                 // 「誰浮得高誰留在地表」，只有這裡還在用另一套規則。
                 //
                 // **老實說：這個改動單獨量不出效果**（重板塊厚度 25.0 vs 25.0 公里）。

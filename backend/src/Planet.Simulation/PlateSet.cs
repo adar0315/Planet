@@ -587,8 +587,14 @@ public sealed class PlateSet
             var (x, y, z) = angularVelocities[p];
             var omega = Math.Sqrt(x * x + y * y + z * z);
 
-            // 角速度趨近零時歐拉極沒有定義，保留原本的極、只把速率設成零
-            if (omega < 1e-12)
+            // 角速度趨近零時歐拉極沒有定義，保留原本的極、只把速率設成零。
+            //
+            // **非有限值走同一條路**（2026-09-09 加）：寫成 `!(omega >= 1e-12)` 是為了讓
+            // NaN 也落進來——`NaN < 1e-12` 是 false，原本的寫法會讓 NaN 直接寫進歐拉極
+            // （`NaN / NaN`），而下一行的 RemoveNetRotation 會把它平均給**每一個**板塊，
+            // 一個壞掉的板塊就毀掉整顆星球。這是第二道防線，
+            // 第一道在 PlateDynamics.SolveSymmetric3x3（那裡擋的是零格板塊的 0/0）。
+            if (!(omega >= 1e-12) || double.IsInfinity(omega))
             {
                 Plates[p] = Plates[p] with { AngularVelocityDegPerMyr = 0 };
                 continue;

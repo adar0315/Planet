@@ -64,26 +64,74 @@ public sealed class Cryosphere
     /// </summary>
     private const float RelaxationPerStep = 0.5f;
 
+    /// <summary>每格這一步的平衡冰厚（公尺），先算好才知道全球加起來要不要按供給打折。</summary>
+    private float[] _equilibrium = [];
+
     /// <summary>
     /// 推進一步的冰蓋變化。
+    ///
+    /// ## 冰不能鎖住比星球擁有的還多的水
+    ///
+    /// 2026-09-09 踩過，而且是**正回饋跑掉**：冰長 → 鎖住水 → 海平面下降 →
+    /// 更多陸地露出來 → 更多格子有資格長冰 → 鎖更多水。這個回饋在地球上是真的
+    /// （冰期海退確實會擴大陸地），但地球有「海洋縮小則蒸發量減少」這類供給端的煞車，
+    /// 原本這裡一個都沒有——平衡冰厚純粹是溫度的函數，跟還剩多少水完全脫鉤。
+    ///
+    /// 這顆星球的水預算只有平均 1,150 公尺，而冰厚上限 4,500 公尺換算成水當量是
+    /// 每格 4,126 公尺，所以**冰只要蓋滿 27.9% 的星球就把水全部吃光**。
+    /// 實測跑到2億年時冰覆蓋 29.3%，剛好越過那條線，於是
+    /// <c>液態水量 = 總水量 − 冰鎖住的量</c> 變成負數（實測 −4.96e15 立方公尺），
+    /// 而 <c>WaterVolumeAt</c> 最小只能是 0，`0 &gt; 負數` 恆成立，
+    /// 海平面的括號因此永遠往下掉——症狀是整個測試**空轉9小時、沒有任何訊息**。
+    ///
+    /// 所以這裡加上供給上限：全球想要的冰量超過總水量時，**按比例縮小每一格的平衡厚度**。
+    /// 這不是一個可調的參數，是質量守恆本身。**打折比例一旦明顯小於1，
+    /// 代表氣候模型正在產生一個吃掉整顆海洋的雪球**，那要另外查（目前 <see cref="Climate"/>
+    /// 沒有海洋熱輸送，高緯度會過冷），不是靠這裡的上限矇混過去。
     /// </summary>
     /// <param name="state">模擬狀態，<see cref="SimulationState.IceThickness"/> 會被更新。</param>
-    public void Step(SimulationState state)
+    /// <param name="totalWaterVolume">這顆星球的總水量（立方公尺），冰能取用的上限。</param>
+    /// <param name="cellAreaSquareMeters">每格的面積。</param>
+    public void Step(SimulationState state, double totalWaterVolume, double cellAreaSquareMeters)
     {
+        if (_equilibrium.Length != state.CellCount) _equilibrium = new float[state.CellCount];
+
         Parallel.For(0, state.CellCount, cell =>
         {
             // 只有擱淺在陸地上的冰會改變海平面；浮冰不算（阿基米德原理）
             var onLand = state.WaterDepth[cell] <= 0f;
             var below = AccumulationTemperatureC - state.Temperature[cell];
 
-            var equilibrium = onLand && below > 0f
+            _equilibrium[cell] = onLand && below > 0f
                 ? MathF.Min(below * MetersPerDegreeBelowFreezing, MaxIceThicknessM)
                 : 0f;
+        });
 
+        var wantedThicknessSum = 0.0;
+        for (var cell = 0; cell < state.CellCount; cell++) wantedThicknessSum += _equilibrium[cell];
+        var wantedWater = wantedThicknessSum * cellAreaSquareMeters * IceDensity / WaterDensity;
+
+        var supply = wantedWater > totalWaterVolume && wantedWater > 0.0
+            ? (float)(totalWaterVolume / wantedWater)
+            : 1f;
+
+        LastSupplyLimit = supply;
+
+        Parallel.For(0, state.CellCount, cell =>
+        {
+            var equilibrium = _equilibrium[cell] * supply;
             var current = state.IceThickness[cell];
             state.IceThickness[cell] = current + (equilibrium - current) * RelaxationPerStep;
         });
     }
+
+    /// <summary>
+    /// 診斷用：上一步平衡冰厚被供給上限打了幾折（1 代表水夠、沒有打折）。
+    ///
+    /// 明顯小於1就表示氣候正在要求一個超過整顆星球水量的冰蓋——
+    /// 那是氣候端的問題，不是冰凍圈的（見 <see cref="Step"/> 的說明）。
+    /// </summary>
+    public float LastSupplyLimit { get; private set; } = 1f;
 
     /// <summary>
     /// 冰蓋總共鎖住多少水（立方公尺水當量）。

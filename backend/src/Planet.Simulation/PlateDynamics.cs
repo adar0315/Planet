@@ -197,7 +197,7 @@ public sealed class PlateDynamics
             if (neighbor < 0) continue;
 
             var direction = TangentTowards(grid, cell, neighbor);
-            if (direction is null) return;
+            if (direction is null) continue; // 這一格算不出方向就跳過這一格，不是放棄整趟累加
             var (dx, dy, dz) = direction.Value;
 
             var plate = plates.PlateIdByCell[cell];
@@ -326,7 +326,19 @@ public sealed class PlateDynamics
         var c02 = xy * yz - xz * yy;
         var determinant = xx * c00 + xy * c01 + xz * c02;
 
+        // **一格都不剩的板塊要先擋掉**（2026-09-09）。慣量全是 0 時 scale 也是 0，
+        // 下面那個門檻就變成 `0 < 0`——**是 false**，所以不但沒擋住，還一路往下
+        // 除以 determinant = 0，解出 NaN。只有一格的板塊反而擋得住
+        // （單格的 M 是奇異的，det = 0 真的小於 8e-9·a³），零格的剛好從縫裡漏掉。
+        //
+        // 後果是全域的，不是這一個板塊的事：NaN 角速度寫進歐拉極之後，
+        // PlateSet.RemoveNetRotation 會把它平均給**每一個**板塊，於是 15 個板塊
+        // 全部變 NaN、種子全部變 NaN，Voronoi 的距離比較全落到 false、
+        // 所有格子塌進 0 號板塊，最後 SolveSeaLevel 在 NaN 地形上卡成無窮迴圈。
+        // 實測（n=24、種子42）：最小的板塊從17格一路縮到0，歸零的那一步
+        // 15個板塊同時變 NaN，而其他14個當下都還有幾百格。
         var scale = Math.Abs(xx) + Math.Abs(yy) + Math.Abs(zz);
+        if (!(scale > 0)) return (0, 0, 0);
         if (Math.Abs(determinant) < 1e-9 * scale * scale * scale) return (0, 0, 0);
 
         var c11 = xx * zz - xz * xz;
