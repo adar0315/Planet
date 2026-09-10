@@ -392,6 +392,30 @@ public sealed class SimulationEngine
     /// <summary>從上一步的海平面往兩側各展開多少公尺當作二分搜尋的起始括號。</summary>
     private const float SeaLevelBracketMeters = 128f;
 
+    /// <summary>
+    /// 把又小又矮的孤立陸塊沉回水面下，然後重新解均衡與海平面。
+    ///
+    /// **這是交付地形時的表面處理，不是模擬迴圈的一部分**——碎島的成因是
+    /// marker-in-cell 每兩步重新取樣造成的翻面（實測每步約1,200格），
+    /// 屬於取樣解析度的產物而不是某個機制寫錯，詳見 <see cref="SmallIslandCleanup"/>。
+    ///
+    /// 沉掉之後會寫回標記再重解均衡，所以清完還可以繼續推進模擬，
+    /// 不會下一步就被 Rasterize 從標記蓋回去。但**繼續跑就會再長出新的碎島**，
+    /// 那是取樣本身的性質；要交付前再清一次。
+    /// </summary>
+    /// <param name="maxIslandAreaSquareKm">
+    /// 覆寫面積門檻（平方公里）。正式用途留空，只有粗網格測試需要
+    /// （見 <see cref="SmallIslandCleanup.Apply"/> 的說明）。
+    /// </param>
+    /// <returns>清了幾塊、留了幾塊、各是什麼原因。</returns>
+    public SmallIslandCleanupReport CleanUpSmallIslands(double? maxIslandAreaSquareKm = null)
+    {
+        var report = SmallIslandCleanup.Apply(Grid, State, maxIslandAreaSquareKm);
+        _tectonics.WriteGridBackToMarkers(State);
+        ApplyIsostasyAndFillWater();
+        return report;
+    }
+
     /// <summary>整個重來：回到起始的全海洋星球，板塊也重新生成。</summary>
     public void Reset()
     {

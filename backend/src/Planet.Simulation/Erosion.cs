@@ -71,8 +71,11 @@ public sealed class Erosion
     private const float GlacialTemperatureC = -5f;
 
     /// <summary>
-    /// 海浪侵蝕（公尺地表／百萬年）。只作用在海岸線上——有露出水面、又緊鄰海水的格子。
+    /// 海浪侵蝕（公尺地表／百萬年／**每一條面海的邊**）。
+    ///
     /// 這是海崖後退、海蝕平台的來源，跟高度無關，所以會把海岸削平。
+    /// 大陸海岸多半只有一條邊面海，所以維持原本的 30；四面環水的孤立小島有5~6條邊，
+    /// 被削的速度是好幾倍——那才是對的物理（見 <c>SurfaceLoweringMeters</c> 的說明）。
     /// </summary>
     private const double WaveErosionMetersPerMyr = 30.0;
 
@@ -271,8 +274,17 @@ public sealed class Erosion
         // 風化：到處都有的背景剝蝕
         var lowering = BaseWeatheringMetersPerMyr * deltaMyr;
 
-        // 海浪：只削海岸線
-        if (IsCoastal(state, cell)) lowering += WaveErosionMetersPerMyr * deltaMyr;
+        // 海浪：按**暴露的邊數**計費，不是有沒有靠海的二元判斷。
+        //
+        // 波浪攻擊的強度正比於面海的邊長。原本寫成 IsCoastal 的二元判斷，於是
+        // 四面環水的一格小島跟大陸海岸的一格吃到完全相同的侵蝕量——那不合物理，
+        // 而且正是「滿地一格小島」的來源之一：孤立小島應該被削得比海岸快好幾倍。
+        //
+        // 一個水鄰居的大陸海岸維持原本的速率（多數海岸格就是這樣），
+        // 六面環水的小島變成六倍。真實世界的對應是**海底平頂山（guyot）**：
+        // 火山島停止噴發之後被浪削平、沉到水下，天皇海山鏈整排都是這樣來的。
+        // 還在噴的島（夏威夷、冰島）因為火山持續補充地殼所以留得住。
+        lowering += WaveErosionMetersPerMyr * WaterNeighborCount(state, cell) * deltaMyr;
 
         // 流水／冰川：要有坡度才刨得動
         if (downstream >= 0)
@@ -333,16 +345,22 @@ public sealed class Erosion
         return removed + takeKm * 1000.0;
     }
 
-    /// <summary>是不是海岸線：自己露出水面，但至少有一個鄰居在水面下。</summary>
-    private bool IsCoastal(SimulationState state, int cell)
+    /// <summary>
+    /// 有幾個鄰居在水面下——也就是這一格有幾條邊在受浪。
+    ///
+    /// 大陸海岸通常是1~2，海灣與半島的尖端3~4，四面環水的孤立小島是5~6（五角形只有5個鄰居）。
+    /// 內陸是0，所以不必另外判斷是不是海岸。
+    /// </summary>
+    private int WaterNeighborCount(SimulationState state, int cell)
     {
+        var count = 0;
         var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
         for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
         {
             var neighbor = _grid.Neighbors[baseIndex + s];
             if (neighbor == SimulationGrid.NoNeighbor) continue;
-            if (state.WaterDepth[neighbor] > 0f) return true;
+            if (state.WaterDepth[neighbor] > 0f) count++;
         }
-        return false;
+        return count;
     }
 }

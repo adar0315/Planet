@@ -137,6 +137,20 @@ public class SimulationService
         }
     }
 
+    /// <summary>
+    /// 把又小又矮的孤立碎島沉回水面下（交付地形前的表面處理）。
+    /// </summary>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>清了幾塊、留了幾塊。</returns>
+    public async Task<SmallIslandCleanupReport> CleanUpSmallIslandsAsync(CancellationToken ct = default)
+    {
+        var (_, engine, _) = await EnsureInitializedAsync(ct);
+        lock (_lock)
+        {
+            return engine.CleanUpSmallIslands();
+        }
+    }
+
     /// <summary>把模擬重設回起始狀態（平坦、裸露、全部覆蓋海水）。網格與對應表會沿用，不重建。</summary>
     public void Reset()
     {

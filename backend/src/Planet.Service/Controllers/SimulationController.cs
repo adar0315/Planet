@@ -89,6 +89,22 @@ public class SimulationController : ControllerBase
         return File(pixels, "application/octet-stream");
     }
 
+    /// <summary>
+    /// 把又小又矮的孤立碎島沉回水面下。
+    ///
+    /// 這是**交付地形前的表面處理**，不是模擬迴圈的一部分：碎島的成因是標記重新取樣
+    /// 造成的海陸翻面（取樣解析度的產物），繼續推進模擬又會長出新的，所以要在匯出前呼叫。
+    /// </summary>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>清了幾塊、留了幾塊，以及留下來的原因。</returns>
+    /// <response code="200">清理結果。</response>
+    [HttpPost("clean-small-islands")]
+    [ProducesResponseType<SmallIslandCleanupReport>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<SmallIslandCleanupReport>> CleanSmallIslands(CancellationToken ct)
+    {
+        return Ok(await _simulationService.CleanUpSmallIslandsAsync(ct));
+    }
+
     /// <summary>海洋的連通性：內海有沒有被陸地封死、水域裡有幾條獨立環路、最窄的水道多寬。</summary>
     /// <param name="ct">取消權杖。</param>
     /// <returns>連通性報告。</returns>
