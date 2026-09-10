@@ -62,16 +62,44 @@ public sealed class SimulationEngine
     /// <summary>冰凍圈。沒有自己的狀態（全部寫在 <c>IceThickness</c> 裡），Reset 也不用重建。</summary>
     private readonly Cryosphere _ice = new();
 
+    /// <summary>被陸地封死的海會被鑿開出口。沒有自己的狀態，Reset 不用重建。</summary>
+    private readonly SeaOutletBreach _breach = new();
+
     /// <summary>氣候多久重解一次（年）。見 <see cref="StepOnce"/> 裡的說明。</summary>
     private const double ClimateSolveIntervalYears = 2_000_000;
 
     private double _yearsSinceClimateSolve = double.MaxValue; // 第一步就先解一次
+
+    /// <summary>多久檢查一次有沒有海被圍死（年）。見 <see cref="StepOnce"/> 裡的說明。</summary>
+    private const double BreachCheckIntervalYears = 200_000;
+
+    private double _yearsSinceBreachCheck = double.MaxValue; // 第一步就先檢查一次
+
+    /// <summary>診斷用：海洋出口的鑿通狀況（上一次檢查鑿開了幾個、哪些屏障太高）。</summary>
+    public SeaOutletBreach Breach => _breach;
 
     /// <summary>全球水量（立方公尺）。起始狀態決定之後就固定不變，海平面由它反解出來。</summary>
     private double _totalWaterVolume;
 
     /// <summary>每步算好一次的地表高度，給海平面的二分搜尋重複掃描用。</summary>
     private readonly float[] _surfaceElevation;
+
+    /// <summary>
+    /// 水體積平行加總要切成幾段。
+    ///
+    /// **這個數字一定要是常數，不可以用 <c>Environment.ProcessorCount</c>**（2026-09-10 修）。
+    /// 浮點加法沒有結合律，切幾段就決定了加總順序，所以段數一改，總水量就在最低位元上不同、
+    /// 解出來的海平面跟著差一點點——而模擬是混沌的，這點差異會被放大。
+    ///
+    /// 實測：同一個行程裡跑三次（含一次跑完與分批跑）結果完全相同，
+    /// 但線上服務跑到同樣的第1,250步是 35.05%、測試行程是 34.949%，**差227格**。
+    /// 兩邊種子都是42、程式碼相同，差的就是這個段數。
+    /// 症狀特別容易誤判成資料競爭，因為「同機器重跑一致、換個行程就不一致」正是競爭的典型描述；
+    /// 差別在於這個是**決定性的**——同樣的段數永遠給同樣的答案。
+    ///
+    /// 取 64：夠多段讓任何核心數的機器都能平行滿載，又跟機器規格無關。
+    /// </summary>
+    private const int WaterVolumePartitionCount = 64;
 
     /// <summary>水體積平行加總的分段結果。固定長度＋固定加總順序，結果才與執行緒排程無關。</summary>
     private readonly double[] _volumePartials;
@@ -94,7 +122,7 @@ public sealed class SimulationEngine
         Grid = grid;
         _seed = seed;
         _surfaceElevation = new float[grid.CellCount];
-        _volumePartials = new double[Environment.ProcessorCount];
+        _volumePartials = new double[WaterVolumePartitionCount];
         _climate = new Climate(grid);
         _erosion = new Erosion(grid);
         Plates = PlateSet.CreateRandom(grid, seed, densePlateCount: _densePlateCount);
@@ -144,6 +172,26 @@ public sealed class SimulationEngine
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
         // 求解裡從總水量扣掉——冰長海平面就降、冰融海平面就升。
         _ice.Step(State, _totalWaterVolume, Grid.AverageCellAreaSquareMeters);
+
+        // 板塊運動會把海圍起來（島弧接上大陸、兩塊陸地夾攏），而那種屏障在地質時間尺度上
+        // 不穩定——溢流下切、斷層陷落、兩端的波浪侵蝕都會把它切穿。所以被封死的海要鑿出口。
+        //
+        // **排在這裡**：用上一步的水深判斷海陸（跟造礁／侵蝕同一個慣例），
+        // 改的是地殼厚度，而且趕在 WriteGridBackToMarkers 之前，改動才會寫回標記。
+        // 排到均衡之後的話，下一次 Rasterize 會把它從標記蓋回去、等於沒鑿。
+        //
+        // **頻率不能拉太低**：鑿開的通道會被板塊運動填回去。板塊約5公分／年，一步5萬年
+        // 就是2.5公里，而 n=150 格距8.6公里——標記3~4步就穿過一格。
+        // 一開始設每100萬年（20步）檢查一次，實測完全無效：機制每次都回報「鑿開了39~52個」，
+        // 主洋卻一度只剩水域的56.6%，因為通道在下一次檢查之前早就被填死了。
+        // 現在每20萬年（4步）一次，搭配約三格寬的通道（見 SeaOutletBreach.Carve）。
+        // 這也才是對的物理：真實的海峽靠洋流持續刷深維持暢通，不是切開一次就永遠留著。
+        _yearsSinceBreachCheck += YearsPerStep;
+        if (_yearsSinceBreachCheck >= BreachCheckIntervalYears)
+        {
+            _breach.Step(Grid, State);
+            _yearsSinceBreachCheck = 0;
+        }
 
         // **所有會改地殼的作用都跑完了才回寫標記。**
         // 這一步不能省、也不能提前：地殼的性質掛在標記上，而 Rasterize 會用標記覆蓋格子。
@@ -358,6 +406,7 @@ public sealed class SimulationEngine
         Plates.ApplyDensityAnomaliesTo(State);
         _tectonics.Reset(Grid, State, Plates);
         _yearsSinceClimateSolve = double.MaxValue;
+        _yearsSinceBreachCheck = double.MaxValue;
         InitializeWater();
     }
 

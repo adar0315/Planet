@@ -88,4 +88,15 @@ public class SimulationController : ControllerBase
         var pixels = await _simulationService.RenderAsync(field, ct);
         return File(pixels, "application/octet-stream");
     }
+
+    /// <summary>海洋的連通性：內海有沒有被陸地封死、水域裡有幾條獨立環路、最窄的水道多寬。</summary>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>連通性報告。</returns>
+    /// <response code="200">連通性報告。</response>
+    [HttpGet("ocean-topology")]
+    [ProducesResponseType<OceanTopologyReport>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<OceanTopologyReport>> GetOceanTopology(CancellationToken ct)
+    {
+        return Ok(await _simulationService.AnalyzeOceanAsync(ct));
+    }
 }

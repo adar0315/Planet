@@ -121,6 +121,22 @@ public class SimulationService
         }
     }
 
+    /// <summary>
+    /// 分析目前的海洋連通性：內海有沒有被封死、水域裡有幾條獨立環路、最窄的水道多寬。
+    ///
+    /// 這是「水道串通」那道後天修飾的**量測端**——要先知道哪裡不通才知道要開哪裡。
+    /// </summary>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>連通性報告。</returns>
+    public async Task<OceanTopologyReport> AnalyzeOceanAsync(CancellationToken ct = default)
+    {
+        var (grid, engine, _) = await EnsureInitializedAsync(ct);
+        lock (_lock)
+        {
+            return OceanTopology.Analyze(grid, engine.State);
+        }
+    }
+
     /// <summary>把模擬重設回起始狀態（平坦、裸露、全部覆蓋海水）。網格與對應表會沿用，不重建。</summary>
     public void Reset()
     {
