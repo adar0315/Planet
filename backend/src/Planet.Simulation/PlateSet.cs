@@ -129,6 +129,79 @@ public sealed class PlateSet
     }
 
     /// <summary>
+    /// 把板塊配置寫進存檔（見 <see cref="SimulationSnapshot"/>）。
+    ///
+    /// 板塊**不能從種子重新生成**：歐拉極與角速度每步都被 <see cref="PlateDynamics"/>
+    /// 依力矩平衡改寫，種子點也一直在轉。所以要照實存下來。
+    ///
+    /// <c>_assignMargin</c> 與 <c>_driftAngleSinceFullScan</c> 刻意不存——
+    /// 那兩個是增量重新分配的快取，讀回來時歸零就好，下一次 <see cref="Reassign"/>
+    /// 會自己做一次全掃重建基準。少存兩個欄位換「不可能因為快取沒對上而錯得很難查」。
+    /// </summary>
+    /// <param name="writer">目標。</param>
+    internal void WriteTo(BinaryWriter writer)
+    {
+        writer.Write(Plates.Length);
+        foreach (var plate in Plates)
+        {
+            writer.Write(plate.Id);
+            writer.Write(plate.PoleX);
+            writer.Write(plate.PoleY);
+            writer.Write(plate.PoleZ);
+            writer.Write(plate.AngularVelocityDegPerMyr);
+            writer.Write(plate.DensityAnomalyKgPerM3);
+            writer.Write(plate.IsOceanicOnly);
+        }
+
+        writer.Write(PlateIdByCell.Length);
+        SimulationSnapshot.WriteArray(writer, PlateIdByCell);
+
+        writer.Write(_seedX.Length);
+        SimulationSnapshot.WriteArray(writer, _seedX);
+        SimulationSnapshot.WriteArray(writer, _seedY);
+        SimulationSnapshot.WriteArray(writer, _seedZ);
+        SimulationSnapshot.WriteArray(writer, _seedPlate);
+        SimulationSnapshot.WriteArray(writer, _seedBias);
+    }
+
+    /// <summary>從存檔讀回一組板塊配置。順序見 <see cref="WriteTo"/>。</summary>
+    /// <param name="reader">來源。</param>
+    /// <returns>板塊配置。</returns>
+    internal static PlateSet ReadFrom(BinaryReader reader)
+    {
+        var plateCount = reader.ReadInt32();
+        var plates = new Plate[plateCount];
+        for (var i = 0; i < plateCount; i++)
+        {
+            plates[i] = new Plate(
+                reader.ReadInt32(),
+                reader.ReadDouble(), reader.ReadDouble(), reader.ReadDouble(),
+                reader.ReadDouble(),
+                reader.ReadSingle(),
+                reader.ReadBoolean());
+        }
+
+        var cellCount = reader.ReadInt32();
+        var plateIdByCell = new int[cellCount];
+        SimulationSnapshot.ReadArray(reader, plateIdByCell);
+
+        var seedCount = reader.ReadInt32();
+        var seedX = new double[seedCount];
+        var seedY = new double[seedCount];
+        var seedZ = new double[seedCount];
+        var seedPlate = new int[seedCount];
+        var seedBias = new double[seedCount];
+        SimulationSnapshot.ReadArray(reader, seedX);
+        SimulationSnapshot.ReadArray(reader, seedY);
+        SimulationSnapshot.ReadArray(reader, seedZ);
+        SimulationSnapshot.ReadArray(reader, seedPlate);
+        SimulationSnapshot.ReadArray(reader, seedBias);
+
+        // _assignMargin 留 null、漂移歸零：下一次 Reassign 會自己全掃重建基準
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate, seedBias);
+    }
+
+    /// <summary>
     /// 把板塊往前推進：種子點各自繞自己的歐拉極旋轉，再重新分配每一格屬於哪個板塊。
     ///
     /// **板塊的範圍是幾何決定的，不是逐格搬運出來的**，這裡踩過一次坑（2026-09-05）：

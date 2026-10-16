@@ -211,6 +211,68 @@ public sealed class SimulationState
     public bool IsSubmerged(int cellIndex) => WaterDepth[cellIndex] > 0f;
 
     /// <summary>
+    /// 把全部欄位寫進存檔（見 <see cref="SimulationSnapshot"/>）。
+    ///
+    /// **順序要跟 <see cref="ReadFrom"/> 完全一致**，而且新增欄位時兩邊都要改、
+    /// 還要把 <c>SimulationSnapshot</c> 的版本號加一——二進位格式讀錯不會拋例外，
+    /// 只會得到一顆欄位錯位的星球。
+    /// </summary>
+    /// <param name="writer">目標。</param>
+    internal void WriteTo(BinaryWriter writer)
+    {
+        SimulationSnapshot.WriteArray(writer, BedrockElevation);
+        SimulationSnapshot.WriteArray(writer, SedimentThickness);
+        SimulationSnapshot.WriteArray(writer, OrganicThickness);
+        SimulationSnapshot.WriteArray(writer, VegetationThickness);
+        SimulationSnapshot.WriteArray(writer, IceThickness);
+        SimulationSnapshot.WriteArray(writer, WaterDepth);
+        SimulationSnapshot.WriteArray(writer, Moisture);
+        SimulationSnapshot.WriteArray(writer, AtmosphericMoisture);
+        SimulationSnapshot.WriteArray(writer, Precipitation);
+        SimulationSnapshot.WriteArray(writer, Temperature);
+        SimulationSnapshot.WriteArray(writer, PlateId);
+        SimulationSnapshot.WriteArray(writer, Crust);
+        SimulationSnapshot.WriteArray(writer, CrustAge);
+        SimulationSnapshot.WriteArray(writer, CrustDensity);
+        SimulationSnapshot.WriteArray(writer, CrustThickness);
+        SimulationSnapshot.WriteArray(writer, Boundary);
+        SimulationSnapshot.WriteArray(writer, VolcanicActivity);
+        SimulationSnapshot.WriteArray(writer, OceanicOnly);
+
+        writer.Write(SeaLevelMeters);
+        writer.Write(ElapsedYears);
+        writer.Write(StepCount);
+    }
+
+    /// <summary>把全部欄位從存檔讀回來（原地覆蓋）。順序見 <see cref="WriteTo"/>。</summary>
+    /// <param name="reader">來源。</param>
+    internal void ReadFrom(BinaryReader reader)
+    {
+        SimulationSnapshot.ReadArray(reader, BedrockElevation);
+        SimulationSnapshot.ReadArray(reader, SedimentThickness);
+        SimulationSnapshot.ReadArray(reader, OrganicThickness);
+        SimulationSnapshot.ReadArray(reader, VegetationThickness);
+        SimulationSnapshot.ReadArray(reader, IceThickness);
+        SimulationSnapshot.ReadArray(reader, WaterDepth);
+        SimulationSnapshot.ReadArray(reader, Moisture);
+        SimulationSnapshot.ReadArray(reader, AtmosphericMoisture);
+        SimulationSnapshot.ReadArray(reader, Precipitation);
+        SimulationSnapshot.ReadArray(reader, Temperature);
+        SimulationSnapshot.ReadArray(reader, PlateId);
+        SimulationSnapshot.ReadArray(reader, Crust);
+        SimulationSnapshot.ReadArray(reader, CrustAge);
+        SimulationSnapshot.ReadArray(reader, CrustDensity);
+        SimulationSnapshot.ReadArray(reader, CrustThickness);
+        SimulationSnapshot.ReadArray(reader, Boundary);
+        SimulationSnapshot.ReadArray(reader, VolcanicActivity);
+        SimulationSnapshot.ReadArray(reader, OceanicOnly);
+
+        SeaLevelMeters = reader.ReadSingle();
+        ElapsedYears = reader.ReadDouble();
+        StepCount = reader.ReadInt64();
+    }
+
+    /// <summary>
     /// 建立起始狀態：**裸露的星球，大部分被海水覆蓋，已經有早期大轟炸留下的大尺度海陸雛形**。
     ///
     /// 沉積物／有機物／植被全部為0（裸露），溫度先給一個隨緯度變化的粗略分布，

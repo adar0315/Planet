@@ -33,6 +33,12 @@ public record SimulationStatusDto(
     int TextureWidth,
     int TextureHeight);
 
+/// <summary>一個存檔的概況。</summary>
+/// <param name="Name">存檔名稱（不含副檔名）。</param>
+/// <param name="SizeBytes">檔案大小（位元組）。</param>
+/// <param name="SavedAtUtc">存檔時間（UTC）。</param>
+public record SnapshotInfo(string Name, long SizeBytes, DateTime SavedAtUtc);
+
 /// <summary>
 /// 地質演化模擬的持有者（Singleton）。狀態常駐記憶體，**每步不寫資料庫**——
 /// 模擬是即時的，每步落地會被 I/O 淹沒（見 docs/geological-simulation-plan.md）。
@@ -149,6 +155,101 @@ public class SimulationService
         {
             return engine.CleanUpSmallIslands();
         }
+    }
+
+    /// <summary>
+    /// 存檔放在服務執行檔旁邊的 <c>snapshots</c> 目錄。
+    ///
+    /// 不做成設定值：這是「不要因為服務重啟就丟掉幾千步的星球」用的，
+    /// 放在部署目錄旁邊最不容易在重新 publish 時被清掉（publish 不會刪除不認識的子目錄）。
+    /// </summary>
+    private static string SnapshotDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "snapshots");
+
+    /// <summary>
+    /// 檢查存檔名稱。**只允許英數、底線與連字號**。
+    ///
+    /// 這是路徑穿越的防線：名稱會直接接到目錄後面，
+    /// <c>..\..\appsettings.Production.json</c> 這種名稱可以寫到部署目錄外面去。
+    /// 用白名單而不是黑名單——黑名單漏一個就破功。
+    /// </summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <returns>完整路徑。</returns>
+    /// <exception cref="ArgumentException">名稱不合規。</exception>
+    private static string SnapshotPath(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 64
+            || !name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-'))
+        {
+            throw new ArgumentException(
+                "存檔名稱只能用英數、底線與連字號，長度1~64。", nameof(name));
+        }
+
+        return Path.Combine(SnapshotDirectory, name + ".planet");
+    }
+
+    /// <summary>把目前的模擬狀態存成檔案。</summary>
+    /// <param name="name">存檔名稱（英數、底線、連字號）。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>存檔的位元組數。</returns>
+    public async Task<long> SaveAsync(string name, CancellationToken ct = default)
+    {
+        var path = SnapshotPath(name);
+        var (_, engine, _) = await EnsureInitializedAsync(ct);
+
+        Directory.CreateDirectory(SnapshotDirectory);
+
+        // 先寫到暫存檔再換過去：中途失敗的話原本的存檔還在，
+        // 不會變成「有一個讀不回來的半截檔案」。
+        var temporary = path + ".tmp";
+        lock (_lock)
+        {
+            using (var stream = File.Create(temporary))
+            {
+                SimulationSnapshot.Write(engine, stream);
+            }
+
+            File.Move(temporary, path, overwrite: true);
+        }
+
+        return new FileInfo(path).Length;
+    }
+
+    /// <summary>從檔案把模擬狀態讀回來，覆蓋目前的內容。</summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>讀回來之後的概況。</returns>
+    /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
+    public async Task<SimulationStatusDto> LoadAsync(string name, CancellationToken ct = default)
+    {
+        var path = SnapshotPath(name);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"找不到存檔「{name}」。", path);
+        }
+
+        var (_, engine, _) = await EnsureInitializedAsync(ct);
+        lock (_lock)
+        {
+            using var stream = File.OpenRead(path);
+            SimulationSnapshot.Restore(engine, stream);
+        }
+
+        return await GetStatusAsync(ct);
+    }
+
+    /// <summary>列出所有存檔。</summary>
+    /// <returns>每個存檔的名稱、大小與存檔時間。</returns>
+    public IReadOnlyList<SnapshotInfo> ListSnapshots()
+    {
+        if (!Directory.Exists(SnapshotDirectory)) return [];
+
+        return Directory.EnumerateFiles(SnapshotDirectory, "*.planet")
+            .Select(p => new FileInfo(p))
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .Select(f => new SnapshotInfo(
+                Path.GetFileNameWithoutExtension(f.Name), f.Length, f.LastWriteTimeUtc))
+            .ToList();
     }
 
     /// <summary>把模擬重設回起始狀態（平坦、裸露、全部覆蓋海水）。網格與對應表會沿用，不重建。</summary>

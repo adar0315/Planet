@@ -416,6 +416,46 @@ public sealed class SimulationEngine
         return report;
     }
 
+    /// <summary>把引擎自己的純量寫進存檔（見 <see cref="SimulationSnapshot"/>）。</summary>
+    /// <param name="writer">目標。</param>
+    internal void WriteSnapshotScalars(BinaryWriter writer)
+    {
+        writer.Write(_totalWaterVolume);
+        writer.Write(_yearsSinceClimateSolve);
+        writer.Write(_yearsSinceBreachCheck);
+    }
+
+    /// <summary>
+    /// 把純量、板塊與熱柱讀回引擎，並**從格子狀態重建標記**。
+    ///
+    /// 標記不存在存檔裡（見 <see cref="SimulationSnapshot"/> 的說明），所以這裡用
+    /// <c>PlateTectonics.Reset</c> 重建：每格一個位於中心的標記，屬性取自格子。
+    /// 地形、板塊、水完全一致，但次格尺度的標記分布丟失，**續跑會逐漸分岔**。
+    /// </summary>
+    /// <param name="reader">來源。</param>
+    /// <param name="plates">已經讀好的板塊配置。</param>
+    /// <param name="plumes">已經讀好的地函熱柱。</param>
+    internal void RestoreSnapshotScalars(BinaryReader reader, PlateSet plates, MantlePlume[] plumes)
+    {
+        _totalWaterVolume = reader.ReadDouble();
+        _yearsSinceClimateSolve = reader.ReadDouble();
+        _yearsSinceBreachCheck = reader.ReadDouble();
+
+        Plates = plates;
+
+        // 熱柱的陣列長度是建構時決定的，所以直接覆蓋元素而不是換掉整個陣列
+        for (var i = 0; i < _plumes.Plumes.Length && i < plumes.Length; i++)
+        {
+            _plumes.Plumes[i] = plumes[i];
+        }
+
+        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length);
+        _tectonics.Reset(Grid, State, Plates);
+
+        // 地表高度的快取要跟著更新，否則下一次解海平面會用到讀檔前的地形
+        Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));
+    }
+
     /// <summary>整個重來：回到起始的全海洋星球，板塊也重新生成。</summary>
     public void Reset()
     {

@@ -3,6 +3,11 @@ using Planet.Simulation;
 
 namespace Planet.Service.Controllers;
 
+/// <summary>存檔的結果。</summary>
+/// <param name="Name">存檔名稱。</param>
+/// <param name="SizeBytes">檔案大小（位元組）。</param>
+public record SaveResultDto(string Name, long SizeBytes);
+
 /// <summary>
 /// 地質演化模擬（規劃見 docs/geological-simulation-plan.md）。
 /// 目前是階段2：板塊運動、隱沒、增生、火山都已經在跑，從全海洋星球會長出大陸。
@@ -103,6 +108,71 @@ public class SimulationController : ControllerBase
     public async Task<ActionResult<SmallIslandCleanupReport>> CleanSmallIslands(CancellationToken ct)
     {
         return Ok(await _simulationService.CleanUpSmallIslandsAsync(ct));
+    }
+
+    /// <summary>
+    /// 把目前的模擬狀態存成檔案。
+    ///
+    /// 模擬只活在記憶體裡，服務一重啟就沒了，而跑到接近地球的海陸比要四到五分鐘。
+    /// **存檔不含 marker-in-cell 的標記**（讀回來時從格子狀態重建），
+    /// 所以續跑不會與未中斷的執行位元相同，詳見 <see cref="SimulationSnapshot"/>。
+    /// </summary>
+    /// <param name="name">存檔名稱，只能用英數、底線與連字號。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>存檔的位元組數。</returns>
+    /// <response code="200">存檔完成。</response>
+    /// <response code="400">名稱不合規。</response>
+    [HttpPost("save")]
+    [ProducesResponseType<SaveResultDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<SaveResultDto>> Save([FromQuery] string name, CancellationToken ct)
+    {
+        try
+        {
+            var bytes = await _simulationService.SaveAsync(name, ct);
+            return Ok(new SaveResultDto(name, bytes));
+        }
+        catch (ArgumentException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    /// <summary>從存檔把模擬狀態讀回來，**覆蓋目前記憶體裡的星球**。</summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>讀回來之後的概況。</returns>
+    /// <response code="200">讀取完成。</response>
+    /// <response code="400">名稱不合規，或存檔的網格跟目前的對不上。</response>
+    /// <response code="404">找不到這個存檔。</response>
+    [HttpPost("load")]
+    [ProducesResponseType<SimulationStatusDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<SimulationStatusDto>> Load([FromQuery] string name, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await _simulationService.LoadAsync(name, ct));
+        }
+        catch (FileNotFoundException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status404NotFound);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    /// <summary>列出所有存檔（最新的在前）。</summary>
+    /// <returns>每個存檔的名稱、大小與存檔時間。</returns>
+    /// <response code="200">存檔清單。</response>
+    [HttpGet("saves")]
+    [ProducesResponseType<IReadOnlyList<SnapshotInfo>>(StatusCodes.Status200OK)]
+    public ActionResult<IReadOnlyList<SnapshotInfo>> ListSaves()
+    {
+        return Ok(_simulationService.ListSnapshots());
     }
 
     /// <summary>海洋的連通性：內海有沒有被陸地封死、水域裡有幾條獨立環路、最窄的水道多寬。</summary>
