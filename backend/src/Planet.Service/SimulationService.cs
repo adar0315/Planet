@@ -13,12 +13,14 @@ namespace Planet.Service;
 /// <param name="PlateCount">板塊數量。</param>
 /// <param name="PlumeCount">目前活躍的地函熱柱數量。</param>
 /// <param name="LandFraction">
-/// 陸地佔全球表面的比例（0~1）。**現階段還不能直接跟地球的0.29比**——
-/// 海平面還是固定值、水量並不守恆（見 <c>SimulationEngine.ApplyIsostasyAndFillWater</c>），
-/// 那個基準線要等階段3的水循環才成立。
+/// 陸地佔全球表面的比例（0~1）。水量守恆、海平面由水量反解（見 <c>SimulationEngine.SolveSeaLevel</c>），
+/// 所以可以跟地球的 0.29 對照。
 /// </param>
 /// <param name="TextureWidth">模擬貼圖的寬度（像素）。前端**不要寫死**，一律從這裡拿。</param>
 /// <param name="TextureHeight">模擬貼圖的高度（像素）。</param>
+/// <param name="Continents">最近一次檢查的陸地配置（停止條件的判斷依據），還沒檢查過是 null。</param>
+/// <param name="StoppedByCondition">這次推進是不是因為停止條件成立而提早停下。前端看到 true 就要停止播放。</param>
+/// <param name="AutoSaveName">停止條件成立時自動存檔的名稱。</param>
 public record SimulationStatusDto(
     int Frequency,
     int CellCount,
@@ -31,7 +33,31 @@ public record SimulationStatusDto(
     int PlumeCount,
     double LandFraction,
     int TextureWidth,
-    int TextureHeight);
+    int TextureHeight,
+    ContinentConfigurationReport? Continents = null,
+    bool StoppedByCondition = false,
+    string? AutoSaveName = null);
+
+/// <summary>固定儀表（見 <see cref="SimulationService.GetDashboardAsync"/>）。</summary>
+/// <param name="Status">概況。</param>
+/// <param name="Continents">陸地配置（現算的，不是停止條件上次檢查的快取）。</param>
+/// <param name="Ocean">海洋連通性。</param>
+/// <param name="Hypsometry">高度分布（相對海平面，每 100 公尺一格）。</param>
+/// <param name="LandMasses">陸塊大小分布。</param>
+/// <param name="Mechanisms">各機制上一步的觸發量。</param>
+/// <param name="Timings">每步耗時分項（平均毫秒）。</param>
+/// <param name="TimingSteps">耗時累積了幾步。</param>
+/// <param name="StateHash">整個狀態的雜湊，跨行程重現檢查用。</param>
+public record SimulationDashboardDto(
+    SimulationStatusDto Status,
+    ContinentConfigurationReport Continents,
+    OceanTopologyReport Ocean,
+    IReadOnlyList<HypsometryBin> Hypsometry,
+    IReadOnlyList<LandMassBucket> LandMasses,
+    MechanismCounts Mechanisms,
+    IReadOnlyList<StepTimingEntry> Timings,
+    int TimingSteps,
+    string StateHash);
 
 /// <summary>一個存檔的概況。</summary>
 /// <param name="Name">存檔名稱（不含副檔名）。</param>
@@ -78,24 +104,57 @@ public class SimulationService
 
         lock (_lock)
         {
-            // 每格大致邊長：由平均面積反推（當成正六邊形，面積 = (3√3/2)·邊長²）。
-            // 只是給人看的參考值，不是拿來做物理計算的。
-            var edge = Math.Sqrt(grid.AverageCellAreaSquareMeters / (3.0 * Math.Sqrt(3.0) / 2.0));
-
-            return new SimulationStatusDto(
-                grid.Frequency,
-                grid.CellCount,
-                grid.PlanetRadiusMeters,
-                edge,
-                engine.State.ElapsedYears,
-                engine.State.StepCount,
-                engine.YearsPerStep,
-                engine.Plates.Plates.Length,
-                engine.Plumes.Plumes.Length,
-                engine.LandFraction(),
-                SimulationFieldRenderer.Width,
-                SimulationFieldRenderer.Height);
+            return BuildStatus(grid, engine);
         }
+    }
+
+    /// <summary>
+    /// 固定儀表（v2 規劃 P0）：每個階段驗收要一起看的全部數字，一次拿到。
+    /// 見 <see cref="SimulationDiagnostics"/> 的說明——只看其中一兩項一定會被騙。
+    /// </summary>
+    /// <param name="resetTimings">回傳之後把每步耗時歸零，從下一步開始重新累積。</param>
+    /// <param name="ct">取消權杖。</param>
+    public async Task<SimulationDashboardDto> GetDashboardAsync(bool resetTimings = false, CancellationToken ct = default)
+    {
+        var (grid, engine, _) = await EnsureInitializedAsync(ct);
+        lock (_lock)
+        {
+            var dashboard = new SimulationDashboardDto(
+                BuildStatus(grid, engine),
+                ContinentConfiguration.Analyze(grid, engine.State, engine.StopCriteria),
+                OceanTopology.Analyze(grid, engine.State),
+                SimulationDiagnostics.Hypsometry(engine.State),
+                SimulationDiagnostics.LandMassBuckets(grid, engine.State),
+                SimulationDiagnostics.Mechanisms(engine),
+                engine.Timings.AverageMillisecondsPerStep(),
+                engine.Timings.StepsMeasured,
+                SimulationDiagnostics.StateHash(engine).ToString("x16"));
+            if (resetTimings) engine.Timings.Reset();
+            return dashboard;
+        }
+    }
+
+    /// <summary>組出概況。呼叫端必須已經持有 <see cref="_lock"/>。</summary>
+    private static SimulationStatusDto BuildStatus(SimulationGrid grid, SimulationEngine engine)
+    {
+        // 每格大致邊長：由平均面積反推（當成正六邊形，面積 = (3√3/2)·邊長²）。
+        // 只是給人看的參考值，不是拿來做物理計算的。
+        var edge = Math.Sqrt(grid.AverageCellAreaSquareMeters / (3.0 * Math.Sqrt(3.0) / 2.0));
+
+        return new SimulationStatusDto(
+            grid.Frequency,
+            grid.CellCount,
+            grid.PlanetRadiusMeters,
+            edge,
+            engine.State.ElapsedYears,
+            engine.State.StepCount,
+            engine.YearsPerStep,
+            engine.Plates.Plates.Length,
+            engine.Plumes.Plumes.Length,
+            engine.LandFraction(),
+            SimulationFieldRenderer.Width,
+            SimulationFieldRenderer.Height,
+            engine.LastContinentReport);
     }
 
     /// <summary>推進模擬。</summary>
@@ -107,12 +166,22 @@ public class SimulationService
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(steps);
 
         var (_, engine, _) = await EnsureInitializedAsync(ct);
+        bool triggered;
+        long stepCount;
         lock (_lock)
         {
-            engine.Step(steps);
+            // 即時觀看：陸地配置一成立就停（v2 規劃的停止條件），不要一路跑過去
+            engine.StepUntilStopCondition(steps);
+            triggered = engine.StopConditionTriggered;
+            stepCount = engine.State.StepCount;
         }
 
-        return await GetStatusAsync(ct);
+        if (!triggered) return await GetStatusAsync(ct);
+
+        // 自動存檔：那個配置可能只維持一陣子（板塊構造是循環的），錯過了要再等一整個旋迴
+        var saveName = $"auto-stop-step{stepCount}";
+        await SaveAsync(saveName, ct);
+        return (await GetStatusAsync(ct)) with { StoppedByCondition = true, AutoSaveName = saveName };
     }
 
     /// <summary>把目前的模擬狀態畫成等距柱狀投影 RGBA 貼圖。</summary>

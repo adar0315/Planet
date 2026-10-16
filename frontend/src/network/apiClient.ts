@@ -204,6 +204,26 @@ export interface SimulationStatus {
   /** 貼圖尺寸由後端提供，前端不要寫死（跟 overviewTextureWidth 同樣的理由）。 */
   textureWidth: number
   textureHeight: number
+  /** 最近一次檢查的陸地配置（停止條件的判斷依據），還沒檢查過是 null。 */
+  continents: ContinentConfiguration | null
+  /** 這次推進是不是因為停止條件成立而提早停下。看到 true 就要停止播放。 */
+  stoppedByCondition: boolean
+  /** 停止條件成立時自動存檔的名稱。 */
+  autoSaveName: string | null
+}
+
+/**
+ * 停止條件「陸地集中成兩大塊＋至少兩個大島」的判斷依據。比例都是佔陸地面積的比例（排除碎島）。
+ * 門檻在後端（ContinentCriteria），前端只顯示。
+ */
+export interface ContinentConfiguration {
+  largestShare: number
+  secondShare: number
+  twoLargestShare: number
+  bigIslandCount: number
+  landMassCount: number
+  oceanFraction: number
+  isMet: boolean
 }
 
 export async function fetchSimulationStatus(): Promise<SimulationStatus> {

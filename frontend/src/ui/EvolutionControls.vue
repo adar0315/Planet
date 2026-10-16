@@ -90,8 +90,22 @@ const isPanelOpen = ref(true)
         <dt>每步年數</dt>
         <dd>{{ simulation.status.yearsPerStep.toLocaleString() }}</dd>
       </dl>
+
+      <dl v-if="simulation.status?.continents" class="stats">
+        <dt>最大兩塊陸地</dt>
+        <dd>
+          {{ (simulation.status.continents.largestShare * 100).toFixed(1) }}% ＋
+          {{ (simulation.status.continents.secondShare * 100).toFixed(1) }}%
+        </dd>
+        <dt>大島</dt>
+        <dd>{{ simulation.status.continents.bigIslandCount }} 個</dd>
+        <dt>停止條件</dt>
+        <dd>{{ simulation.status.continents.isMet ? '✓ 成立' : '尚未成立' }}</dd>
+      </dl>
+      <p class="hint">停止條件：兩塊各 ≥20%、合計 ≥75%，大島（1~10%）≥ 2 個</p>
     </div>
 
+    <p v-if="simulation.stopNotice" class="notice">{{ simulation.stopNotice }}</p>
     <p v-if="simulation.error" class="error">{{ simulation.error }}</p>
   </div>
 </template>
@@ -205,12 +219,20 @@ button.collapse {
   text-align: right;
 }
 
-.error {
+.error,
+.notice {
   margin: 0;
   padding: 8px 12px;
-  background: rgba(140, 20, 20, 0.85);
   color: #fff;
   border-radius: 4px;
   max-width: 320px;
+}
+
+.error {
+  background: rgba(140, 20, 20, 0.85);
+}
+
+.notice {
+  background: rgba(20, 110, 60, 0.9);
 }
 </style>

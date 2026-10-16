@@ -52,7 +52,7 @@ public static class SimulationSnapshot
     /// 格式版本。**欄位有任何增減都要加一**，並在 <see cref="Restore"/> 拒絕舊版——
     /// 二進位格式讀錯不會拋例外，只會得到亂掉的星球，那比讀不到更難查。
     /// </summary>
-    private const int Version = 2; // 2：加上標記、板塊重新分配的累積狀態、熱柱亂數（續跑位元相同）
+    private const int Version = 3; // 2：加上標記、板塊重新分配的累積狀態、熱柱亂數（續跑位元相同）；3：停止條件的計時與邊緣觸發狀態
 
     /// <summary>把引擎目前的狀態寫進串流。</summary>
     /// <param name="engine">模擬引擎。</param>

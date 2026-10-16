@@ -185,4 +185,19 @@ public class SimulationController : ControllerBase
     {
         return Ok(await _simulationService.AnalyzeOceanAsync(ct));
     }
+
+    /// <summary>
+    /// 固定儀表：概況、陸地配置、海洋連通性、高度分布、陸塊大小分布、各機制觸發量、每步耗時、狀態雜湊。
+    /// </summary>
+    /// <param name="resetTimings">回傳後把每步耗時歸零（例如剛改完一個機制，想重新量它的負擔）。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>儀表的全部數字。</returns>
+    /// <response code="200">儀表的全部數字。</response>
+    [HttpGet("dashboard")]
+    [ProducesResponseType<SimulationDashboardDto>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<SimulationDashboardDto>> GetDashboard(
+        [FromQuery] bool resetTimings = false, CancellationToken ct = default)
+    {
+        return Ok(await _simulationService.GetDashboardAsync(resetTimings, ct));
+    }
 }

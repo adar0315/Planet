@@ -78,6 +78,9 @@ public sealed class SimulationEngine
     /// <summary>診斷用：海洋出口的鑿通狀況（上一次檢查鑿開了幾個、哪些屏障太高）。</summary>
     public SeaOutletBreach Breach => _breach;
 
+    /// <summary>診斷用：上一步冰蓋被水量上限打了幾折（見 <see cref="Cryosphere.LastSupplyLimit"/>）。</summary>
+    public float IceSupplyLimit => _ice.LastSupplyLimit;
+
     /// <summary>全球水量（立方公尺）。起始狀態決定之後就固定不變，海平面由它反解出來。</summary>
     private double _totalWaterVolume;
 
@@ -138,12 +141,67 @@ public sealed class SimulationEngine
         InitializeWater();
     }
 
-    /// <summary>推進指定步數。</summary>
+    /// <summary>推進指定步數。不理會停止條件（測試與批次用）。</summary>
     /// <param name="steps">要跑幾步。</param>
     public void Step(int steps = 1)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(steps);
         for (var i = 0; i < steps; i++) StepOnce();
+    }
+
+    /// <summary>
+    /// 推進最多 maxSteps 步，**停止條件一觸發就停**（即時觀看用）。
+    /// </summary>
+    /// <param name="maxSteps">最多跑幾步。</param>
+    /// <returns>實際跑了幾步。小於 maxSteps 代表停止條件觸發了（見 <see cref="StopConditionTriggered"/>）。</returns>
+    public int StepUntilStopCondition(int maxSteps)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSteps);
+        StopConditionTriggered = false;
+        for (var i = 0; i < maxSteps; i++)
+        {
+            StepOnce();
+            if (StopConditionTriggered) return i + 1;
+        }
+        return maxSteps;
+    }
+
+    /// <summary>停止條件的門檻。預設 <see cref="ContinentCriteria.Default"/>，可以在執行中調整。</summary>
+    public ContinentCriteria StopCriteria { get; set; } = ContinentCriteria.Default;
+
+    /// <summary>最近一次檢查陸地配置的結果（還沒檢查過是 null）。</summary>
+    public ContinentConfigurationReport? LastContinentReport { get; private set; }
+
+    /// <summary>
+    /// 上一次 <see cref="StepUntilStopCondition"/> 是不是因為停止條件而提早停下。
+    ///
+    /// **邊緣觸發**：只在條件從「不成立」變成「成立」的那一刻觸發。條件持續成立時不會一再觸發——
+    /// 否則使用者看完按繼續，下一次檢查又會立刻停下來，永遠走不出去。
+    /// 條件散掉之後再次成立，才會再觸發一次。
+    /// </summary>
+    public bool StopConditionTriggered { get; private set; }
+
+    /// <summary>
+    /// 多久檢查一次陸地配置（年）。分析一次在 n=150 約 33 毫秒，每 100 萬年（20 步）一次只多 1~2% 的時間；
+    /// 陸地配置以百萬年的尺度在變，晚 100 萬年發現可以接受。
+    /// </summary>
+    private const double StopCheckIntervalYears = 1_000_000;
+
+    private double _yearsSinceStopCheck;
+
+    /// <summary>上一次檢查時條件是否成立——邊緣觸發要用，而且是要存進存檔的狀態。</summary>
+    private bool _stopConditionWasMet;
+
+    private void CheckStopCondition()
+    {
+        _yearsSinceStopCheck += YearsPerStep;
+        if (_yearsSinceStopCheck < StopCheckIntervalYears) return;
+        _yearsSinceStopCheck = 0;
+
+        var report = ContinentConfiguration.Analyze(Grid, State, StopCriteria);
+        LastContinentReport = report;
+        if (report.IsMet && !_stopConditionWasMet) StopConditionTriggered = true;
+        _stopConditionWasMet = report.IsMet;
     }
 
     /// <summary>
@@ -153,12 +211,15 @@ public sealed class SimulationEngine
     /// </summary>
     private void StepOnce()
     {
+        Timings.BeginStep();
         DecayVolcanicActivity();
 
         _tectonics.Step(Grid, State, Plates, YearsPerStep);
+        Timings.Mark("板塊構造");
         _plumes.Step(Grid, State, YearsPerStep / 1_000_000.0);
         // 裂縫火山要讀這一步剛分類好的板塊邊界（斷層帶在哪），所以排在板塊運動之後
         _fissures.Step(Grid, State, Plates, YearsPerStep / 1_000_000.0);
+        Timings.Mark("火山（熱柱＋裂縫）");
 
         // 造礁與侵蝕排在均衡注水**之前**，用的是上一步的水深／水溫／逕流。
         //
@@ -168,10 +229,12 @@ public sealed class SimulationEngine
         // 用上一步的水深判斷海陸有一步的延遲，但一步是5萬年、地形變化極小，完全可以接受。
         _reefs.Step(State, YearsPerStep);
         _erosion.Step(State, YearsPerStep);
+        Timings.Mark("造礁＋侵蝕");
 
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
         // 求解裡從總水量扣掉——冰長海平面就降、冰融海平面就升。
         _ice.Step(State, _totalWaterVolume, Grid.AverageCellAreaSquareMeters);
+        Timings.Mark("冰蓋");
 
         // 板塊運動會把海圍起來（島弧接上大陸、兩塊陸地夾攏），而那種屏障在地質時間尺度上
         // 不穩定——溢流下切、斷層陷落、兩端的波浪侵蝕都會把它切穿。所以被封死的海要鑿出口。
@@ -192,14 +255,17 @@ public sealed class SimulationEngine
             _breach.Step(Grid, State);
             _yearsSinceBreachCheck = 0;
         }
+        Timings.Mark("海洋出口鑿通");
 
         // **所有會改地殼的作用都跑完了才回寫標記。**
         // 這一步不能省、也不能提前：地殼的性質掛在標記上，而 Rasterize 會用標記覆蓋格子。
         // 原本回寫寫在 PlateTectonics.Step 結尾，排在它後面的火山與侵蝕就會被下一次
         // Rasterize 靜靜蓋掉——n=150 大約每2步取樣一次，等於一半的產出憑空消失（2026-09-06）。
         _tectonics.WriteGridBackToMarkers(State);
+        Timings.Mark("回寫標記");
 
         ApplyIsostasyAndFillWater();
+        Timings.Mark("均衡＋注水");
 
         // 氣候排在地形之後：水往哪裡流、哪裡下雨完全取決於**當下的**海陸分布與高度。
         // 這一段是解穩態不是往前推進——氣候的時間尺度是幾天，一步是5萬年（見 Climate 的說明）。
@@ -213,6 +279,7 @@ public sealed class SimulationEngine
             _climate.Solve(State);
             _yearsSinceClimateSolve = 0;
         }
+        Timings.Mark("氣候");
 
         // 板塊範圍每步都在動（PlateSet.Advance），顯示用的副本要跟著，
         // 不然畫出來的板塊邊界會落後到上一次取樣的位置
@@ -220,7 +287,15 @@ public sealed class SimulationEngine
 
         State.ElapsedYears += YearsPerStep;
         State.StepCount++;
+
+        // 排在最後：要看的是這一步結束時的海陸
+        CheckStopCondition();
+        Timings.Mark("停止條件");
+        Timings.EndStep();
     }
+
+    /// <summary>每步耗時分項（累積平均）。見 <see cref="StepTimings"/>。</summary>
+    public StepTimings Timings { get; } = new();
 
     /// <summary>
     /// 火山活動是**衰減**而不是每步清零的。
@@ -423,6 +498,8 @@ public sealed class SimulationEngine
         writer.Write(_totalWaterVolume);
         writer.Write(_yearsSinceClimateSolve);
         writer.Write(_yearsSinceBreachCheck);
+        writer.Write(_yearsSinceStopCheck);
+        writer.Write(_stopConditionWasMet);
         writer.Write(_plumes.RandomDraws);
         _tectonics.WriteTo(writer);
     }
@@ -439,6 +516,10 @@ public sealed class SimulationEngine
         _totalWaterVolume = reader.ReadDouble();
         _yearsSinceClimateSolve = reader.ReadDouble();
         _yearsSinceBreachCheck = reader.ReadDouble();
+        _yearsSinceStopCheck = reader.ReadDouble();
+        _stopConditionWasMet = reader.ReadBoolean();
+        StopConditionTriggered = false;
+        LastContinentReport = ContinentConfiguration.Analyze(Grid, State, StopCriteria);
         var plumeDraws = reader.ReadInt64();
 
         Plates = plates;
@@ -472,6 +553,10 @@ public sealed class SimulationEngine
         _tectonics.Reset(Grid, State, Plates);
         _yearsSinceClimateSolve = double.MaxValue;
         _yearsSinceBreachCheck = double.MaxValue;
+        _yearsSinceStopCheck = 0;
+        _stopConditionWasMet = false;
+        StopConditionTriggered = false;
+        LastContinentReport = null;
         InitializeWater();
     }
 

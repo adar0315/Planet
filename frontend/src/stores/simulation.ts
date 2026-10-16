@@ -44,6 +44,12 @@ export const useSimulationStore = defineStore('simulation', () => {
   const textureVersion = ref(0)
 
   const isPlaying = ref(false)
+
+  /**
+   * 停止條件成立時的提示。播放會自動停下，這段文字告訴使用者為什麼停了、自動存檔叫什麼。
+   * 使用者按播放繼續之後就清掉（條件是邊緣觸發的，繼續跑不會立刻又停）。
+   */
+  const stopNotice = ref<string | null>(null)
   const speedIndex = ref(0)
   const isBusy = ref(false)
   const error = ref<string | null>(null)
@@ -84,6 +90,12 @@ export const useSimulationStore = defineStore('simulation', () => {
   async function advance(steps = stepsPerTick.value) {
     await run(async () => {
       status.value = await stepSimulation(steps)
+      if (status.value.stoppedByCondition) {
+        isPlaying.value = false
+        stopNotice.value =
+          `陸地已經集中成兩大塊＋大島，自動暫停` +
+          (status.value.autoSaveName ? `，已存檔為「${status.value.autoSaveName}」` : '')
+      }
       await refreshTexture()
     })
   }
@@ -98,6 +110,7 @@ export const useSimulationStore = defineStore('simulation', () => {
 
   function togglePlay() {
     isPlaying.value = !isPlaying.value
+    if (isPlaying.value) stopNotice.value = null
   }
 
   function cycleSpeed() {
@@ -131,6 +144,7 @@ export const useSimulationStore = defineStore('simulation', () => {
     texture,
     textureVersion,
     isPlaying,
+    stopNotice,
     isBusy,
     error,
     stepsPerTick,
