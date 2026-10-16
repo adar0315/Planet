@@ -8,7 +8,7 @@ export const RENDER_RADIUS = 50
 
 export const REALTIME_TICK_MS = 3000
 
-/** 預設視角：從正上方往「南」偏斜的俯角，比純垂直俯視更有立體感、看得到地形起伏。 */
+/** 預設視角：從正上方往「玩家背後」偏斜的俯角，比純垂直俯視更有立體感、看得到地形起伏。 */
 export const DEFAULT_TILT_DEG = 60
 
 /**
@@ -40,16 +40,42 @@ export const NEARBY_TILE_COUNT = 50_000
  */
 export const REFETCH_DEPTH_THRESHOLD = 30
 
-/** 長按方向鍵時每步之間的最小間隔（毫秒）。約11格/秒。 */
-export const MOVE_COOLDOWN_MS = 90
+/**
+ * 連續移動的速度（公尺／秒，星球實際比例）。
+ *
+ * 細網格一格邊長約 1 公里、格心間距約 1.7 公里。真實步行 1.4 m/s 走過一格要二十分鐘，
+ * 在兩千萬格的星球上等於不能玩，所以這是「遊戲速度」：走一格約 8 秒、跑一格約 3 秒。
+ * 這等於把角色的尺度定在遠大於人的程度，跟鏡頭預設 20 公里的距離與 8 倍高度誇張是一致的。
+ * 2026-10-16 依使用者選的建議值設定，實際手感要玩過再調。
+ */
+export const WALK_SPEED_MPS = 200
+export const RUN_SPEED_MPS = 600
+/** 後退與橫移比前進慢：動作遊戲的慣例，也讓「轉身往前走」比「倒著走」划算。 */
+export const BACK_SPEED_FACTOR = 0.6
+export const STRAFE_SPEED_FACTOR = 0.75
 
 /**
- * 轉向的鏡頭動畫時長（毫秒）。刻意設成比 MOVE_COOLDOWN_MS 長好幾倍：
- * 單按一下要看得出鏡頭確實轉了一圈，而不是瞬間跳過去；長按連續轉向時，
- * 新的目標角度會接著前一次動畫還沒轉完的角度繼續延伸（見 cameraRig.ts 的 turn 動畫狀態），
- * 效果是連續平滑地轉，不會卡頓成一格一格的跳動。
+ * 加速度與減速度（公尺／秒²）。起步約 0.25 秒到全速、停下約 0.17 秒——
+ * 有加減速才不會像以前跳格那樣生硬，但又短到不會覺得「滑」。
  */
-export const FACING_TURN_DURATION_MS = 220
+export const ACCELERATION_MPS2 = 800
+export const DECELERATION_MPS2 = 1200
+
+/** 按住轉向鍵時的角速度（度／秒）。一圈 3 秒。 */
+export const TURN_RATE_DEG_PER_SEC = 120
+
+/**
+ * 每幀最長的時間步（秒）。分頁切到背景再回來時 requestAnimationFrame 會給出好幾秒的 dt，
+ * 不夾住的話玩家會一幀之內飛過好幾格——而跨格偵測只看目前格與相鄰格，跨兩格以上會漏掉。
+ * 0.1 秒以跑步速度是 60 公尺，遠小於一格。
+ */
+export const MAX_FRAME_DT_SEC = 0.1
+
+/**
+ * 角色模型的長度是鏡頭距離的幾倍。60° 視角下約佔畫面高度的 7%（600 像素高的畫面約 40 像素），
+ * 拉遠拉近都維持這個大小。見 playerAvatar.ts 為什麼不用固定的公尺數。
+ */
+export const AVATAR_SIZE_PER_CAMERA_DISTANCE = 0.08
 
 /**
  * controls.minDistance 是邊長的幾倍。必須讓 minDistance 大於 camera.near(0.1)，

@@ -25,17 +25,24 @@ export const VIEW_MODE_LABELS: Record<ViewMode, string> = {
 
 const GAME_START_UTC = new Date(Date.UTC(2050, 0, 1, 8, 0, 0))
 
-/** 六角格＝六個方向，所以每次轉向剛好60度。 */
-export const FACING_STEP_DEG = 60
+/** 八方位的中文名稱，給 HUD 顯示用。索引＝round(角度/45) mod 8。 */
+const COMPASS_POINT_LABELS = ['北', '東北', '東', '東南', '南', '西南', '西', '西北'] as const
 
-/** 六個面向的中文名稱，索引＝角度/60。使用者指定的說法：0度面北、右轉一次面東北。 */
-export const FACING_LABELS = ['北', '東北', '東南', '南', '西南', '西北'] as const
+/** 方位角（度）→ 最接近的八方位名稱。 */
+export function compassPointLabel(deg: number): string {
+  const index = ((Math.round(deg / 45) % 8) + 8) % 8
+  return COMPASS_POINT_LABELS[index]!
+}
 
-/** 收斂到 0/60/…/300 其中之一（負數、超過360、壞掉的存檔值都會被拉回來）。 */
+/**
+ * 收斂到 [0, 360)（負數、超過360、壞掉的存檔值都會被拉回來）。
+ *
+ * 2026-10-16 之前面向只有 0/60/…/300 六個值（六角格跳格），現在是連續角度。
+ * 舊存檔裡的六個值本來就落在這個範圍內，所以存檔格式不必改版。
+ */
 function normalizeFacing(deg: number): number {
   if (!Number.isFinite(deg)) return 0
-  const steps = Math.round(deg / FACING_STEP_DEG)
-  return (((steps % 6) + 6) % 6) * FACING_STEP_DEG
+  return ((deg % 360) + 360) % 360
 }
 
 // 單人原型沒有帳號系統，玩家狀態（位置/模式/時間）直接存瀏覽器localStorage——
@@ -84,7 +91,7 @@ export const useGameStateStore = defineStore('gameState', () => {
   /**
    * 三種操作模式：
    * observe  = 時間靜止，可自由移動觀看每個地形（預設）
-   * stepped  = 移動模式，每移動一格（或按S待在原地）時間+1小時
+   * stepped  = 移動模式，每跨過一格（或按「原地等待」）時間+1小時
    * realtime = 每經過3秒，時間自動+1小時，移動不影響時間
    */
   const mode = ref<GameMode>(persisted?.mode ?? 'observe')
@@ -94,11 +101,11 @@ export const useGameStateStore = defineStore('gameState', () => {
   const compassAngleDeg = ref(0)
 
   /**
-   * 玩家目前的面向（0°=正北，順時針；六角格所以只有 0/60/120/180/240/300 六個值）。
+   * 玩家目前的面向（0°=正北，順時針，連續角度）。
    *
-   * 鏡頭會轉成「面向朝畫面上方」，六個移動插槽也是依這個角度指派
-   * （見 map/bearing.ts 的 assignNeighborsToSlots），所以轉向之後畫面上看到的右邊
-   * 就是按「右」會走到的那一格，不會出現「按右卻往左走」。
+   * **這是給人看與存檔用的副本**，移動計算用的是 playerController 裡的切向量——
+   * 正北在極點沒有定義，用角度做移動會在極點出錯（見 map/surfaceMotion.ts）。
+   * playerController 每幀把切向量換算回來寫進這裡，量化到 0.5° 才寫，避免 HUD 每幀重繪。
    */
   const facingDeg = ref(normalizeFacing(persisted?.facingDeg ?? 0))
 
@@ -148,17 +155,22 @@ export const useGameStateStore = defineStore('gameState', () => {
     }
   }
 
-  // currentTile在每次移動後都會換，mode/gameTime變動時也一併存，不需要對每個欄位個別debounce。
-  watch([currentTile, mode, gameTime, facingDeg], persist)
-
-  /** 左轉：面向逆時針60度。 */
-  function turnLeft() {
-    facingDeg.value = normalizeFacing(facingDeg.value - FACING_STEP_DEG)
+  // 去抖動：連續轉向時 facingDeg 每幀都在變，連續移動時 currentTile 每幾秒就換一次。
+  // 原本是任何變動立刻寫 localStorage——跳格時代一秒頂多十幾次，連續轉向會變成一秒六十次。
+  // 寫入本身是同步的字串序列化，在主執行緒上每幀做一次會直接吃掉畫面的時間預算。
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  function schedulePersist() {
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      persist()
+    }, 500)
   }
+  watch([currentTile, mode, gameTime, facingDeg], schedulePersist)
 
-  /** 右轉：面向順時針60度。 */
-  function turnRight() {
-    facingDeg.value = normalizeFacing(facingDeg.value + FACING_STEP_DEG)
+  /** 設定面向（任意角度，會正規化到 [0, 360)）。 */
+  function setFacing(deg: number) {
+    facingDeg.value = normalizeFacing(deg)
   }
 
   function advanceTime(hours: number) {
@@ -193,8 +205,7 @@ export const useGameStateStore = defineStore('gameState', () => {
     resetToDefaultViewSignal,
     viewMode,
     setViewMode,
-    turnLeft,
-    turnRight,
+    setFacing,
     advanceTime,
     setMode,
     requestResetView,

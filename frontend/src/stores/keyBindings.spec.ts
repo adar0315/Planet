@@ -3,13 +3,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import {
   ACTION_LABELS,
   DEFAULT_BINDINGS,
-  actionForSlot,
+  HELD_ACTIONS,
   isBindableKey,
-  slotForAction,
   useKeyBindingsStore,
   type BindableAction,
 } from './keyBindings'
-import { MOVEMENT_SLOT_ORDER } from '@/map/bearing'
 
 /**
  * 自訂按鍵的測試重點在「不可能把自己鎖死」：
@@ -34,7 +32,13 @@ function installLocalStorage(initial: Record<string, string> = {}) {
   return data
 }
 
-const STORAGE_KEY = 'planet.keyBindings.v1'
+const STORAGE_KEY = 'planet.keyBindings.v2'
+const LEGACY_STORAGE_KEY_V1 = 'planet.keyBindings.v1'
+
+function expectNoDuplicateKeys(bindings: Record<BindableAction, string>) {
+  const keys = Object.values(bindings)
+  expect(new Set(keys).size).toBe(keys.length)
+}
 
 beforeEach(() => {
   installLocalStorage()
@@ -51,83 +55,80 @@ describe('isBindableKey', () => {
   })
 })
 
-describe('actionForSlot / slotForAction', () => {
-  it('六個移動插槽都能來回轉換而不變形', () => {
-    for (const slot of MOVEMENT_SLOT_ORDER) {
-      const action = actionForSlot(slot)
-      expect(slotForAction(action as `move${Capitalize<typeof slot>}`)).toBe(slot)
-    }
-  })
-
+describe('動作清單', () => {
   it('面板上列出的動作剛好涵蓋全部可綁定動作，沒有漏也沒有多', () => {
     const listed = ACTION_LABELS.map((entry) => entry.action).sort()
     const all = (Object.keys(DEFAULT_BINDINGS) as BindableAction[]).sort()
     expect(listed).toEqual(all)
   })
+
+  it('移動與轉向是按住生效的，原地等待不是', () => {
+    for (const action of ['moveForward', 'moveBack', 'strafeLeft', 'strafeRight', 'turnLeft', 'turnRight'] as const) {
+      expect(HELD_ACTIONS.has(action)).toBe(true)
+    }
+    expect(HELD_ACTIONS.has('wait')).toBe(false)
+  })
 })
 
 describe('useKeyBindingsStore', () => {
-  it('預設配置：六個方向鍵＋原地鍵＋兩個轉向鍵，而且沒有任何重複', () => {
+  it('預設配置：WASD 移動、QE 轉向、Z 原地等待，沒有任何重複', () => {
     const store = useKeyBindingsStore()
-    expect(store.keyFor('moveUpLeft')).toBe('w')
-    expect(store.keyFor('stay')).toBe('s')
-    expect(store.keyFor('turnLeft')).toBe(',')
-    expect(store.keyFor('turnRight')).toBe('.')
-
-    const keys = Object.values(store.bindings)
-    expect(new Set(keys).size).toBe(keys.length)
+    expect(store.keyFor('moveForward')).toBe('w')
+    expect(store.keyFor('moveBack')).toBe('s')
+    expect(store.keyFor('strafeLeft')).toBe('a')
+    expect(store.keyFor('strafeRight')).toBe('d')
+    expect(store.keyFor('turnLeft')).toBe('q')
+    expect(store.keyFor('turnRight')).toBe('e')
+    expect(store.keyFor('wait')).toBe('z')
+    expectNoDuplicateKeys(store.bindings)
   })
 
-  it('actionFor 不分大小寫（按 Shift+W 也要能走）', () => {
+  it('actionFor 不分大小寫——按住 Shift（跑步）時 event.key 是大寫，也要能走', () => {
     const store = useKeyBindingsStore()
-    expect(store.actionFor('W')).toBe('moveUpLeft')
-    expect(store.actionFor('w')).toBe('moveUpLeft')
+    expect(store.actionFor('W')).toBe('moveForward')
+    expect(store.actionFor('w')).toBe('moveForward')
   })
 
   it('綁到沒人用的鍵：直接生效，其他動作不受影響', () => {
     const store = useKeyBindingsStore()
-    expect(store.setBinding('turnLeft', 'q')).toBeUndefined()
-    expect(store.keyFor('turnLeft')).toBe('q')
-    expect(store.actionFor('q')).toBe('turnLeft')
-    expect(store.actionFor(',')).toBeUndefined()
-    expect(store.keyFor('moveUpLeft')).toBe('w')
+    expect(store.setBinding('turnLeft', 'j')).toBeUndefined()
+    expect(store.keyFor('turnLeft')).toBe('j')
+    expect(store.actionFor('j')).toBe('turnLeft')
+    expect(store.actionFor('q')).toBeUndefined()
+    expect(store.keyFor('moveForward')).toBe('w')
   })
 
   it('綁到別人在用的鍵：兩個動作互換，不會有動作變成沒有按鍵', () => {
     const store = useKeyBindingsStore()
-    // turnLeft 原本是 ','，moveUpLeft 原本是 'w'
-    expect(store.setBinding('turnLeft', 'w')).toBe('moveUpLeft')
+    expect(store.setBinding('turnLeft', 'w')).toBe('moveForward')
     expect(store.keyFor('turnLeft')).toBe('w')
-    expect(store.keyFor('moveUpLeft')).toBe(',') // 拿到 turnLeft 原本的鍵，而不是變成空的
-
-    const keys = Object.values(store.bindings)
-    expect(new Set(keys).size).toBe(keys.length)
+    expect(store.keyFor('moveForward')).toBe('q') // 拿到 turnLeft 原本的鍵，而不是變成空的
+    expectNoDuplicateKeys(store.bindings)
   })
 
   it('大寫輸入會正規化成小寫，不會產生「W 和 w 各綁一個動作」', () => {
     const store = useKeyBindingsStore()
-    store.setBinding('turnLeft', 'Q')
-    expect(store.keyFor('turnLeft')).toBe('q')
-    expect(store.actionFor('q')).toBe('turnLeft')
+    store.setBinding('turnLeft', 'J')
+    expect(store.keyFor('turnLeft')).toBe('j')
   })
 
   it('綁成自己目前已經是的鍵：不算衝突、也不會把自己換掉', () => {
     const store = useKeyBindingsStore()
-    expect(store.setBinding('moveUpLeft', 'w')).toBeUndefined()
-    expect(store.keyFor('moveUpLeft')).toBe('w')
+    expect(store.setBinding('moveForward', 'w')).toBeUndefined()
+    expect(store.keyFor('moveForward')).toBe('w')
   })
 
   it('拒絕多字元的按鍵（Shift/F5 之類），維持原本的綁定', () => {
     const store = useKeyBindingsStore()
     store.setBinding('turnLeft', 'Shift')
-    expect(store.keyFor('turnLeft')).toBe(',')
+    expect(store.keyFor('turnLeft')).toBe('q')
   })
 
   it('恢復預設', () => {
     const store = useKeyBindingsStore()
-    store.setBinding('turnLeft', 'q')
+    store.setBinding('turnLeft', 'j')
     store.resetToDefaults()
-    expect(store.keyFor('turnLeft')).toBe(',')
+    expect(store.keyFor('turnLeft')).toBe('q')
   })
 
   it('會寫進 localStorage，重開之後沿用', () => {
@@ -135,22 +136,27 @@ describe('useKeyBindingsStore', () => {
     setActivePinia(createPinia())
     useKeyBindingsStore().setBinding('turnRight', 'p')
 
-    // 換一個全新的 pinia，模擬重新整理頁面
-    setActivePinia(createPinia())
+    setActivePinia(createPinia()) // 模擬重新整理頁面
     expect(useKeyBindingsStore().keyFor('turnRight')).toBe('p')
     expect(JSON.parse(data.get(STORAGE_KEY)!).turnRight).toBe('p')
   })
 
   it('localStorage 內容壞掉時，逐欄位丟掉壞的、保留好的，不整包放棄', () => {
     installLocalStorage({
-      [STORAGE_KEY]: JSON.stringify({ turnLeft: 'q', turnRight: 'Shift', stay: 42 }),
+      [STORAGE_KEY]: JSON.stringify({ turnLeft: 'j', turnRight: 'Shift', wait: 42 }),
     })
     setActivePinia(createPinia())
     const store = useKeyBindingsStore()
 
-    expect(store.keyFor('turnLeft')).toBe('q') // 好的留下
-    expect(store.keyFor('turnRight')).toBe('.') // 多字元 → 退回預設
-    expect(store.keyFor('stay')).toBe('s') // 非字串 → 退回預設
+    expect(store.keyFor('turnLeft')).toBe('j') // 好的留下
+    expect(store.keyFor('turnRight')).toBe('e') // 多字元 → 退回預設
+    expect(store.keyFor('wait')).toBe('z') // 非字串 → 退回預設
+  })
+
+  it('存檔裡兩個動作綁到同一個鍵（手動改壞）：讀進來時互換解開，不會出現重複', () => {
+    installLocalStorage({ [STORAGE_KEY]: JSON.stringify({ turnLeft: 'w', moveForward: 'w' }) })
+    setActivePinia(createPinia())
+    expectNoDuplicateKeys(useKeyBindingsStore().bindings)
   })
 
   it('localStorage 是無效 JSON 時退回全部預設，不會爆', () => {
@@ -158,12 +164,44 @@ describe('useKeyBindingsStore', () => {
     setActivePinia(createPinia())
     expect(useKeyBindingsStore().bindings).toEqual(DEFAULT_BINDINGS)
   })
+})
 
-  it('movementKeys 六個插槽都有對應按鍵，改綁之後也跟著更新', () => {
+describe('從 v1（六方向跳格）遷移', () => {
+  it('只帶走語意沒變的「原地」→「原地等待」，六個方向插槽與舊轉向鍵不帶', () => {
+    installLocalStorage({
+      [LEGACY_STORAGE_KEY_V1]: JSON.stringify({
+        moveUpLeft: 'w',
+        moveRight: 'l',
+        stay: 'x',
+        turnLeft: ',',
+        turnRight: '.',
+      }),
+    })
+    setActivePinia(createPinia())
     const store = useKeyBindingsStore()
-    for (const slot of MOVEMENT_SLOT_ORDER) expect(store.movementKeys[slot]).toBeTruthy()
 
-    store.setBinding('moveRight', 'l')
-    expect(store.movementKeys.right).toBe('l')
+    expect(store.keyFor('wait')).toBe('x')
+    expect(store.keyFor('turnLeft')).toBe('q') // 舊的 , 是給「按一下轉60°」挑的位置，不帶
+    expect(store.keyFor('strafeRight')).toBe('d') // 舊的 moveRight 沒有對應
+    expectNoDuplicateKeys(store.bindings)
+  })
+
+  it('v1 帶過來的鍵跟新預設撞鍵時，互換解開', () => {
+    installLocalStorage({ [LEGACY_STORAGE_KEY_V1]: JSON.stringify({ stay: 'w' }) })
+    setActivePinia(createPinia())
+    const store = useKeyBindingsStore()
+
+    expect(store.keyFor('wait')).toBe('w')
+    expect(store.keyFor('moveForward')).toBe('z') // 拿到 wait 原本的預設鍵
+    expectNoDuplicateKeys(store.bindings)
+  })
+
+  it('已經有 v2 存檔時不再讀 v1', () => {
+    installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({ wait: 'c' }),
+      [LEGACY_STORAGE_KEY_V1]: JSON.stringify({ stay: 'x' }),
+    })
+    setActivePinia(createPinia())
+    expect(useKeyBindingsStore().keyFor('wait')).toBe('c')
   })
 })

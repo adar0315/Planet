@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { FACING_LABELS, FACING_STEP_DEG, useGameStateStore } from '@/stores/gameState'
+import { compassPointLabel, useGameStateStore } from '@/stores/gameState'
 import { useKeyBindingsStore, displayKey } from '@/stores/keyBindings'
 import KeyBindingPanel from './KeyBindingPanel.vue'
 import { useTerrainStyleStore } from '@/stores/terrainStyles'
@@ -13,7 +13,7 @@ void terrainStyleStore.load()
 
 const modeLabel: Record<string, string> = {
   observe: '時間靜止（自由觀看）',
-  stepped: '移動模式（每步+1小時）',
+  stepped: '移動模式（每跨一格+1小時）',
   realtime: '即時模式（每3秒+1小時）',
 }
 
@@ -44,26 +44,18 @@ const elevationMeters = computed(() =>
 const formattedCameraDistance = computed(() => formatLength(gameState.cameraDistanceMeters))
 const formattedCameraHeight = computed(() => formatLength(gameState.cameraHeightMeters))
 
-/** 面向：六角格所以只有六個值，畫面上方永遠是這個方向。 */
-const facingLabel = computed(() => FACING_LABELS[gameState.facingDeg / FACING_STEP_DEG] ?? '—')
+/** 面向：連續角度，顯示最接近的八方位與度數。 */
+const facingLabel = computed(() => compassPointLabel(gameState.facingDeg))
 
-/** 九宮格顯示的是玩家目前綁定的按鍵，不是寫死的 WEASDZX。 */
-const keypad = computed(() => {
-  const m = keyBindings.movementKeys
-  return {
-    upLeft: displayKey(m.upLeft),
-    upRight: displayKey(m.upRight),
-    left: displayKey(m.left),
-    stay: displayKey(keyBindings.keyFor('stay')),
-    right: displayKey(m.right),
-    downLeft: displayKey(m.downLeft),
-    downRight: displayKey(m.downRight),
-  }
-})
-
-const turnKeys = computed(() => ({
-  left: displayKey(keyBindings.keyFor('turnLeft')),
-  right: displayKey(keyBindings.keyFor('turnRight')),
+/** 按鍵說明顯示的是玩家目前綁定的按鍵，不是寫死的 WASD。 */
+const keys = computed(() => ({
+  forward: displayKey(keyBindings.keyFor('moveForward')),
+  back: displayKey(keyBindings.keyFor('moveBack')),
+  left: displayKey(keyBindings.keyFor('strafeLeft')),
+  right: displayKey(keyBindings.keyFor('strafeRight')),
+  turnLeft: displayKey(keyBindings.keyFor('turnLeft')),
+  turnRight: displayKey(keyBindings.keyFor('turnRight')),
+  wait: displayKey(keyBindings.keyFor('wait')),
 }))
 </script>
 
@@ -77,21 +69,19 @@ const turnKeys = computed(() => ({
     </div>
     <div>時間：{{ formattedTime }}</div>
     <div>模式：{{ modeLabel[gameState.mode] }}</div>
-    <div>面向：{{ facingLabel }}（{{ gameState.facingDeg }}°，畫面上方就是這個方向）</div>
+    <div>面向：{{ facingLabel }}（{{ gameState.facingDeg.toFixed(1) }}°）</div>
     <div>視角：{{ gameState.cameraTiltDeg.toFixed(1) }}°（0°=正上方俯視）</div>
     <div>鏡頭：距離 {{ formattedCameraDistance }}、高度 {{ formattedCameraHeight }}</div>
     <div>縮放：{{ gameState.cameraZoomPercent }}%（0=最近、100=最遠）</div>
     <div class="hint keypad">
-      <span></span><span>{{ keypad.upLeft }}</span
-      ><span>{{ keypad.upRight }}</span> <span>{{ keypad.left }}</span
-      ><span>{{ keypad.stay }}</span
-      ><span>{{ keypad.right }}</span> <span></span><span>{{ keypad.downLeft }}</span
-      ><span>{{ keypad.downRight }}</span>
+      <span>{{ keys.turnLeft }}</span><span>{{ keys.forward }}</span><span>{{ keys.turnRight }}</span>
+      <span>{{ keys.left }}</span><span>{{ keys.back }}</span><span>{{ keys.right }}</span>
     </div>
     <div class="hint">
-      轉向：{{ turnKeys.left }} 左轉 {{ FACING_STEP_DEG }}°、{{ turnKeys.right }} 右轉
-      {{ FACING_STEP_DEG }}°
+      {{ keys.forward }}{{ keys.back }} 前進後退、{{ keys.left }}{{ keys.right }} 橫移、{{ keys.turnLeft
+      }}{{ keys.turnRight }} 轉向、Shift 跑步、{{ keys.wait }} 原地等待
     </div>
+    <div class="hint">滑鼠：滾輪縮放、左鍵拖曳環顧、右鍵拖曳轉身</div>
     <div class="buttons">
       <button
         type="button"

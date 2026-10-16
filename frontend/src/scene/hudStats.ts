@@ -1,11 +1,21 @@
 import * as THREE from 'three'
-import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { northDirectionInto } from '@/map/sphereCoordinates'
 import { useGameStateStore } from '@/stores/gameState'
 
+/**
+ * HUD 需要的鏡頭資訊：注視點與縮放範圍。
+ * 刻意只要這三個欄位而不是整個鏡頭控制器——走動視角的追尾鏡頭（cameraRig.ts）與
+ * 其他視角用的 OrbitControls 都滿足這個形狀。
+ */
+export interface CameraTargetInfo {
+  readonly target: THREE.Vector3
+  readonly minDistance: number
+  readonly maxDistance: number
+}
+
 export interface HudStatsUpdater {
   /** 每幀呼叫一次：依目前鏡頭狀態算出指北針角度、視角傾斜、鏡頭距離/高度、縮放百分比，寫回 gameState。 */
-  update(camera: THREE.PerspectiveCamera, controls: OrbitControls, sceneToMeters: number): void
+  update(camera: THREE.PerspectiveCamera, controls: CameraTargetInfo, sceneToMeters: number): void
 }
 
 /**
@@ -26,7 +36,7 @@ export function createHudStatsUpdater(
   const camToTarget = new THREE.Vector3()
   const localUp = new THREE.Vector3()
 
-  function update(camera: THREE.PerspectiveCamera, controls: OrbitControls, sceneToMeters: number) {
+  function update(camera: THREE.PerspectiveCamera, controls: CameraTargetInfo, sceneToMeters: number) {
     if (controls.target.lengthSq() === 0) return
 
     // 指北針：把目前位置的「正北」切線方向投影到鏡頭的螢幕平面，換算成螢幕上的角度。

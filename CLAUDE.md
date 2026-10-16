@@ -292,11 +292,13 @@ INPUT/TEXTAREA/SELECT，否則在輸入框打字會把玩家一起走掉（已�
 
 | 要改的東西 | 去這個檔案 |
 |---|---|
-| 鏡頭定位、俯視角、轉向動畫 | `cameraRig.ts` |
+| 追尾鏡頭、滾輪縮放、滑鼠拖曳環顧／轉身 | `cameraRig.ts` |
 | 地塊載入、合併mesh、鄰居外框、時段換色 | `patchManager.ts` |
 | 星球本體（填縫球體、遠景貼圖、日夜色調） | `planetBase.ts` |
 | 地質演化視角（模擬貼圖球體） | `scene/PlanetEvolution.vue`＋`ui/EvolutionControls.vue`＋`stores/simulation.ts` |
-| 玩家位置、方向鍵對應、移動、伺服器驗證 | `playerMovement.ts` |
+| 連續移動：位置、面向、速度、跨格偵測、伺服器驗證 | `playerController.ts` |
+| 角色模型 | `playerAvatar.ts` |
+| 球面移動的數學（純函式、有測試） | `map/surfaceMotion.ts` |
 | HUD的鏡頭數字（指北針/傾斜/距離/高度/縮放%） | `hudStats.ts` |
 | 鍵盤/滑鼠輸入 | `inputHandlers.ts` |
 
@@ -308,20 +310,24 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
 是全前端bug密度最高的地方（見 docs/architecture.md「踩過的坑1~3」）。改動時只加到
 對應的模組，`.vue` 只保留 `onMounted` 裡的建構順序與 `animate()` 的逐幀orchestration。
 
-## 移動方向是「相對面向」的，不要寫死字母或地理方位
+## 走動是連續移動（2026-10-16起），面向存成切向量
 
-玩家有面向（`gameState.facingDeg`，六角格所以只有 0/60/120/180/240/300），鏡頭會轉成
-「面向朝畫面上方」，六個移動插槽也依面向指派（`assignNeighborsToSlots` 的 `facingDeg` 參數）。
-兩件事必須一起改，只做一半就會變成「畫面轉了但按右還是往原本的右走」。
+設計與分階段見 [docs/movement-redesign-plan.md](docs/movement-redesign-plan.md)。
+原本是六方向跳格（`bearing.ts` 的六個插槽、面向只有 0/60/…/300），已整個移除。
 
-因此：
-
-- `bearing.ts` 的插槽叫 `upLeft`/`right`/… 而**不是** `w`/`d`——按鍵可以自訂
-  （`stores/keyBindings.ts`），把插槽叫做「w」在玩家改綁成 i 之後就變成謊話。
-- 也不要改回用地理方位（NW/NE…）命名：面向不是北的時候，左上那一格根本不是西北。
-- `keydown` 裡**不要寫死字母**，一律查 `keyBindings.actionFor(key)`。寫死的症狀是
-  「改了設定但沒反應」，很難查。
-- 面向 0 度時整套行為跟加入轉向功能之前完全相同，這是刻意的（不能有退化）。
+- **面向在內部是切向量，不是角度**（`playerController` 的 `forward`）。正北在極點沒有定義，
+  用角度做移動會在極點炸掉；切向量沿著移動平行傳輸，永遠有定義。`gameState.facingDeg`
+  只是給 HUD 與存檔的副本，**不要拿它回頭做移動計算**。
+- **玩家不在格子中心**，「所在格」由位置推導：每幀只比「目前格＋鄰居」誰的格心最近。
+  這要求一幀之內不能跨超過一格，所以 dt 有上限（`MAX_FRAME_DT_SEC`）。改速度或翻滾距離時要重算這個前提。
+- 方向慣例：右方＝`forward × position`，跟 `sphereCoordinates.tangentBasisAt` 的
+  `east = north × normal` 同一個 handedness。`map/surfaceMotion.spec.ts` 用「走一步後經緯度怎麼變」
+  驗證每一個方向，改動前先跑它。
+- 動作名稱一律是**相對面向**的（`moveForward`/`strafeLeft`/…），不是字母、也不是地理方位。
+  `keydown` 裡**不要寫死字母**，一律查 `keyBindings.actionFor(key)`——寫死的症狀是「改了設定但沒反應」。
+- 移動與轉向是**按住**生效的，所以 `keyup` 與 `window` 的 `blur` 都要處理：按著 W 切到別的視窗再放開，
+  `keyup` 永遠收不到，角色會一直走下去。`keyup` 刻意不檢查輸入欄位與 `isCapturing`——
+  放開的那一刻焦點可能剛好移到輸入框上，擋掉它角色就停不下來。
 
 ## ⚠️ 星球的尺寸與地形參數只有一個權威來源
 

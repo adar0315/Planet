@@ -12,10 +12,12 @@ import { usePlanetInfoStore } from '@/stores/planetInfo'
 import { createCameraRig } from './cameraRig'
 import { createPatchManager } from './patchManager'
 import { createPlanetBase } from './planetBase'
-import { createPlayerMovement } from './playerMovement'
+import { createPlayerController } from './playerController'
+import { createPlayerAvatar } from './playerAvatar'
 import { createHudStatsUpdater } from './hudStats'
 import { createInputHandlers } from './inputHandlers'
 import {
+  AVATAR_SIZE_PER_CAMERA_DISTANCE,
   DEFAULT_CAMERA_DISTANCE_METERS,
   MAX_PIXEL_RATIO,
   MIN_DISTANCE_EDGE_MULTIPLE,
@@ -25,16 +27,17 @@ import {
 
 /**
  * 走動視角的主場景。這個檔案只負責**組裝**：建立 THREE 的 scene/camera/renderer，
- * 依序建構各個子系統（cameraRig／patchManager／planetBase／playerMovement／inputHandlers／
+ * 依序建構各個子系統（cameraRig／patchManager／planetBase／playerController／playerAvatar／inputHandlers／
  * hudStats），把它們串起來跑 render loop，掛載/卸載時建立與釋放資源。
  *
  * 各子系統實際的邏輯都在 `src/scene/*.ts`：
- *   - cameraRig.ts     鏡頭定位、面向朝上的俯視角、轉向動畫
- *   - patchManager.ts  地塊資料、合併mesh、鄰居外框、時段換色
- *   - planetBase.ts    星球本體（填縫用的球體＋遠景貼圖＋日夜色調）
- *   - playerMovement.ts 玩家位置、方向鍵對應、移動與伺服器驗證
- *   - hudStats.ts      每幀算給HUD看的鏡頭數字（指北針角度/傾斜/距離/高度/縮放%）
- *   - inputHandlers.ts 鍵盤與滑鼠點擊，翻譯成上面幾個子系統的呼叫
+ *   - cameraRig.ts        追尾鏡頭：跟在玩家後上方、滾輪縮放、滑鼠拖曳環顧／轉身
+ *   - patchManager.ts     地塊資料、合併mesh、所在格外框、時段換色
+ *   - planetBase.ts       星球本體（填縫用的球體＋遠景貼圖＋日夜色調）
+ *   - playerController.ts 連續移動：位置、面向、速度、跨格偵測與伺服器驗證
+ *   - playerAvatar.ts     角色模型（目前是指向前方的圓錐）
+ *   - hudStats.ts         每幀算給HUD看的鏡頭數字（指北針角度/傾斜/距離/高度/縮放%）
+ *   - inputHandlers.ts    鍵盤按住／放開，翻譯成 playerController 的呼叫
  *
  * 這裡刻意保留這個順序性的組裝流程、不再拆更細——子系統之間有些初始化順序是真的有依賴
  * （例如 cameraRig 的縮放範圍必須在 patchManager 載入初始patch「之後」、玩家第一次
@@ -53,11 +56,11 @@ let animationHandle = 0
 let resizeObserver: ResizeObserver | null = null
 let realtimeTimer: ReturnType<typeof setInterval> | null = null
 let keydownHandler: ((event: KeyboardEvent) => void) | null = null
-let clickHandler: ((event: MouseEvent) => void) | null = null
+let keyupHandler: ((event: KeyboardEvent) => void) | null = null
+let blurHandler: (() => void) | null = null
 let stopResetViewWatch: (() => void) | null = null
 let stopResetDefaultViewWatch: (() => void) | null = null
 let stopRecolorWatch: (() => void) | null = null
-let stopFacingWatch: (() => void) | null = null
 // 由 onMounted 建立（需要用到那裡的區域變數），onUnmounted 呼叫。
 let disposeScene: (() => void) | null = null
 
@@ -112,13 +115,13 @@ onMounted(async () => {
   )
   scene.add(planetBase.mesh)
 
+  // 右鍵拖曳轉身要呼叫 controller，但 controller 晚一點才建好——用閉包延後解析
+  let turnByDrag: (deltaDeg: number) => void = () => {}
   const cameraRig = createCameraRig(
     camera,
     renderer.domElement,
-    meshOptions,
-    edgeLengthScene,
-    sceneToMeters,
-    gameState,
+    DEFAULT_CAMERA_DISTANCE_METERS / sceneToMeters,
+    (deltaDeg) => turnByDrag(deltaDeg),
   )
   const patchManager = createPatchManager(
     scene,
@@ -127,22 +130,31 @@ onMounted(async () => {
     terrainStyleStore,
     () => renderer === null,
   )
-  const movement = createPlayerMovement(gameState, cameraRig, patchManager, (message) => {
-    moveWarning.value = message
-  })
-  const inputHandlers = createInputHandlers(
+  const controller = createPlayerController(
     gameState,
-    keyBindings,
-    movement,
     patchManager,
-    camera,
-    () => renderer,
+    planet.radiusMeters,
+    meshOptions,
+    planet.tileEdgeLengthMeters,
+    (message) => {
+      moveWarning.value = message
+    },
   )
+  turnByDrag = (deltaDeg) => controller.turnBy(deltaDeg)
 
+  const avatar = createPlayerAvatar()
+  avatar.object.visible = false // 玩家被放到某一格之前不顯示
+  scene.add(avatar.object)
+
+  const inputHandlers = createInputHandlers(gameState, keyBindings, controller)
   keydownHandler = inputHandlers.keydownHandler
+  keyupHandler = inputHandlers.keyupHandler
+  blurHandler = inputHandlers.blurHandler
   window.addEventListener('keydown', keydownHandler)
-  clickHandler = inputHandlers.clickHandler
-  renderer.domElement.addEventListener('click', clickHandler)
+  window.addEventListener('keyup', keyupHandler)
+  window.addEventListener('blur', blurHandler)
+
+  let playerPlaced = false
 
   try {
     // 有存檔（localStorage）就從上次的位置繼續，沒有才從(0,0)開始。
@@ -169,9 +181,12 @@ onMounted(async () => {
 
       // 初次載入的鏡頭距離直接用實際公尺數換算，不再依patch大小推算——
       // 這樣「預設看起來多遠」是一個看得懂的數字，調整載入量也不會連帶改變預設視角。
-      const initialDistance = DEFAULT_CAMERA_DISTANCE_METERS / sceneToMeters
-      if (startTile)
-        movement.setPlayerTile(startTile, { recenter: true, distance: initialDistance })
+      cameraRig.setDistance(DEFAULT_CAMERA_DISTANCE_METERS / sceneToMeters)
+      if (startTile) {
+        controller.placeAtTile(startTile)
+        avatar.object.visible = true
+        playerPlaced = true
+      }
     }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '載入地圖資料失敗'
@@ -191,6 +206,7 @@ onMounted(async () => {
     renderer.setSize(width, height)
   }
   let lastSunTimeMs = Number.NaN // NaN 保證第一幀一定會算一次
+  let lastFrameAt = performance.now()
   const sunLightDistance = RENDER_RADIUS * 20
   const animate = () => {
     animationHandle = requestAnimationFrame(animate)
@@ -207,10 +223,20 @@ onMounted(async () => {
       syncRendererSize(container.clientWidth, container.clientHeight)
     }
 
-    cameraRig.controls.update()
+    const now = performance.now()
+    const dt = (now - lastFrameAt) / 1000
+    lastFrameAt = now
 
-    // 轉向動畫：逐幀把顯示角度從起點內插到終點，中間角度由 cameraRig 內部重新定位鏡頭。
-    cameraRig.tickFacingAnimation()
+    // 玩家先動，鏡頭與角色再跟上——順序反過來的話鏡頭永遠落後一幀，移動時畫面會抖。
+    if (playerPlaced) {
+      controller.tick(dt)
+      cameraRig.update(controller.focusPoint, controller.forward, controller.isMoving, dt)
+      avatar.update(
+        controller.focusPoint,
+        controller.forward,
+        cameraRig.distance * AVATAR_SIZE_PER_CAMERA_DISTANCE,
+      )
+    }
 
     // 時間變動只立旗標，真正重新上色在這裡做，確保一幀最多做一次。遠景貼圖的色調要跟著一起變，
     // 否則載入範圍邊界會有亮度落差——兩件事一定同時發生，所以用回傳值串起來，不各自判斷一次旗標。
@@ -228,15 +254,19 @@ onMounted(async () => {
       sunLight.position.copy(sunPosition)
     }
 
-    hudStats.update(camera, cameraRig.controls, sceneToMeters)
+    hudStats.update(camera, cameraRig, sceneToMeters)
 
     renderer!.render(scene, camera)
   }
   animate()
 
+  // 指北針點擊：轉成面向正北、環顧回正（畫面上方＝正北）
   stopResetViewWatch = watch(
     () => gameState.resetViewSignal,
-    () => cameraRig.resetView(),
+    () => {
+      controller.faceNorth()
+      cameraRig.resetView()
+    },
   )
 
   stopResetDefaultViewWatch = watch(
@@ -249,31 +279,13 @@ onMounted(async () => {
     () => patchManager.markColorsDirty(),
   )
 
-  // 轉向：面向一變，鏡頭重新定向成「面向朝上」，六個移動插槽也要跟著重算——
-  // 兩件事一定要一起做，只做一半就會變成「畫面轉了但按右還是往原本的右走」。
-  // 統一由這個 watch 處理（而不是在 keydown 裡直接做），這樣不論面向是被鍵盤、UI按鈕
-  // 還是之後任何來源改動，行為都一致。
-  //
-  // 鏡頭本身不在這裡瞬間轉過去——cameraRig.beginFacingTurn 只是設定動畫的起點/終點角度，
-  // 實際內插由 animate() 逐幀呼叫 tickFacingAnimation 處理，這樣轉向才會平滑過渡而不是一下子
-  // 跳到新角度。方向插槽（哪一格是「右」）則立刻重算，不等動畫播完：操作邏輯要立即反應，
-  // 鏡頭轉不轉完是純視覺的事，兩者刻意分開處理。
-  stopFacingWatch = watch(
-    () => gameState.facingDeg,
-    () => {
-      const tile = gameState.currentTile
-      if (!tile) return
-      cameraRig.beginFacingTurn()
-      movement.rebuildNeighborKeys(tile)
-    },
-  )
-
   // 場景資源的釋放邏輯必須在這裡建立：scene/cameraRig/patchManager/planetBase 等都是 onMounted
   // 閉包裡的區域變數，onUnmounted 根本拿不到（原本就是因為這樣才漏掉沒釋放）。
   disposeScene = () => {
     patchManager.dispose()
     planetBase.dispose()
     cameraRig.dispose()
+    avatar.dispose()
 
     // renderer.dispose() 只釋放 Three.js 自己的資源，不會歸還 WebGL context——
     // 瀏覽器每個分頁的 context 數量有上限（約16個），而「走動視角↔星球總覽」是用 v-if 整個換掉元件，
@@ -313,12 +325,12 @@ onUnmounted(() => {
   cancelAnimationFrame(animationHandle)
   resizeObserver?.disconnect()
   if (keydownHandler) window.removeEventListener('keydown', keydownHandler)
-  if (clickHandler) renderer?.domElement.removeEventListener('click', clickHandler)
+  if (keyupHandler) window.removeEventListener('keyup', keyupHandler)
+  if (blurHandler) window.removeEventListener('blur', blurHandler)
   if (realtimeTimer) clearInterval(realtimeTimer)
   stopResetViewWatch?.()
   stopResetDefaultViewWatch?.()
   stopRecolorWatch?.()
-  stopFacingWatch?.()
   disposeScene?.()
   disposeScene = null
   void stopMovementConnection()

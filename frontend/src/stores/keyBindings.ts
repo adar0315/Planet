@@ -1,57 +1,83 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
-import { MOVEMENT_SLOT_ORDER, type MovementSlot } from '@/map/bearing'
+import { ref } from 'vue'
 
 /**
- * 可自訂按鍵的動作。六個移動插槽用 `move` 前綴，跟 bearing.ts 的插槽名一一對應
- * （`moveUpLeft` ↔ `upLeft`），這樣新增/改名插槽時型別會直接抓到不一致。
+ * 可自訂按鍵的動作。
+ *
+ * 2026-10-16 從「六個方向插槽跳格」改成連續移動：前進／後退／左右橫移是**按住**生效的，
+ * 轉向也是按住以固定角速度轉（見 scene/playerController.ts）。
+ * 名稱一律是**相對面向**的動作，不是字母、也不是地理方位（CLAUDE.md「移動方向是相對面向的」）。
+ *
+ * 跑步用 Shift，不在這張表裡：這裡只接受單一字元的按鍵（見 isBindableKey），
+ * 而 Shift 是修飾鍵。按住 Shift 時字母鍵的 event.key 會變成大寫——actionFor 本來就不分大小寫，
+ * 所以「Shift＋W」自然就是「跑步＋前進」。
  */
-export type BindableAction = `move${Capitalize<MovementSlot>}` | 'stay' | 'turnLeft' | 'turnRight'
+export type BindableAction =
+  | 'moveForward'
+  | 'moveBack'
+  | 'strafeLeft'
+  | 'strafeRight'
+  | 'turnLeft'
+  | 'turnRight'
+  | 'wait'
 
-/** 由插槽名推出對應的動作名，避免兩邊各寫一份字串對照表而漂移。 */
-export function actionForSlot(slot: MovementSlot): BindableAction {
-  return `move${slot.charAt(0).toUpperCase()}${slot.slice(1)}` as BindableAction
-}
-
-/** actionForSlot 的反向轉換。型別上只接受六個移動動作，不會誤傳 stay/turnLeft 進來。 */
-export function slotForAction(action: `move${Capitalize<MovementSlot>}`): MovementSlot {
-  const rest = action.slice('move'.length)
-  return `${rest.charAt(0).toLowerCase()}${rest.slice(1)}` as MovementSlot
-}
-
-/** 面板上的顯示順序與名稱。順序刻意照鍵盤排列由上而下，不是照字母。 */
+/** 面板上的顯示順序與名稱。 */
 export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
-  { action: 'moveUpLeft', label: '移動：左上' },
-  { action: 'moveUpRight', label: '移動：右上' },
-  { action: 'moveLeft', label: '移動：左' },
-  { action: 'moveRight', label: '移動：右' },
-  { action: 'moveDownLeft', label: '移動：左下' },
-  { action: 'moveDownRight', label: '移動：右下' },
-  { action: 'stay', label: '原地不動' },
-  { action: 'turnLeft', label: '左轉 60°' },
-  { action: 'turnRight', label: '右轉 60°' },
+  { action: 'moveForward', label: '前進' },
+  { action: 'moveBack', label: '後退' },
+  { action: 'strafeLeft', label: '向左橫移' },
+  { action: 'strafeRight', label: '向右橫移' },
+  { action: 'turnLeft', label: '左轉' },
+  { action: 'turnRight', label: '右轉' },
+  { action: 'wait', label: '原地等待' },
 ]
 
 /**
- * 預設按鍵。移動的六鍵沿用原本的配置（形狀對應鍵盤上的相對位置）：
- *   W(左上) E(右上)
- * A(左) S(原地) D(右)
- *   Z(左下) X(右下)
- * 轉向用 `,` `.`——它們在鍵盤上剛好是左右相鄰的一對，而且不佔用字母區。
+ * 預設按鍵：動作遊戲的慣例配置。
+ *
+ *   Q(左轉) W(前進) E(右轉)
+ *   A(左移) S(後退) D(右移)
+ *   Z(原地等待)
+ *
+ * 轉向也可以按住滑鼠右鍵拖曳（見 cameraRig.ts）。
  */
 export const DEFAULT_BINDINGS: Readonly<Record<BindableAction, string>> = Object.freeze({
-  moveUpLeft: 'w',
-  moveUpRight: 'e',
-  moveRight: 'd',
-  moveDownRight: 'x',
-  moveDownLeft: 'z',
-  moveLeft: 'a',
-  stay: 's',
-  turnLeft: ',',
-  turnRight: '.',
+  moveForward: 'w',
+  moveBack: 's',
+  strafeLeft: 'a',
+  strafeRight: 'd',
+  turnLeft: 'q',
+  turnRight: 'e',
+  wait: 'z',
 })
 
-const STORAGE_KEY = 'planet.keyBindings.v1'
+/** 這些動作是「按住期間持續生效」的，需要 keyup 才知道何時停。wait 是按一下就做一次。 */
+export const HELD_ACTIONS: ReadonlySet<BindableAction> = new Set<BindableAction>([
+  'moveForward',
+  'moveBack',
+  'strafeLeft',
+  'strafeRight',
+  'turnLeft',
+  'turnRight',
+])
+
+/**
+ * v2：動作集整個換掉（六個方向插槽 → 前後左右＋轉向）。
+ * v1 的配置大部分已經沒有意義，只把**語意沒變**的帶過來（見 loadPersisted）。
+ */
+const STORAGE_KEY = 'planet.keyBindings.v2'
+const LEGACY_STORAGE_KEY_V1 = 'planet.keyBindings.v1'
+
+/**
+ * v1 → v2 動作對照：只列語意沒變的。六個方向插槽沒有對應——跳格的「左上」在連續移動裡不存在。
+ *
+ * **舊的轉向鍵刻意不帶過來**：v1 的轉向是「按一下轉 60°」，v2 是「按住持續轉」，
+ * 而 v1 預設的 `,` `.` 是給前者挑的位置（不佔字母區）；連續轉向要跟 WASD 放在一起才按得順手。
+ * 帶過來的話，沒改過設定的人會拿到 `,` `.` 而不是新的 Q/E。
+ */
+const V1_TO_V2: Readonly<Record<string, BindableAction>> = {
+  stay: 'wait',
+}
 
 /**
  * 只接受單一字元的按鍵（字母、數字、標點）。
@@ -69,22 +95,61 @@ export function displayKey(key: string): string {
   return key.toUpperCase()
 }
 
-function loadPersisted(): Partial<Record<BindableAction, string>> {
+function readJson(key: string): Record<string, unknown> | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const result: Partial<Record<BindableAction, string>> = {}
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+  } catch {
+    return null // localStorage 不可用（無痕模式等）或資料壞掉
+  }
+}
+
+/**
+ * 從預設值出發，依序套用 overrides；遇到衝突一律互換，維持「每個動作都有鍵、每個鍵只對一個動作」。
+ * 給讀存檔與 v1 遷移共用——兩者都可能帶進跟預設值撞鍵的設定。
+ */
+function applyOverrides(
+  overrides: Iterable<[BindableAction, string]>,
+): Record<BindableAction, string> {
+  const result: Record<BindableAction, string> = { ...DEFAULT_BINDINGS }
+  for (const [action, key] of overrides) {
+    if (!isBindableKey(key)) continue
+    const normalized = key.toLowerCase()
+    const conflicting = (Object.keys(result) as BindableAction[]).find(
+      (other) => other !== action && result[other] === normalized,
+    )
+    if (conflicting) result[conflicting] = result[action]
+    result[action] = normalized
+  }
+  return result
+}
+
+function loadPersisted(): Record<BindableAction, string> {
+  const current = readJson(STORAGE_KEY)
+  if (current) {
     // 逐欄位驗證而不是整包信任：localStorage 是使用者可以直接編輯的，
     // 壞掉的值（多字元、非字串）混進來會變成「某個動作永遠按不到」這種難查的狀況。
+    const overrides: [BindableAction, string][] = []
     for (const action of Object.keys(DEFAULT_BINDINGS) as BindableAction[]) {
-      const value = parsed[action]
-      if (typeof value === 'string' && isBindableKey(value)) result[action] = value.toLowerCase()
+      const value = current[action]
+      if (typeof value === 'string') overrides.push([action, value])
     }
-    return result
-  } catch {
-    return {} // localStorage不可用（無痕模式等）或資料壞掉，就用預設值
+    return applyOverrides(overrides)
   }
+
+  const legacy = readJson(LEGACY_STORAGE_KEY_V1)
+  if (legacy) {
+    const overrides: [BindableAction, string][] = []
+    for (const [oldAction, newAction] of Object.entries(V1_TO_V2)) {
+      const value = legacy[oldAction]
+      if (typeof value === 'string') overrides.push([newAction, value])
+    }
+    return applyOverrides(overrides)
+  }
+
+  return { ...DEFAULT_BINDINGS }
 }
 
 /**
@@ -94,7 +159,7 @@ function loadPersisted(): Partial<Record<BindableAction, string>> {
  * 玩家得自己發現並補綁；互換則永遠維持「每個動作都有鍵、每個鍵只對一個動作」。
  */
 export const useKeyBindingsStore = defineStore('keyBindings', () => {
-  const bindings = ref<Record<BindableAction, string>>({ ...DEFAULT_BINDINGS, ...loadPersisted() })
+  const bindings = ref<Record<BindableAction, string>>(loadPersisted())
 
   /**
    * 正在等待玩家按下要綁定的鍵。設定面板開著等待輸入時，PlanetScene 的全域移動監聽必須整個停手，
@@ -115,17 +180,11 @@ export const useKeyBindingsStore = defineStore('keyBindings', () => {
     }
   }
 
-  /** key（小寫）→ 動作 的反查表。每幀不會用到，但 keydown 每次都要查，所以做成 computed 快取。 */
-  const actionByKey = computed(() => {
-    const map = new Map<string, BindableAction>()
-    for (const [action, key] of Object.entries(bindings.value) as [BindableAction, string][]) {
-      map.set(key, action)
-    }
-    return map
-  })
-
   function actionFor(key: string): BindableAction | undefined {
-    return actionByKey.value.get(key.toLowerCase())
+    const normalized = key.toLowerCase()
+    return (Object.keys(bindings.value) as BindableAction[]).find(
+      (action) => bindings.value[action] === normalized,
+    )
   }
 
   function keyFor(action: BindableAction): string {
@@ -155,12 +214,5 @@ export const useKeyBindingsStore = defineStore('keyBindings', () => {
     persist()
   }
 
-  /** 六個移動插槽對應的按鍵，給資訊欄的九宮格顯示用。 */
-  const movementKeys = computed(() => {
-    const result = {} as Record<MovementSlot, string>
-    for (const slot of MOVEMENT_SLOT_ORDER) result[slot] = bindings.value[actionForSlot(slot)]
-    return result
-  })
-
-  return { bindings, isCapturing, actionFor, keyFor, setBinding, resetToDefaults, movementKeys }
+  return { bindings, isCapturing, actionFor, keyFor, setBinding, resetToDefaults }
 })
