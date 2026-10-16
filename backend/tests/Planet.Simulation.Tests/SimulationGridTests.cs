@@ -15,7 +15,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class SimulationGridTests
 {
-    private const double TestRadiusMeters = 1_852_259.92; // 跟正式星球同一個半徑
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters; // 跟正式星球同一個半徑
 
     [Theory]
     [InlineData(4)]

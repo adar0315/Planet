@@ -10,7 +10,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class SmallIslandCleanupTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     /// <summary>
     /// 粗網格測試用的面積門檻（平方公里）。

@@ -134,9 +134,8 @@ public sealed class PlateSet
     /// 板塊**不能從種子重新生成**：歐拉極與角速度每步都被 <see cref="PlateDynamics"/>
     /// 依力矩平衡改寫，種子點也一直在轉。所以要照實存下來。
     ///
-    /// <c>_assignMargin</c> 與 <c>_driftAngleSinceFullScan</c> 刻意不存——
-    /// 那兩個是增量重新分配的快取，讀回來時歸零就好，下一次 <see cref="Reassign"/>
-    /// 會自己做一次全掃重建基準。少存兩個欄位換「不可能因為快取沒對上而錯得很難查」。
+    /// 重新分配的累積狀態（種子漂移量、上次全掃的勝負差與之後的漂移角）也要存。
+    /// 版本 1 以為那些是「歸零也無妨的快取」，結果讀檔續跑第 2 步就分岔，見 <see cref="SimulationSnapshot"/>。
     /// </summary>
     /// <param name="writer">目標。</param>
     internal void WriteTo(BinaryWriter writer)
@@ -162,6 +161,14 @@ public sealed class PlateSet
         SimulationSnapshot.WriteArray(writer, _seedZ);
         SimulationSnapshot.WriteArray(writer, _seedPlate);
         SimulationSnapshot.WriteArray(writer, _seedBias);
+
+        // 這三個是「什麼時候重新分配、怎麼分配」的累積狀態，跟板塊本身一樣是狀態。
+        // _seedDriftMeters 漏存的症狀是讀檔續跑**第 1 步完全相同、第 2 步分岔**：
+        // 板塊歸屬只在種子累積漂移超過 0.25 格距時才重算，歸零的那一顆會晚幾步才重算（2026-10-16）。
+        writer.Write(_seedDriftMeters);
+        writer.Write(_driftAngleSinceFullScan);
+        writer.Write(_assignMargin is not null);
+        if (_assignMargin is not null) SimulationSnapshot.WriteArray(writer, _assignMargin);
     }
 
     /// <summary>從存檔讀回一組板塊配置。順序見 <see cref="WriteTo"/>。</summary>
@@ -197,8 +204,21 @@ public sealed class PlateSet
         SimulationSnapshot.ReadArray(reader, seedPlate);
         SimulationSnapshot.ReadArray(reader, seedBias);
 
-        // _assignMargin 留 null、漂移歸零：下一次 Reassign 會自己全掃重建基準
-        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate, seedBias);
+        var seedDrift = reader.ReadDouble();
+        var drift = reader.ReadDouble();
+        float[]? margin = null;
+        if (reader.ReadBoolean())
+        {
+            margin = new float[cellCount];
+            SimulationSnapshot.ReadArray(reader, margin);
+        }
+
+        return new PlateSet(plates, plateIdByCell, seedX, seedY, seedZ, seedPlate, seedBias)
+        {
+            _assignMargin = margin,
+            _driftAngleSinceFullScan = drift,
+            _seedDriftMeters = seedDrift,
+        };
     }
 
     /// <summary>

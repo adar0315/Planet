@@ -12,7 +12,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class ClimateTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     private static SimulationGrid CreateGrid() => SimulationGrid.Build(TestRadiusMeters, 24);
 

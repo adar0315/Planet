@@ -423,14 +423,13 @@ public sealed class SimulationEngine
         writer.Write(_totalWaterVolume);
         writer.Write(_yearsSinceClimateSolve);
         writer.Write(_yearsSinceBreachCheck);
+        writer.Write(_plumes.RandomDraws);
+        _tectonics.WriteTo(writer);
     }
 
     /// <summary>
-    /// 把純量、板塊與熱柱讀回引擎，並**從格子狀態重建標記**。
-    ///
-    /// 標記不存在存檔裡（見 <see cref="SimulationSnapshot"/> 的說明），所以這裡用
-    /// <c>PlateTectonics.Reset</c> 重建：每格一個位於中心的標記，屬性取自格子。
-    /// 地形、板塊、水完全一致，但次格尺度的標記分布丟失，**續跑會逐漸分岔**。
+    /// 把純量、板塊、熱柱與標記讀回引擎。讀回之後續跑要跟沒中斷的執行位元相同
+    /// （<c>SimulationSnapshotTests.RoundTrip_ResumeIsBitIdenticalToUninterruptedRun</c>）。
     /// </summary>
     /// <param name="reader">來源。</param>
     /// <param name="plates">已經讀好的板塊配置。</param>
@@ -440,6 +439,7 @@ public sealed class SimulationEngine
         _totalWaterVolume = reader.ReadDouble();
         _yearsSinceClimateSolve = reader.ReadDouble();
         _yearsSinceBreachCheck = reader.ReadDouble();
+        var plumeDraws = reader.ReadInt64();
 
         Plates = plates;
 
@@ -448,9 +448,10 @@ public sealed class SimulationEngine
         {
             _plumes.Plumes[i] = plumes[i];
         }
+        _plumes.RestoreRandomState(plumeDraws);
 
         _tectonics = new PlateTectonics(Grid, Plates.Plates.Length);
-        _tectonics.Reset(Grid, State, Plates);
+        _tectonics.ReadFrom(reader);
 
         // 地表高度的快取要跟著更新，否則下一次解海平面會用到讀檔前的地形
         Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));

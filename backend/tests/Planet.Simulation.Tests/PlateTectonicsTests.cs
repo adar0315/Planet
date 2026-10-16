@@ -12,7 +12,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class PlateTectonicsTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     /// <summary>測試用的小網格。n=24 約5,762格，夠跑出板塊行為又不會讓測試太慢。</summary>
     private static SimulationEngine CreateEngine(int seed = 42) =>

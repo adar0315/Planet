@@ -11,7 +11,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class DensePlateTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     private static SimulationGrid CreateGrid() => SimulationGrid.Build(TestRadiusMeters, 24);
 
@@ -124,9 +124,21 @@ public class DensePlateTests
             $"重板塊上 {dense.Length} 格都沒有年輕地殼——新生地殼沒有繼承密度異常，" +
             "重板塊正在被普通密度的新洋殼稀釋掉");
 
-        var anomalous = dense.Count(c => engine.State.CrustDensity[c] > Isostasy.OceanicCrustDensity);
-        Assert.True(anomalous > dense.Length * 0.5,
-            $"重板塊 {dense.Length} 格裡只有 {anomalous} 格的密度高於一般洋殼——密度異常沒有跟著走");
+        // **只看年輕的洋殼，不看整片範圍**（2026-10-16 改）。
+        //
+        // 原本斷言「重板塊範圍內過半的格子密度異常」。測試改用權威半徑（差 4.3 毫米，見 TestPlanet）
+        // 之後從 59.9% 掉到 49.3% 而失敗——但繼承沒壞。量下去發現那片範圍裡**七成是漂進來的大陸殼**
+        // （372 / 523 格）：板塊範圍是 Voronoi 幾何、會掃過別的地殼，所以整片範圍的比例反映的是
+        // 「有多少大陸剛好漂到這裡」，換一顆星球就變。年輕洋殼的比例則兩顆星球都是 81~83%。
+        // 繼承壞掉的話新生洋殼全是普通密度，這個比例會趨近 0，所以 60% 的門檻有充足的分界。
+        var youngOceanic = dense
+            .Where(c => engine.State.CrustAge[c] < 20f && engine.State.Crust[c] == CrustType.Oceanic)
+            .ToArray();
+        var youngAnomalous = youngOceanic.Count(c => engine.State.CrustDensity[c] > Isostasy.OceanicCrustDensity);
+        Assert.True(youngOceanic.Length > 0, "重板塊上沒有年輕的洋殼可以檢查");
+        Assert.True(youngAnomalous > youngOceanic.Length * 0.6,
+            $"重板塊上 {youngOceanic.Length} 格年輕洋殼裡只有 {youngAnomalous} 格的密度高於一般洋殼——" +
+            "新生地殼沒有繼承密度異常");
     }
 
     /// <summary>密度高就要沉得更低，這是「更深的海盆」的來源。同厚度、同年齡下直接比高度。</summary>

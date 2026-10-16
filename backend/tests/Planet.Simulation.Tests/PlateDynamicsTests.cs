@@ -8,7 +8,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class PlateDynamicsTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     private static SimulationEngine CreateEngine(int seed = 42) =>
         new(SimulationGrid.Build(TestRadiusMeters, 24), seed);

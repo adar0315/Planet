@@ -21,6 +21,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Planet.Simulation\Planet.Simulation.csproj" />
     <ProjectReference Include="..\..\src\Planet.Domain\Planet.Domain.csproj" />
+    <!-- 測試的星球半徑要向 GoldbergPlanetGenerator 要，不能寫死（見 TestPlanet.cs） -->
+    <ProjectReference Include="..\..\src\Planet.Generation\Planet.Generation.csproj" />
   </ItemGroup>
 
 </Project>

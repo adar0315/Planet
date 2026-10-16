@@ -12,7 +12,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class PlateAssignmentTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     [Fact]
     public void Advance_IncrementalAssignmentMatchesFullScan()

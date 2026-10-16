@@ -1028,6 +1028,81 @@ public sealed class PlateTectonics
     private int MarkerAt(int cell, int index) => _markersByCell[_cellMarkerStart[cell] + index];
 
     /// <summary>
+    /// 把標記與跨步驟保留的狀態寫進存檔（見 <see cref="SimulationSnapshot"/>）。
+    ///
+    /// **為什麼標記一定要存**：一開始的存檔版本只存格子、讀回時從格子重建標記（每格一個、放在格心），
+    /// 以為「地形都一樣，差別只在次格尺度」。實測讀回續跑**第 1 步完全相同、第 2 步就有 9 個欄位分歧**——
+    /// 標記約每兩步重新取樣到格子上一次，一取樣就露餡。即時觀看時服務重啟要接得回去，
+    /// 接回去的必須是同一顆星球，所以要存完整狀態。
+    ///
+    /// 只存跨步驟會被讀到的東西。每步開頭就重算的暫存（聚合速率、線段、造山帶…）不存——
+    /// <c>SimulationSnapshotTests.RoundTrip_ResumeIsBitIdenticalToUninterruptedRun</c> 會抓到漏存的。
+    /// 陣列容量由網格決定，讀回的實例容量一樣，所以整個陣列照存，不必另記長度。
+    /// </summary>
+    /// <param name="writer">目標。</param>
+    internal void WriteTo(BinaryWriter writer)
+    {
+        writer.Write(_markerCount);
+        writer.Write(_driftSinceRasterMeters);
+        writer.Write(_myrSinceLastRaster);
+
+        SimulationSnapshot.WriteArray(writer, _markerX);
+        SimulationSnapshot.WriteArray(writer, _markerY);
+        SimulationSnapshot.WriteArray(writer, _markerZ);
+        SimulationSnapshot.WriteArray(writer, _markerThickness);
+        SimulationSnapshot.WriteArray(writer, _markerAge);
+        SimulationSnapshot.WriteArray(writer, _markerDensity);
+        SimulationSnapshot.WriteArray(writer, _markerOrganic);
+        SimulationSnapshot.WriteArray(writer, _markerCrust);
+        SimulationSnapshot.WriteArray(writer, _markerOceanicOnly);
+        SimulationSnapshot.WriteArray(writer, _markerPlate);
+        SimulationSnapshot.WriteArray(writer, _markerAlive);
+        SimulationSnapshot.WriteArray(writer, _markerTarget);
+        SimulationSnapshot.WriteArray(writer, _markerCell);
+
+        SimulationSnapshot.WriteArray(writer, _cellMarkerStart);
+        SimulationSnapshot.WriteArray(writer, _cellMarkerCount);
+        SimulationSnapshot.WriteArray(writer, _markersByCell);
+        SimulationSnapshot.WriteArray(writer, _sampledThickness);
+        SimulationSnapshot.WriteArray(writer, _sampledAge);
+        SimulationSnapshot.WriteArray(writer, _sampledDensity);
+        SimulationSnapshot.WriteArray(writer, _ownerMarker);
+        SimulationSnapshot.WriteArray(writer, _spareAtCell);
+    }
+
+    /// <summary>從存檔讀回標記與跨步驟狀態。順序見 <see cref="WriteTo"/>。</summary>
+    /// <param name="reader">來源。</param>
+    internal void ReadFrom(BinaryReader reader)
+    {
+        _markerCount = reader.ReadInt32();
+        _driftSinceRasterMeters = reader.ReadDouble();
+        _myrSinceLastRaster = reader.ReadDouble();
+
+        SimulationSnapshot.ReadArray(reader, _markerX);
+        SimulationSnapshot.ReadArray(reader, _markerY);
+        SimulationSnapshot.ReadArray(reader, _markerZ);
+        SimulationSnapshot.ReadArray(reader, _markerThickness);
+        SimulationSnapshot.ReadArray(reader, _markerAge);
+        SimulationSnapshot.ReadArray(reader, _markerDensity);
+        SimulationSnapshot.ReadArray(reader, _markerOrganic);
+        SimulationSnapshot.ReadArray(reader, _markerCrust);
+        SimulationSnapshot.ReadArray(reader, _markerOceanicOnly);
+        SimulationSnapshot.ReadArray(reader, _markerPlate);
+        SimulationSnapshot.ReadArray(reader, _markerAlive);
+        SimulationSnapshot.ReadArray(reader, _markerTarget);
+        SimulationSnapshot.ReadArray(reader, _markerCell);
+
+        SimulationSnapshot.ReadArray(reader, _cellMarkerStart);
+        SimulationSnapshot.ReadArray(reader, _cellMarkerCount);
+        SimulationSnapshot.ReadArray(reader, _markersByCell);
+        SimulationSnapshot.ReadArray(reader, _sampledThickness);
+        SimulationSnapshot.ReadArray(reader, _sampledAge);
+        SimulationSnapshot.ReadArray(reader, _sampledDensity);
+        SimulationSnapshot.ReadArray(reader, _ownerMarker);
+        SimulationSnapshot.ReadArray(reader, _spareAtCell);
+    }
+
+    /// <summary>
     /// 地質作用（增生、造山、重力擴展、火山、侵蝕）改的是格子上的值，要寫回標記，
     /// 否則下一次取樣就會用舊的標記內容把這些改動整個蓋掉。
     ///

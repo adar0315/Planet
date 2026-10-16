@@ -72,7 +72,18 @@ public sealed class MantlePlumes
     /// </summary>
     private const double NeighborShare = 0.35;
 
-    private readonly Random _rng;
+    private readonly int _seed;
+    private Random _rng;
+
+    /// <summary>
+    /// 這個亂數產生器到目前為止抽了幾次。
+    ///
+    /// <see cref="Random"/> 的內部狀態不能序列化，但它是決定性的：同一個種子、抽同樣的次數，
+    /// 就回到同一個狀態。存檔只要記下這個數字，讀回時重抽一遍（見 <see cref="RestoreRandomState"/>）。
+    /// 不換成可序列化的演算法，是因為那會改變熱柱的生成序列，等於所有既有的星球都換了一顆。
+    /// 一支熱柱重生只抽 4 次，重播成本可以忽略。
+    /// </summary>
+    internal long RandomDraws { get; private set; }
 
     /// <summary>目前活躍的熱柱。</summary>
     public MantlePlume[] Plumes { get; }
@@ -86,6 +97,7 @@ public sealed class MantlePlumes
     public MantlePlumes(int seed, int plumeCount = DefaultPlumeCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plumeCount);
+        _seed = seed;
         _rng = new Random(seed);
         Plumes = new MantlePlume[plumeCount];
         for (var i = 0; i < plumeCount; i++) Plumes[i] = CreatePlume();
@@ -153,19 +165,34 @@ public sealed class MantlePlumes
         return actuallyAdded;
     }
 
+    private double NextDouble()
+    {
+        RandomDraws++;
+        return _rng.NextDouble();
+    }
+
+    /// <summary>把亂數產生器恢復到「已經抽過 draws 次」的狀態（讀存檔用）。</summary>
+    /// <param name="draws">存檔當時的 <see cref="RandomDraws"/>。</param>
+    internal void RestoreRandomState(long draws)
+    {
+        _rng = new Random(_seed);
+        for (var i = 0L; i < draws; i++) _rng.NextDouble();
+        RandomDraws = draws;
+    }
+
     /// <summary>在球面上隨機生成一支新的熱柱。</summary>
     private MantlePlume CreatePlume()
     {
         // z均勻分布法：直接對經緯度取隨機會讓熱點在極區聚集
-        var z = _rng.NextDouble() * 2.0 - 1.0;
-        var theta = _rng.NextDouble() * 2.0 * Math.PI;
+        var z = NextDouble() * 2.0 - 1.0;
+        var theta = NextDouble() * 2.0 * Math.PI;
         var r = Math.Sqrt(1.0 - z * z);
 
         return new MantlePlume(
             r * Math.Cos(theta),
             r * Math.Sin(theta),
             z,
-            MinStrengthKmPerMyr + _rng.NextDouble() * (MaxStrengthKmPerMyr - MinStrengthKmPerMyr),
-            MinLifeMyr + _rng.NextDouble() * (MaxLifeMyr - MinLifeMyr));
+            MinStrengthKmPerMyr + NextDouble() * (MaxStrengthKmPerMyr - MinStrengthKmPerMyr),
+            MinLifeMyr + NextDouble() * (MaxLifeMyr - MinLifeMyr));
     }
 }

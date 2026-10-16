@@ -10,7 +10,7 @@ namespace Planet.Simulation.Tests;
 /// </summary>
 public class SimulationSnapshotTests
 {
-    private const double TestRadiusMeters = 1_852_259.92;
+    private static readonly double TestRadiusMeters = TestPlanet.RadiusMeters;
 
     private static SimulationGrid BuildGrid() => SimulationGrid.Build(TestRadiusMeters, 24);
 
@@ -67,6 +67,47 @@ public class SimulationSnapshotTests
 
         Assert.Equal(source.Plates.Plates, target.Plates.Plates);
         Assert.Equal(source.Plates.PlateIdByCell, target.Plates.PlateIdByCell);
+    }
+
+    /// <summary>
+    /// **讀回來續跑，要跟沒有中斷過的執行位元相同。**
+    ///
+    /// 這是 v2 規劃 P0 的驗收條件：使用者要即時看著演化，服務一重啟就要能接回去，
+    /// 而接回去之後的星球必須跟沒重啟的那一顆是同一顆——否則「停止條件在第幾步觸發」、
+    /// 「那時候大陸長什麼樣子」都會因為一次重啟而改變。
+    ///
+    /// 失敗時會印出第一個分歧的欄位，指出還有哪一塊狀態沒存進去。
+    /// </summary>
+    [Fact]
+    public void RoundTrip_ResumeIsBitIdenticalToUninterruptedRun()
+    {
+        var grid = BuildGrid();
+        var uninterrupted = new SimulationEngine(grid, 42);
+
+        // 存檔點刻意選不整齊的步數：氣候每 40 步重解、海洋出口每 4 步檢查、板塊歸屬在種子漂移
+        // 超過 0.25 格距時才重算——整數步數可能剛好跟這些週期對齊，藏住「計時器沒存」的問題。
+        // 續跑 300 步則跨過好幾次每一種週期事件。
+        uninterrupted.Step(317);
+
+        using var stream = new MemoryStream();
+        SimulationSnapshot.Write(uninterrupted, stream);
+        stream.Position = 0;
+
+        var resumed = new SimulationEngine(grid, 42);
+        SimulationSnapshot.Restore(resumed, stream);
+
+        for (var step = 1; step <= 300; step++)
+        {
+            uninterrupted.Step(1);
+            resumed.Step(1);
+            var a = StateHash.PerField(uninterrupted);
+            var b = StateHash.PerField(resumed);
+            var diverged = a.Zip(b).Where(pair => pair.First.Hash != pair.Second.Hash)
+                .Select(pair => pair.First.Field).ToArray();
+            Assert.True(
+                diverged.Length == 0,
+                $"讀檔後第 {step} 步開始分歧，欄位：{string.Join("、", diverged)}");
+        }
     }
 
     /// <summary>讀回來之後要能繼續推進，而且不會爆掉或跑出非有限值。</summary>
