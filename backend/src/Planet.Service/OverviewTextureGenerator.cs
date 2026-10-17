@@ -67,11 +67,11 @@ public class OverviewTextureGenerator
         if (_cachedRgba is not null) return _cachedRgba;
 
         var dayColors = await LoadDayColorsAsync(ct);
-        var appliedOptions = await _metadataService.GetAppliedTerrainOptionsAsync(ct);
+        var source = await _metadataService.GetAppliedTerrainSourceAsync(ct);
 
         lock (_lock)
         {
-            _cachedRgba ??= Generate(new TerrainGenerator(appliedOptions), dayColors);
+            _cachedRgba ??= Generate(source, dayColors);
             return _cachedRgba;
         }
     }
@@ -88,11 +88,11 @@ public class OverviewTextureGenerator
     {
         if (_cachedWaterMask is not null) return _cachedWaterMask;
 
-        var appliedOptions = await _metadataService.GetAppliedTerrainOptionsAsync(ct);
+        var source = await _metadataService.GetAppliedTerrainSourceAsync(ct);
 
         lock (_lock)
         {
-            _cachedWaterMask ??= GenerateWaterMask(new TerrainGenerator(appliedOptions));
+            _cachedWaterMask ??= GenerateWaterMask(source);
             return _cachedWaterMask;
         }
     }

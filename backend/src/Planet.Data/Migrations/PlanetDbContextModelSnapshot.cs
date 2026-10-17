@@ -22,6 +22,73 @@ namespace Planet.Data.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("Planet.Domain.PlanetCell", b =>
+                {
+                    b.Property<int>("CellId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Boundary")
+                        .HasColumnType("int");
+
+                    b.Property<float>("CrustAgeMyr")
+                        .HasColumnType("real");
+
+                    b.Property<float>("CrustDensity")
+                        .HasColumnType("real");
+
+                    b.Property<float>("CrustThicknessKm")
+                        .HasColumnType("real");
+
+                    b.Property<int>("CrustType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("HeightCategory")
+                        .HasColumnType("int");
+
+                    b.Property<float>("IceThicknessMeters")
+                        .HasColumnType("real");
+
+                    b.Property<bool>("IsOcean")
+                        .HasColumnType("bit");
+
+                    b.Property<double>("Latitude")
+                        .HasColumnType("float");
+
+                    b.Property<double>("Longitude")
+                        .HasColumnType("float");
+
+                    b.Property<float>("OrganicThicknessMeters")
+                        .HasColumnType("real");
+
+                    b.Property<int>("PlateId")
+                        .HasColumnType("int");
+
+                    b.Property<float>("Precipitation")
+                        .HasColumnType("real");
+
+                    b.Property<float>("SedimentThicknessMeters")
+                        .HasColumnType("real");
+
+                    b.Property<float>("SurfaceElevationMeters")
+                        .HasColumnType("real");
+
+                    b.Property<float>("TemperatureCelsius")
+                        .HasColumnType("real");
+
+                    b.Property<int>("Terrain")
+                        .HasColumnType("int");
+
+                    b.Property<float>("VolcanicActivity")
+                        .HasColumnType("real");
+
+                    b.Property<float>("WaterDepthMeters")
+                        .HasColumnType("real");
+
+                    b.HasKey("CellId");
+
+                    b.ToTable("PlanetCells");
+                });
+
             modelBuilder.Entity("Planet.Domain.PlanetMetadata", b =>
                 {
                     b.Property<int>("Id")
@@ -35,6 +102,23 @@ namespace Planet.Data.Migrations
 
                     b.Property<double>("RadiusMeters")
                         .HasColumnType("float");
+
+                    b.Property<double?>("SimulationElapsedYears")
+                        .HasColumnType("float");
+
+                    b.Property<int?>("SimulationFrequency")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SimulationSnapshotName")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("SimulationStateHash")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<long?>("SimulationStepCount")
+                        .HasColumnType("bigint");
 
                     b.Property<int>("SubdivisionFrequency")
                         .HasColumnType("int");
@@ -300,6 +384,9 @@ namespace Planet.Data.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("Shape")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SourceCellId")
                         .HasColumnType("int");
 
                     b.Property<int>("Terrain")

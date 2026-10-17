@@ -49,4 +49,10 @@ public class Tile
     /// 判斷「是否淹沒在水下」用 ElevationLevel &lt; SeaLevel。
     /// </summary>
     public int SeaLevel { get; set; }
+
+    /// <summary>
+    /// 這格的地形是從哪一個模擬粗格放大來的（<see cref="PlanetCell.CellId"/>）。
+    /// 程序化生成的星球沒有來源，是 null。完整的地質狀態經由這個欄位查 <see cref="PlanetCell"/>。
+    /// </summary>
+    public int? SourceCellId { get; set; }
 }

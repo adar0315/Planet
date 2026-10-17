@@ -20,6 +20,9 @@ public class PlanetDbContext : DbContext
     /// <summary>描述「目前這顆星球實際上是什麼」的單筆記錄，見 <see cref="PlanetMetadata"/>。</summary>
     public DbSet<PlanetMetadata> PlanetMetadata => Set<PlanetMetadata>();
 
+    /// <summary>模擬粗格的完整狀態（地形來自地質模擬時才有資料，見 <see cref="PlanetCell"/>）。</summary>
+    public DbSet<PlanetCell> PlanetCells => Set<PlanetCell>();
+
     /// <summary>設定 Tile／TerrainStyle／PlanetMetadata 的主鍵、索引。</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -46,6 +49,14 @@ public class PlanetDbContext : DbContext
             // 刻意不用 HasData 塞種子資料：這筆記錄描述的是「實際存在的星球」，
             // 全新的空資料庫還沒有星球，先塞一列反而是在宣稱一個不存在的事實。
             // 由 PlanetSeeder／PlanetRegenerationService 在真的生成完之後才寫入。
+            entity.Property(m => m.SimulationSnapshotName).HasMaxLength(64);
+            entity.Property(m => m.SimulationStateHash).HasMaxLength(16);
+        });
+
+        modelBuilder.Entity<PlanetCell>(entity =>
+        {
+            entity.HasKey(c => c.CellId);
+            entity.Property(c => c.CellId).ValueGeneratedNever();
         });
     }
 }

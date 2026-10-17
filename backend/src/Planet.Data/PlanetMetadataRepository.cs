@@ -41,6 +41,11 @@ public class PlanetMetadataRepository : IPlanetMetadataRepository
             existing.TerrainOptionsJson = metadata.TerrainOptionsJson;
             existing.GeneratedAtUtc = metadata.GeneratedAtUtc;
             existing.IsInferred = metadata.IsInferred;
+            existing.SimulationFrequency = metadata.SimulationFrequency;
+            existing.SimulationSnapshotName = metadata.SimulationSnapshotName;
+            existing.SimulationStepCount = metadata.SimulationStepCount;
+            existing.SimulationElapsedYears = metadata.SimulationElapsedYears;
+            existing.SimulationStateHash = metadata.SimulationStateHash;
         }
 
         await _db.SaveChangesAsync(ct);

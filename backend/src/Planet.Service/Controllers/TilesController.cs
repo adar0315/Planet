@@ -63,6 +63,27 @@ public class TilesController : ControllerBase
         return Ok(tile.ToDto());
     }
 
+    /// <summary>
+    /// 查詢指定地塊的完整地質狀態（地殼、板塊、溫度、降水、水深、冰厚…），也就是它放大來源的那個模擬粗格。
+    /// 未來建 3D 場景時的參考資料。
+    /// </summary>
+    /// <param name="tileId">地塊Id。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>來源粗格的完整狀態。</returns>
+    /// <response code="200">來源粗格的完整狀態。</response>
+    /// <response code="404">找不到這個地塊，或它的地形不是從地質模擬放大來的（程序化生成的星球沒有地質狀態）。</response>
+    [HttpGet("{tileId:long}/geology")]
+    [ProducesResponseType<PlanetCell>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PlanetCell>> GetGeology(long tileId, CancellationToken ct)
+    {
+        var tile = await _tileRepository.GetByIdAsync(tileId, ct);
+        if (tile?.SourceCellId is not { } cellId) return NotFound();
+
+        var cell = await _tileRepository.GetPlanetCellAsync(cellId, ct);
+        return cell is null ? NotFound() : Ok(cell);
+    }
+
     /// <summary>查詢指定地塊的所有鄰居（六角形6個、五角形5個）。</summary>
     /// <param name="tileId">地塊Id。</param>
     /// <param name="ct">取消權杖。</param>

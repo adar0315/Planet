@@ -15,7 +15,7 @@ internal sealed class TileDataReader : IDataReader
         nameof(Tile.TileId), nameof(Tile.Shape), nameof(Tile.FaceIndex),
         nameof(Tile.Row), nameof(Tile.Col), nameof(Tile.Latitude),
         nameof(Tile.Longitude), nameof(Tile.Terrain), nameof(Tile.HeightCategory),
-        nameof(Tile.ElevationLevel), nameof(Tile.SeaLevel),
+        nameof(Tile.ElevationLevel), nameof(Tile.SeaLevel), nameof(Tile.SourceCellId),
     ];
 
     private readonly IEnumerator<Tile> _enumerator;
@@ -76,6 +76,7 @@ internal sealed class TileDataReader : IDataReader
             nameof(Tile.HeightCategory) => tile.HeightCategory,
             nameof(Tile.ElevationLevel) => tile.ElevationLevel,
             nameof(Tile.SeaLevel) => tile.SeaLevel,
+            nameof(Tile.SourceCellId) => tile.SourceCellId is { } source ? source : DBNull.Value,
             _ => throw new IndexOutOfRangeException(),
         };
     }
@@ -95,7 +96,7 @@ internal sealed class TileDataReader : IDataReader
     public int GetOrdinal(string name) => Array.IndexOf(ColumnNames, name);
 
     /// <summary>Tile的所有欄位都是非null值型別，永遠回傳false。</summary>
-    public bool IsDBNull(int i) => false;
+    public bool IsDBNull(int i) => GetValue(i) is DBNull;
 
     /// <inheritdoc cref="GetValue" />
     public object this[int i] => GetValue(i);

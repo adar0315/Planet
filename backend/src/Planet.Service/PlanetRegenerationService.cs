@@ -64,6 +64,8 @@ public class PlanetRegenerationService
             {
                 _logger.LogInformation("清空現有地圖資料，準備重新生成...");
                 await tileRepository.ClearAllTilesAsync();
+                // 程序化地形沒有粗格來源，留著舊的會讓「查這格的地質狀態」回傳一顆已經不存在的星球
+                await tileRepository.ClearPlanetCellsAsync();
             }
 
             var generator = new GoldbergPlanetGenerator(GoldbergPlanetGenerator.SubdivisionFrequency, options);

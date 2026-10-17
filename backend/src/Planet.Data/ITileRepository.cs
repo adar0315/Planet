@@ -18,6 +18,33 @@ public interface ITileRepository
     /// <param name="ct">取消權杖。</param>
     Task BulkInsertAsync(IEnumerable<Tile> tiles, Action<long>? onProgress = null, CancellationToken ct = default);
 
+    /// <summary>
+    /// 用地質模擬放大出來的地形**整批替換**所有地塊與粗格記錄。
+    ///
+    /// 先寫進暫存表、建好索引，最後在一個交易裡用改名一次切換——寫入的十幾分鐘裡舊星球照常可以走，
+    /// 中途失敗也不會留下一半新一半舊的地圖（舊表要到切換成功之後才刪）。
+    /// </summary>
+    /// <param name="tiles">新的全部地塊（串流產生）。</param>
+    /// <param name="cells">新的全部粗格記錄。</param>
+    /// <param name="onProgress">選填，地塊寫入進度（累計筆數）。</param>
+    /// <param name="ct">取消權杖。</param>
+    Task ReplaceAllWithSimulationAsync(
+        IEnumerable<Tile> tiles, IReadOnlyList<PlanetCell> cells,
+        Action<long>? onProgress = null, CancellationToken ct = default);
+
+    /// <summary>清空粗格記錄（換回程序化地形時用，否則會留著一份跟地塊對不上的地質狀態）。</summary>
+    /// <param name="ct">取消權杖。</param>
+    Task ClearPlanetCellsAsync(CancellationToken ct = default);
+
+    /// <summary>讀出全部粗格記錄，依 <see cref="PlanetCell.CellId"/> 排序。</summary>
+    /// <param name="ct">取消權杖。</param>
+    Task<IReadOnlyList<PlanetCell>> GetAllPlanetCellsAsync(CancellationToken ct = default);
+
+    /// <summary>查一個粗格的完整狀態，沒有就回傳 null。</summary>
+    /// <param name="cellId">粗格索引。</param>
+    /// <param name="ct">取消權杖。</param>
+    Task<PlanetCell?> GetPlanetCellAsync(int cellId, CancellationToken ct = default);
+
     /// <summary>查詢指定經緯度附近最近的地塊，依距離由近到遠排序。</summary>
     /// <param name="latitude">緯度（度）。</param>
     /// <param name="longitude">經度（度）。</param>

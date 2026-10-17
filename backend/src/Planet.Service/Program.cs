@@ -58,6 +58,7 @@ builder.Services.AddSingleton<TerrainOptionsStore>();
 builder.Services.AddSingleton<PlanetMetadataService>();
 builder.Services.AddSingleton<SimulationService>();
 builder.Services.AddSingleton<PlanetRegenerationService>();
+builder.Services.AddSingleton<PlanetMaterializationService>();
 // 注意：這裡沒有註冊 IPlanetGenerator／ITerrainGenerator 的DI singleton——地形參數現在可以透過
 // RegenerationController在執行期間改變，不能只在服務啟動時建構一次就固定死。需要生成器的地方
 // （PlanetRegenerationService、OverviewTextureGenerator）都是要用的當下才依目前的TerrainOptionsStore

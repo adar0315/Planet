@@ -49,4 +49,23 @@ public class PlanetMetadata
     /// 下次重新生成後就會變成 false。
     /// </summary>
     public bool IsInferred { get; set; }
+
+    /// <summary>
+    /// 地形來自地質模擬時，模擬粗網格的細分頻率；程序化生成的星球是 null。
+    /// **判斷「這顆星球是不是模擬出來的」就看這個欄位**——是的話，總覽貼圖要從
+    /// <see cref="PlanetCell"/> 取樣，不能用 <see cref="TerrainOptionsJson"/> 重算程序化地形。
+    /// </summary>
+    public int? SimulationFrequency { get; set; }
+
+    /// <summary>來源模擬存檔的名稱。</summary>
+    public string? SimulationSnapshotName { get; set; }
+
+    /// <summary>來源模擬跑到第幾步。</summary>
+    public long? SimulationStepCount { get; set; }
+
+    /// <summary>來源模擬經過的年數。</summary>
+    public double? SimulationElapsedYears { get; set; }
+
+    /// <summary>來源模擬狀態的雜湊（同一個存檔放大兩次，雜湊要相同）。</summary>
+    public string? SimulationStateHash { get; set; }
 }

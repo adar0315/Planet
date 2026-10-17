@@ -267,6 +267,16 @@ CORS（`Program.cs` 的 `AddCors`）目前允許兩個來源：`http://localhost
 這類競爭不會拋例外，只會讓「同種子跑出不同的星球」，而且因為執行緒分割在同一台機器上通常固定，
 **失敗位置每次都一樣、看起來完全不像競爭**。守門的測試是 `Step_SameSeedProducesIdenticalEvolution`。
 
+## ⚠️ 地塊的地形可能來自地質模擬（2026-10-17 起，v2 規劃 P1）
+
+`POST /api/admin/materialize?snapshot=…` 把模擬存檔放大成 2,000 萬地塊（`PlanetMaterializationService`）。
+完整狀態在 `PlanetCells`（22.5 萬粗格），地塊用 `Tiles.SourceCellId` 接過去。
+
+- **總覽貼圖要用 `PlanetMetadataService.GetAppliedTerrainSourceAsync()`**，不要自己 `new TerrainGenerator(options)`——
+  模擬放大來的星球用程序化參數去畫，會畫出一顆資料庫裡不存在的星球。判斷依據是 `PlanetMetadata.SimulationFrequency`。
+- **模擬的降水是相對尺度（典型 0~30），不是公釐／年。** 拿地球的門檻去切，陸地會全部變沙漠（第一次試寫就是這樣）。
+- **部署順序：先對 `PlanetDb` 套遷移、再 publish。** 新程式會查 `Tiles.SourceCellId`，順序反了正式站所有地塊查詢都會失敗。
+
 ## ⚠️ 機密與管理端點
 
 連線字串／管理金鑰**不要寫回 `appsettings.json`**（會進版控）。用 user-secrets（開發）或

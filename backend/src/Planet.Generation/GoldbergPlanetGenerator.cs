@@ -71,9 +71,20 @@ public class GoldbergPlanetGenerator : IPlanetGenerator
     /// <param name="subdivisionFrequency">細分頻率n，總格數＝10n²+2（其中12個為五角形）。</param>
     /// <param name="terrainOptions">地形程序化生成的完整參數（種子、大陸形狀、小島數量等）。</param>
     public GoldbergPlanetGenerator(int subdivisionFrequency, TerrainGenerationOptions terrainOptions)
+        : this(subdivisionFrequency, new TerrainGenerator(terrainOptions))
+    {
+    }
+
+    /// <summary>
+    /// 用任意地形來源建立星球生成器。幾何（格子的位置、編號、形狀）跟地形來源無關，
+    /// 所以把地質模擬的結果放大成地塊時，走的是同一套幾何，TileId 與鄰居關係完全不變。
+    /// </summary>
+    /// <param name="subdivisionFrequency">細分頻率n，總格數＝10n²+2（其中12個為五角形）。</param>
+    /// <param name="terrainGenerator">地形來源。</param>
+    public GoldbergPlanetGenerator(int subdivisionFrequency, ITerrainGenerator terrainGenerator)
     {
         _n = subdivisionFrequency;
-        _terrainGenerator = new TerrainGenerator(terrainOptions);
+        _terrainGenerator = terrainGenerator;
         TotalTileCount = 10L * _n * _n + 2;
         var unitCenterDistance = EstimateUnitSphereCenterDistance(_n);
         var targetCenterDistanceMeters = TargetHexagonEdgeLengthMeters * CenterDistanceToEdgeLengthRatio;
@@ -155,6 +166,7 @@ public class GoldbergPlanetGenerator : IPlanetGenerator
                         HeightCategory = terrain.HeightCategory,
                         ElevationLevel = terrain.ElevationLevel,
                         SeaLevel = PlanetSeaLevelLevel,
+                        SourceCellId = terrain.SourceCellId,
                     };
                 }
             }

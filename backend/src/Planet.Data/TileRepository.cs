@@ -37,6 +37,145 @@ public class TileRepository : ITileRepository
     }
 
     /// <inheritdoc />
+    public async Task ReplaceAllWithSimulationAsync(
+        IEnumerable<Tile> tiles, IReadOnlyList<PlanetCell> cells,
+        Action<long>? onProgress = null, CancellationToken ct = default)
+    {
+        var connectionString = _db.Database.GetConnectionString()
+            ?? throw new InvalidOperationException("找不到 PlanetDb 連線字串");
+        var tilesTable = _db.Model.FindEntityType(typeof(Tile))!.GetTableName()!;
+        var cellsTable = _db.Model.FindEntityType(typeof(PlanetCell))!.GetTableName()!;
+
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+
+        async Task Exec(string sql, SqlTransaction? tx = null)
+        {
+            await using var command = new SqlCommand(sql, connection, tx) { CommandTimeout = 0 };
+            await command.ExecuteNonQueryAsync(ct);
+        }
+
+        // 1. 暫存表：照正式表的欄位複製一份空表（SELECT TOP 0 INTO 只帶欄位，不帶索引與限制）。
+        //    叢集主鍵先建：地塊依 TileId 遞增產生，配合排序提示寫入不必再排一次 2,000 萬列。
+        await Exec($"""
+            IF OBJECT_ID('dbo.{tilesTable}_Staging') IS NOT NULL DROP TABLE dbo.[{tilesTable}_Staging];
+            IF OBJECT_ID('dbo.{cellsTable}_Staging') IS NOT NULL DROP TABLE dbo.[{cellsTable}_Staging];
+            SELECT TOP 0 * INTO dbo.[{tilesTable}_Staging] FROM dbo.[{tilesTable}];
+            SELECT TOP 0 * INTO dbo.[{cellsTable}_Staging] FROM dbo.[{cellsTable}];
+            ALTER TABLE dbo.[{tilesTable}_Staging] ADD CONSTRAINT [PK_{tilesTable}_Staging] PRIMARY KEY CLUSTERED (TileId);
+            ALTER TABLE dbo.[{cellsTable}_Staging] ADD CONSTRAINT [PK_{cellsTable}_Staging] PRIMARY KEY CLUSTERED (CellId);
+            """);
+
+        // 2. 寫粗格（22.5 萬列，幾秒）
+        using (var cellCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.TableLock, null)
+        {
+            DestinationTableName = $"dbo.[{cellsTable}_Staging]",
+            BulkCopyTimeout = 0,
+        })
+        {
+            var table = PlanetCellTable(cells);
+            foreach (System.Data.DataColumn column in table.Columns)
+            {
+                cellCopy.ColumnMappings.Add(column.ColumnName, column.ColumnName);
+            }
+            await cellCopy.WriteToServerAsync(table, ct);
+        }
+
+        // 3. 寫地塊（2,000 萬列，主要的時間花在這裡）
+        using (var tileCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.TableLock, null)
+        {
+            DestinationTableName = $"dbo.[{tilesTable}_Staging]",
+            BatchSize = 50_000,
+            BulkCopyTimeout = 0,
+        })
+        {
+            if (onProgress is not null)
+            {
+                tileCopy.NotifyAfter = 50_000;
+                tileCopy.SqlRowsCopied += (_, e) => onProgress(e.RowsCopied);
+            }
+            foreach (var columnName in TileDataReader.ColumnNames)
+            {
+                tileCopy.ColumnMappings.Add(columnName, columnName);
+            }
+            tileCopy.ColumnOrderHints.Add(nameof(Tile.TileId), SortOrder.Ascending);
+
+            using var reader = new TileDataReader(tiles);
+            await tileCopy.WriteToServerAsync(reader, ct);
+        }
+
+        // 4. 次要索引：索引名稱只要在同一張表內唯一，所以直接用正式名稱，切換後不必再改名。
+        //    名稱要跟 EF 的遷移一致（IX_表名_欄位），否則之後的遷移找不到它們。
+        await Exec($"""
+            CREATE UNIQUE INDEX [IX_{tilesTable}_FaceIndex_Row_Col] ON dbo.[{tilesTable}_Staging] (FaceIndex, Row, Col);
+            CREATE INDEX [IX_{tilesTable}_Latitude_Longitude] ON dbo.[{tilesTable}_Staging] (Latitude, Longitude);
+            """);
+
+        // 5. 一次切換。主鍵是結構描述層級的物件，名稱不能重複，所以跟著表一起改名。
+        await using (var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct))
+        {
+            await Exec($"""
+                EXEC sp_rename 'dbo.{tilesTable}', '{tilesTable}_Old';
+                EXEC sp_rename 'dbo.PK_{tilesTable}', 'PK_{tilesTable}_Old', 'OBJECT';
+                EXEC sp_rename 'dbo.{tilesTable}_Staging', '{tilesTable}';
+                EXEC sp_rename 'dbo.PK_{tilesTable}_Staging', 'PK_{tilesTable}', 'OBJECT';
+                EXEC sp_rename 'dbo.{cellsTable}', '{cellsTable}_Old';
+                EXEC sp_rename 'dbo.PK_{cellsTable}', 'PK_{cellsTable}_Old', 'OBJECT';
+                EXEC sp_rename 'dbo.{cellsTable}_Staging', '{cellsTable}';
+                EXEC sp_rename 'dbo.PK_{cellsTable}_Staging', 'PK_{cellsTable}', 'OBJECT';
+                """, tx);
+            await tx.CommitAsync(ct);
+        }
+
+        await Exec($"""
+            DROP TABLE dbo.[{tilesTable}_Old];
+            DROP TABLE dbo.[{cellsTable}_Old];
+            """);
+    }
+
+    /// <summary>把粗格記錄轉成 SqlBulkCopy 吃的表。欄位照 EF 的對應走，不另外手寫一份欄位清單。</summary>
+    private System.Data.DataTable PlanetCellTable(IReadOnlyList<PlanetCell> cells)
+    {
+        var entity = _db.Model.FindEntityType(typeof(PlanetCell))!;
+        var properties = entity.GetProperties().Select(p => (Column: p.GetColumnName(), Info: p.PropertyInfo!)).ToList();
+
+        var table = new System.Data.DataTable();
+        foreach (var (column, info) in properties)
+        {
+            var type = info.PropertyType.IsEnum ? typeof(int) : info.PropertyType;
+            table.Columns.Add(column, type);
+        }
+        foreach (var cell in cells)
+        {
+            var row = table.NewRow();
+            foreach (var (column, info) in properties)
+            {
+                var value = info.GetValue(cell)!;
+                row[column] = info.PropertyType.IsEnum ? Convert.ToInt32(value) : value;
+            }
+            table.Rows.Add(row);
+        }
+        return table;
+    }
+
+    /// <inheritdoc />
+    public async Task ClearPlanetCellsAsync(CancellationToken ct = default)
+    {
+        var tableName = _db.Model.FindEntityType(typeof(PlanetCell))!.GetTableName();
+#pragma warning disable EF1002 // 同 ClearAllTilesAsync：表名來自 EF 的 model metadata
+        await _db.Database.ExecuteSqlRawAsync($"TRUNCATE TABLE [{tableName}]", ct);
+#pragma warning restore EF1002
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<PlanetCell>> GetAllPlanetCellsAsync(CancellationToken ct = default) =>
+        await _db.PlanetCells.AsNoTracking().OrderBy(c => c.CellId).ToListAsync(ct);
+
+    /// <inheritdoc />
+    public Task<PlanetCell?> GetPlanetCellAsync(int cellId, CancellationToken ct = default) =>
+        _db.PlanetCells.AsNoTracking().FirstOrDefaultAsync(c => c.CellId == cellId, ct);
+
+    /// <inheritdoc />
     public async Task BulkInsertAsync(IEnumerable<Tile> tiles, Action<long>? onProgress = null, CancellationToken ct = default)
     {
         var connectionString = _db.Database.GetConnectionString()

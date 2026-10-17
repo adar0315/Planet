@@ -284,6 +284,29 @@ public class SimulationService
         return new FileInfo(path).Length;
     }
 
+    /// <summary>
+    /// 把存檔讀進一份**獨立的**引擎，不動線上正在跑的模擬。放大成地塊要在複本上做——
+    /// 碎島清除會改地形，不能改到使用者正在看的那顆星球。
+    /// </summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
+    public async Task<(SimulationGrid Grid, SimulationEngine Engine)> LoadDetachedAsync(string name, CancellationToken ct = default)
+    {
+        var path = SnapshotPath(name);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"找不到存檔「{name}」。", path);
+        }
+
+        // 網格建好之後不會再變（鄰接表、取樣用的桶都是唯讀或執行緒安全的），可以跟線上的模擬共用
+        var (grid, _, _) = await EnsureInitializedAsync(ct);
+        var engine = new SimulationEngine(grid);
+        await using var stream = File.OpenRead(path);
+        SimulationSnapshot.Restore(engine, stream);
+        return (grid, engine);
+    }
+
     /// <summary>從檔案把模擬狀態讀回來，覆蓋目前的內容。</summary>
     /// <param name="name">存檔名稱。</param>
     /// <param name="ct">取消權杖。</param>

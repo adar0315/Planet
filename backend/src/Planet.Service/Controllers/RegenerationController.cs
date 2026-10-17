@@ -22,12 +22,17 @@ public class RegenerationController : ControllerBase
 {
     private readonly TerrainOptionsStore _optionsStore;
     private readonly PlanetRegenerationService _regenerationService;
+    private readonly PlanetMaterializationService _materializationService;
 
     /// <summary>建立控制器。</summary>
-    public RegenerationController(TerrainOptionsStore optionsStore, PlanetRegenerationService regenerationService)
+    public RegenerationController(
+        TerrainOptionsStore optionsStore,
+        PlanetRegenerationService regenerationService,
+        PlanetMaterializationService materializationService)
     {
         _optionsStore = optionsStore;
         _regenerationService = regenerationService;
+        _materializationService = materializationService;
     }
 
     /// <summary>查詢目前的地形生成參數（下次「重新生成」會使用的參數，不一定等於目前資料庫裡星球實際的參數，如果查完之後還沒觸發過重新生成的話）。</summary>
@@ -67,12 +72,44 @@ public class RegenerationController : ControllerBase
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public IActionResult Regenerate()
     {
-        if (_regenerationService.IsRunning)
+        if (_regenerationService.IsRunning || _materializationService.Status.IsRunning)
         {
-            return Conflict(new { message = "已經有星球生成作業正在進行中，請等它完成後再試一次。" });
+            return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
         }
 
         _regenerationService.StartInBackground(_optionsStore.Current, clearExisting: true);
         return Accepted();
+    }
+
+    /// <summary>
+    /// 把一個地質模擬存檔放大成整顆星球的地塊（取代目前的地形）。立刻回傳，在背景執行；
+    /// 用 <c>GET /api/admin/materialize</c> 查進度。
+    ///
+    /// 寫入期間舊的地塊照常可以走：新資料先寫進暫存表，全部完成才一次切換，失敗時舊資料不受影響。
+    /// </summary>
+    /// <param name="snapshot">模擬存檔名稱（<c>GET /api/simulation/saves</c> 列得出來的那些）。</param>
+    /// <returns>202：已受理；409：已經有生成或放大作業在進行。</returns>
+    /// <response code="202">已受理，開始在背景放大。</response>
+    /// <response code="409">已經有生成或放大作業正在進行中。</response>
+    [HttpPost("materialize")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public IActionResult Materialize([FromQuery] string snapshot)
+    {
+        if (_regenerationService.IsRunning || !_materializationService.TryStart(snapshot))
+        {
+            return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
+        }
+        return Accepted();
+    }
+
+    /// <summary>目前（或最近一次）放大作業的狀態。</summary>
+    /// <returns>放大作業的狀態。</returns>
+    /// <response code="200">放大作業的狀態。</response>
+    [HttpGet("materialize")]
+    [ProducesResponseType<MaterializationStatus>(StatusCodes.Status200OK)]
+    public ActionResult<MaterializationStatus> GetMaterializationStatus()
+    {
+        return Ok(_materializationService.Status);
     }
 }

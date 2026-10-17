@@ -77,7 +77,10 @@ public sealed class SimulationState
     /// </summary>
     public float[] AtmosphericMoisture { get; }
 
-    /// <summary>降水量（公釐／年）。雨影、赤道多雨帶、副熱帶沙漠都是從這個欄位看出來的。</summary>
+    /// <summary>
+    /// 降水量，**相對尺度**（不是公釐／年；典型值 0~30，見 <see cref="Climate"/> 求解結尾的說明）。
+    /// 雨影、赤道多雨帶、副熱帶沙漠都是從這個欄位看出來的——重要的是哪裡多、哪裡少，不是絕對值。
+    /// </summary>
     public float[] Precipitation { get; }
 
     /// <summary>地表溫度（攝氏）。決定冰河作用發不發生、風化速率、植被能不能長。</summary>
