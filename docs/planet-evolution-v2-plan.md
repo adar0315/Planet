@@ -234,7 +234,8 @@ P0 地基 ──→ P1 端到端管線 ──→ P2 表示法選型 ──→ P3
 ### P2 結果（2026-10-17）：選 **B 板塊座標系**
 
 程式在 `Planet.Simulation/Representation/`；評比是 `RepresentationBenchmark`，
-重跑方式是 `RepresentationProbe`（`PROBE=1`、`PROBE_DIR` 放第 1,160 步的存檔）。
+落選的候選與重跑用的探針 `RepresentationProbe`（`PROBE=1`、`PROBE_DIR` 放第 1,160 步的存檔）
+在提交 `3446c57` 裡，之後的提交已移除。
 n=150、第 1,160 步的地殼、每步 5 萬年、500 步（25 Myr），**不做任何地質作用**。
 v1 基準是照 `PlateTectonics` 的搬運部分抄的（1 標記／格、漂移滿一格才取樣、擠的留厚的、空的借鄰居）。
 

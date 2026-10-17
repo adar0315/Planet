@@ -7,7 +7,9 @@ namespace Planet.Simulation.Representation;
 /// 地質作用（隱沒、造山、侵蝕…）不在這裡，比較時刻意關掉——P2 要回答的只有
 /// 「純粹搬運本身會不會製造雜訊」。v1 的海岸碎裂，源頭就是搬運的取樣雜訊。
 ///
-/// 三個候選見 <see cref="MarkerCarrier"/>、<see cref="PlateFrameCarrier"/>、<see cref="SemiLagrangianCarrier"/>。
+/// 選定的是 <see cref="PlateFrameCarrier"/>（2026-10-17）。落選的標記法與半拉格朗日在提交 3446c57 裡，
+/// 評比數字見 docs/planet-evolution-v2-plan.md 的 P2 結果。介面留著，是讓 <see cref="RepresentationBenchmark"/>
+/// 之後還能拿新的變體（例如加上碰撞規則的版本）跟精確解比。
 /// </summary>
 internal interface ICrustCarrier
 {
