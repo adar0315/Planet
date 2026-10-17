@@ -1,4 +1,19 @@
-﻿namespace Planet.Simulation;
+﻿using Planet.Simulation.Representation;
+
+namespace Planet.Simulation;
+
+/// <summary>地殼怎麼跟著板塊移動（見 <see cref="PlateTectonics"/> 的 <c>Transport</c>）。</summary>
+public enum CrustTransport
+{
+    /// <summary>v1：標記法（marker-in-cell）。目前的預設，正式服務用這個。</summary>
+    Markers,
+
+    /// <summary>
+    /// v2：板塊座標系（P2 選定，見 <c>PlateFrameCrust</c>）。板塊內部零雜訊，
+    /// 但 P4 之前**沒有碰撞規則**——誰蓋過誰只看板塊歸屬，大陸也會被消耗掉。
+    /// </summary>
+    PlateFrame,
+}
 
 /// <summary>
 /// 內營力：板塊運動、隱沒、碰撞造山、海底擴張。把一顆全是海洋的星球演化出陸地。
@@ -188,6 +203,29 @@ public sealed class PlateTectonics
     private const int MarkerCapacityFactor = 12;
 
 
+    private readonly SimulationGrid _grid;
+
+    /// <summary>板塊座標系（<see cref="CrustTransport.PlateFrame"/> 時才有；標記法時是 null）。</summary>
+    private readonly PlateFrameCrust? _frames;
+
+    /// <summary>這一步長出新海洋地殼的格子（板塊座標系用，給中洋脊火山）。</summary>
+    private readonly bool[]? _newCrustCells;
+
+    /// <summary>地殼怎麼跟著板塊移動。</summary>
+    public CrustTransport Transport { get; }
+
+    /// <summary>診斷用（板塊座標系）：上一步長出新海洋地殼的格數。</summary>
+    public int LastFrameNewCrustCells => _frames?.LastNewCrustCells ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步從相鄰板塊轉交過來的格數。</summary>
+    public int LastFrameTransferredCells => _frames?.LastTransferredCells ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步被蓋過而消耗掉的點數。</summary>
+    public int LastFrameConsumedPoints => _frames?.LastConsumedPoints ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步被消耗掉的**大陸**地殼點數（P4 加碰撞規則之前大陸也會被吃掉）。</summary>
+    public int LastFrameConsumedContinentalPoints => _frames?.LastConsumedContinentalPoints ?? 0;
+
     private readonly double[] _convergenceRate; // 公尺／百萬年，每步重算
     private readonly int[] _convergingNeighbor; // 這格主要在跟哪一格聚合，-1 表示沒有
     /// <summary>
@@ -353,8 +391,16 @@ public sealed class PlateTectonics
     /// <summary>建立內營力模擬器。建好之後要呼叫 <see cref="Reset"/> 才會有標記。</summary>
     /// <param name="grid">網格。</param>
     /// <param name="plateCount">板塊數量。</param>
-    public PlateTectonics(SimulationGrid grid, int plateCount)
+    /// <param name="transport">地殼怎麼跟著板塊移動，預設 v1 的標記法。</param>
+    public PlateTectonics(SimulationGrid grid, int plateCount, CrustTransport transport = CrustTransport.Markers)
     {
+        _grid = grid;
+        Transport = transport;
+        if (transport == CrustTransport.PlateFrame)
+        {
+            _frames = new PlateFrameCrust(grid.CellCount, plateCount);
+            _newCrustCells = new bool[grid.CellCount];
+        }
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plateCount);
 
         _convergenceRate = new double[grid.CellCount];
@@ -409,6 +455,12 @@ public sealed class PlateTectonics
     /// <param name="plates">板塊配置。</param>
     public void Reset(SimulationGrid grid, SimulationState state, PlateSet plates)
     {
+        if (_frames is not null)
+        {
+            _frames.Initialize(state, plates);
+            return;
+        }
+
         _markerCount = grid.CellCount * MarkersPerCell;
         _driftSinceRasterMeters = 0;
         _myrSinceLastRaster = 0;
@@ -500,7 +552,8 @@ public sealed class PlateTectonics
         // 所以要先知道邊界在哪、哪一側在隱沒。解出來的速度下一步生效。
         Dynamics.UpdateVelocities(grid, state, plates, _convergingNeighbor, deltaMyr);
 
-        MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);
+        if (_frames is not null) StepPlateFrames(grid, state, plates, deltaMyr);
+        else MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);
         ApplyConvergence(grid, state, plates, deltaMyr);
         for (var cell = 0; cell < grid.CellCount; cell++) LastArcCrustKm += _arcAdded[cell];
         SpreadOverthickenedCrust(grid, state, deltaMyr);
@@ -510,6 +563,23 @@ public sealed class PlateTectonics
         // 原本在這裡就回寫，導致排在後面的火山與侵蝕改完地殼之後，下一次 Rasterize 會用
         // 舊的標記內容把它們整個蓋掉。而 Rasterize 的頻率跟解析度有關：
         // n=150 大約每2步就取樣一次，等於**一半的火山產出被靜靜丟掉**（2026-09-06）。
+    }
+
+    /// <summary>
+    /// 板塊座標系的搬運：每一步都更新（沒有「漂移滿一格才取樣」的批次化），長出新地殼的格子算中洋脊火山。
+    /// </summary>
+    private void StepPlateFrames(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr)
+    {
+        _frames!.Step(grid, state, plates, deltaMyr, _newCrustCells);
+        LastRidgeCrustKm = _frames.LastNewCrustCells * (double)Isostasy.OceanicCrustThicknessKm;
+        LastSubductedCrustKm = _frames.LastConsumedCrustKm;
+
+        // 中洋脊火山：跟 v1 同一個量綱（新生地殼厚度 ÷ 經過的時間），只是這裡每步都更新
+        var rate = Isostasy.OceanicCrustThicknessKm / MathF.Max((float)deltaMyr, 1e-6f);
+        for (var cell = 0; cell < grid.CellCount; cell++)
+        {
+            if (_newCrustCells![cell]) state.VolcanicActivity[cell] += rate;
+        }
     }
 
     /// <summary>
@@ -1042,6 +1112,13 @@ public sealed class PlateTectonics
     /// <param name="writer">目標。</param>
     internal void WriteTo(BinaryWriter writer)
     {
+        writer.Write((byte)Transport);
+        if (_frames is not null)
+        {
+            _frames.WriteTo(writer);
+            return;
+        }
+
         writer.Write(_markerCount);
         writer.Write(_driftSinceRasterMeters);
         writer.Write(_myrSinceLastRaster);
@@ -1074,6 +1151,18 @@ public sealed class PlateTectonics
     /// <param name="reader">來源。</param>
     internal void ReadFrom(BinaryReader reader)
     {
+        var transport = (CrustTransport)reader.ReadByte();
+        if (transport != Transport)
+        {
+            throw new InvalidDataException(
+                $"存檔的地殼搬運方式是 {transport}，這個引擎是 {Transport}——兩種的內部狀態完全不同，不能互讀。");
+        }
+        if (_frames is not null)
+        {
+            _frames.ReadFrom(reader);
+            return;
+        }
+
         _markerCount = reader.ReadInt32();
         _driftSinceRasterMeters = reader.ReadDouble();
         _myrSinceLastRaster = reader.ReadDouble();
@@ -1115,9 +1204,17 @@ public sealed class PlateTectonics
     /// 大陸厚度從31.4變成38.6公里**（地球是35~40）。
     ///
     /// 之後若要再走多標記，這裡要跟著改回差值——兩者是綁在一起的。
+    ///
+    /// 板塊座標系（<see cref="CrustTransport.PlateFrame"/>）走另一條路：見 <c>PlateFrameCrust.WriteBack</c>。
     /// </summary>
     public void WriteGridBackToMarkers(SimulationState state)
     {
+        if (_frames is not null)
+        {
+            _frames.WriteBack(_grid, state);
+            return;
+        }
+
         Parallel.For(0, state.CellCount, cell =>
         {
             var count = _cellMarkerCount[cell];

@@ -110,6 +110,11 @@ public static class SimulationDiagnostics
             BreachCount = engine.Breach.LastBreachCount,
             BreachTooHighCount = engine.Breach.LastTooHighCount,
             IceSupplyLimit = engine.IceSupplyLimit,
+            CrustTransport = t.Transport,
+            FrameNewCrustCells = t.LastFrameNewCrustCells,
+            FrameTransferredCells = t.LastFrameTransferredCells,
+            FrameConsumedPoints = t.LastFrameConsumedPoints,
+            FrameConsumedContinentalPoints = t.LastFrameConsumedContinentalPoints,
         };
     }
 
@@ -192,4 +197,19 @@ public sealed record MechanismCounts
 
     /// <summary>冰蓋被水量上限打的折數（1 代表沒打折）。</summary>
     public required float IceSupplyLimit { get; init; }
+
+    /// <summary>地殼搬運方式。下面四個 Frame* 只有板塊座標系才有值，標記法時是 0。</summary>
+    public required CrustTransport CrustTransport { get; init; }
+
+    /// <summary>板塊座標系：上一步長出新海洋地殼的格數（張裂）。</summary>
+    public required int FrameNewCrustCells { get; init; }
+
+    /// <summary>板塊座標系：上一步從相鄰板塊轉交過來的格數。</summary>
+    public required int FrameTransferredCells { get; init; }
+
+    /// <summary>板塊座標系：上一步被蓋過而消耗掉的點數（隱沒）。</summary>
+    public required int FrameConsumedPoints { get; init; }
+
+    /// <summary>板塊座標系：其中是大陸地殼的點數（P4 加碰撞規則之前大陸也會被吃掉）。</summary>
+    public required int FrameConsumedContinentalPoints { get; init; }
 }

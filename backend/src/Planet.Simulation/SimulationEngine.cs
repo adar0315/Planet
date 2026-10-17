@@ -42,6 +42,7 @@ public sealed class SimulationEngine
     public MantlePlumes Plumes => _plumes;
 
     private readonly int _seed;
+    private readonly CrustTransport _crustTransport;
     private readonly float _oceanDepthMeters;
     private readonly int _densePlateCount;
     private PlateTectonics _tectonics;
@@ -114,12 +115,15 @@ public sealed class SimulationEngine
     /// 起始的全球海洋深度（公尺），也就是這顆星球的總水量。水量守恆，所以這個值直接決定海面佔比。
     /// </param>
     /// <param name="densePlateCount">有幾個板塊一開始就是高密度的海洋板塊，見 <see cref="PlateSet.DensePlateCount"/>。</param>
+    /// <param name="crustTransport">地殼怎麼跟著板塊移動（v1 標記法或 v2 板塊座標系），見 <see cref="CrustTransport"/>。</param>
     public SimulationEngine(
         SimulationGrid grid,
         int seed = 42,
         float oceanDepthMeters = SimulationState.DefaultOceanDepthMeters,
-        int densePlateCount = PlateSet.DensePlateCount)
+        int densePlateCount = PlateSet.DensePlateCount,
+        CrustTransport crustTransport = CrustTransport.Markers)
     {
+        _crustTransport = crustTransport;
         _oceanDepthMeters = oceanDepthMeters;
         _densePlateCount = densePlateCount;
         Grid = grid;
@@ -130,7 +134,7 @@ public sealed class SimulationEngine
         _erosion = new Erosion(grid);
         Plates = PlateSet.CreateRandom(grid, seed, densePlateCount: _densePlateCount);
         State = SimulationState.CreateInitialOceanWorld(grid, _oceanDepthMeters, seed);
-        _tectonics = new PlateTectonics(grid, Plates.Plates.Length);
+        _tectonics = new PlateTectonics(grid, Plates.Plates.Length, _crustTransport);
         _plumes = new MantlePlumes(seed);
         SyncPlateIdIntoState();
         // 一定要排在 _tectonics.Reset 之前：標記的密度是從 State.CrustDensity 拷過去的，
@@ -531,7 +535,7 @@ public sealed class SimulationEngine
         }
         _plumes.RestoreRandomState(plumeDraws);
 
-        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length);
+        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport);
         _tectonics.ReadFrom(reader);
 
         // 地表高度的快取要跟著更新，否則下一次解海平面會用到讀檔前的地形
@@ -543,7 +547,7 @@ public sealed class SimulationEngine
     {
         Plates = PlateSet.CreateRandom(Grid, _seed, densePlateCount: _densePlateCount);
         State = SimulationState.CreateInitialOceanWorld(Grid, _oceanDepthMeters, _seed);
-        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length);
+        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport);
         _plumes = new MantlePlumes(_seed);
         SyncPlateIdIntoState();
         // 一定要排在 _tectonics.Reset 之前：標記的密度是從 State.CrustDensity 拷過去的，
