@@ -344,6 +344,15 @@ internal sealed class PlateFrameCrust
         LastNewCrustCells++;
     }
 
+    /// <summary>
+    /// 隱沒的地殼有多少比例刮下來增生到上盤。地球的增生楔大約捕獲一到三成。
+    ///
+    /// **跟 v1 的 <see cref="PlateTectonics.AccretedFractionOfSubductedCrust"/>（3%）不同**：v1 原本也是 10%，
+    /// 因為標記法的取樣把增生放大了約 35 倍才調到 3%（見那裡的說明）。板塊座標系沒有那個放大，
+    /// 照搬 3% 的話大陸幾乎不長（P4 實測 50 Myr：大陸地殼 1.0%、陸地 5.5%）。
+    /// </summary>
+    private const float AccretedFractionOfSubductedCrust = 0.10f;
+
     /// <summary>新板塊一開始跟母板塊分開的角速度（度／百萬年），約每邊 3 公分／年的擴張。</summary>
     private const double RiftAngularVelocityDegPerMyr = 1.0;
 
@@ -677,7 +686,7 @@ internal sealed class PlateFrameCrust
         }
         else
         {
-            gain = loserThickness * PlateTectonics.AccretedFractionOfSubductedCrust;
+            gain = loserThickness * AccretedFractionOfSubductedCrust;
             LastAccretedCrustKm += gain;
             LastSubductions++;
             if (winnerContinental) LastContinentOverrides++;
