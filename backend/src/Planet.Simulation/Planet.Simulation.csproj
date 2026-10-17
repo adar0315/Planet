@@ -5,6 +5,11 @@
     <ProjectReference Include="..\Planet.Generation\Planet.Generation.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- v2 P2 的三個表示法候選是 internal（選定之後另外兩個會刪掉），比較測試要看得到 -->
+    <InternalsVisibleTo Include="Planet.Simulation.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
