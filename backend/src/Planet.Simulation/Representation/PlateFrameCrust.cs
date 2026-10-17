@@ -618,9 +618,7 @@ internal sealed class PlateFrameCrust
     /// 兩塊地殼在同一個地方重疊（聚合）——用岩石圈淨浮力決定誰沉下去，回傳留下的那一個板塊。
     /// v1 的碰撞規則，常數共用 <see cref="PlateTectonics"/> 的：
     ///
-    /// - 浮力差小於 <see cref="PlateTectonics.SubductionBuoyancyContrastMeters"/>：誰都沉不下去，**縮短增厚**，
-    ///   厚度整個疊上去（見方法內的說明）。
-    /// - 兩邊都是大陸（但浮力差大）：大陸對撞，浮得高的留下、吃掉對方一半的厚度（喜馬拉雅型造山）。
+    /// - 兩邊都是大陸：誰都沉不下去，**縮短增厚**（大陸碰撞），厚度整個疊上去、在位者留下（見方法內的說明）。
     /// - 否則浮得低的隱沒（差距在容差內就是比較老的那塊），一部分刮下來增生到留下的那一塊。
     ///   大陸碰上海洋時一定是海洋那一方沉——大陸跟著自己的板塊繼續往前，海洋在它前面消失，
     ///   直到另一邊的大陸撞上來。這就是海洋關閉、大陸碰撞的那一段威爾遜旋迴。
@@ -643,7 +641,12 @@ internal sealed class PlateFrameCrust
 
         var liftA = Isostasy.LithosphereBuoyancyMeters(_crust[a][aBody], _thickness[a][aBody], _density[a][aBody], _age[a][aBody]);
         var liftB = Isostasy.LithosphereBuoyancyMeters(_crust[b][bBody], _thickness[b][bBody], _density[b][bBody], _age[b][bBody]);
-        var shortening = MathF.Abs(liftA - liftB) < PlateTectonics.SubductionBuoyancyContrastMeters;
+        // 縮短增厚只發生在**兩邊都是大陸地殼**的時候（大陸碰撞）。洋殼一律由浮力低的那一方隱沒——
+        // 隱沒是被聚合的力推著走的，浮力只決定誰在下面，連年輕的洋殼也照樣隱沒（例如 Cascadia）；
+        // 洋殼被擠到增厚在地球上很少見。試過兩種更寬的條件（P4，2026-10-17），都讓洋殼大片增厚、浮到海平面附近成碎斑：
+        // - 浮力差 < 500 公尺：年齡相近的老洋殼浮力差也很小，50 Myr 時 10~20 公里的增厚洋殼 3.7 萬格、海床中位深度只有 2,060 公尺
+        // - 兩邊淨浮力都 ≥ 0：洋殼很年輕時幾乎都成立，縮短每步 790 次、隱沒反而只剩 130，胡椒 1,644
+        var shortening = _crust[a][aBody] == CrustType.Continental && _crust[b][bBody] == CrustType.Continental;
 
         // 縮短增厚時**在位者留下**（a 是原本就佔著這一格的那個，呼叫端保證）：浮力差不多時，看浮力
         // 決定誰留下等於看極小的差異擲骰子，沿著同一條邊界這一格 p 贏、隔壁格 q 贏，兩塊板塊的地殼交錯咬合、
@@ -665,19 +668,12 @@ internal sealed class PlateFrameCrust
             // 褶皺、逆衝疊起來，面積變小、厚度增加，質量守恆，均衡再把它抬高。縮掉的面積由板塊運動在
             // 張裂處打開的空缺補回來（空缺會自動長新的海洋地殼）。
             //
-            // 少了這一條，浮力相近的兩塊地殼（兩塊年輕洋殼、島弧碰島弧）照樣有一塊被整個消耗、
-            // 贏家只拿 3%，地殼增厚不起來，大陸也長不大。門檻跟 v1 判斷「隱沒還是對撞」的同一個，
-            // 浮力差大的（老而重的洋殼碰上較輕的地殼）仍然照常隱沒——要是所有聚合都變成增厚，
-            // 就是 P2 量到的那種大陸棘輪。
+            // 少了這一條，兩塊都浮著的地殼（大陸碰大陸、年輕洋殼、島弧碰島弧）照樣有一塊被整個消耗、
+            // 贏家只拿 3%，地殼增厚不起來，大陸也長不大。有負浮力的（老而重的洋殼）仍然照常隱沒——
+            // 要是所有聚合都變成增厚，就是 P2 量到的那種大陸棘輪。
             gain = loserThickness;
             LastShortenings++;
             if (winnerContinental && loserContinental) LastContinentCollisions++;
-        }
-        else if (winnerContinental && loserContinental)
-        {
-            gain = loserThickness * PlateTectonics.ContinentalCollisionTransfer;
-            LastContinentCollisions++;
-            LastConsumedContinentalPoints++;
         }
         else
         {
@@ -690,12 +686,14 @@ internal sealed class PlateFrameCrust
         var after = MathF.Min(before + gain, Isostasy.MaxCrustThicknessKm);
         _thickness[winner][winnerBody] = after;
 
-        // 增厚到大陸的厚度就變成大陸地殼（跟島弧增厚同一個規則，見 PlateTectonics.ApplyConvergence），
-        // 密度依加進來的比例往大陸地殼靠
+        // 密度按厚度加權混合：疊上來的是輸的那一塊的物質。**不往大陸地殼的密度拉**——被擠壓疊起來的洋殼
+        // 還是玄武岩，原本往 2,700 拉的寫法讓 14 公里厚、仍屬海洋型的增厚地殼密度掉到 2,800、浮到海平面附近，
+        // 再加上沉積物就是一大片碎斑（P4 實測 50 Myr：碎斑陸地 16,562 格，密度中位 2,800）。
+        // 增厚到大陸的厚度還是會變成大陸地殼（跟島弧增厚同一個規則，見 PlateTectonics.ApplyConvergence）。
         if (after > before)
         {
-            var fraction = MathF.Min((after - before) / after, 1f);
-            _density[winner][winnerBody] += (Isostasy.ContinentalCrustDensity - _density[winner][winnerBody]) * fraction;
+            var added = after - before;
+            _density[winner][winnerBody] = (_density[winner][winnerBody] * before + _density[loser][loserBody] * added) / after;
             if (_crust[winner][winnerBody] == CrustType.Oceanic && after >= Isostasy.ContinentalThresholdKm
                 && !_oceanicOnly[winner][winnerBody])
             {
