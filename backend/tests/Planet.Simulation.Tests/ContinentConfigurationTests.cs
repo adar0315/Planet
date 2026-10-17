@@ -50,6 +50,33 @@ public class ContinentConfigurationTests
         Assert.Equal(2, r.BigIslandCount);
         Assert.InRange(r.LargestShare, 0.55, 0.66);
         Assert.InRange(r.SecondShare, 0.30, 0.40);
+        Assert.InRange(r.LargestRaggedness, 0.8, 2.0); // 球冠接近圓盤
+    }
+
+    /// <summary>
+    /// 面積比例都對、但大陸是破的（v1 第 1,160 步的實況：內部滿是湖洞與胡椒狀的海洋地殼）——不能算成立。
+    /// </summary>
+    [Fact]
+    public void ProportionsRightButContinentFullOfHoles_IsNotMet()
+    {
+        var state = Planet((30, 0, 40), (-30, 150, 30), (0, -100, 8), (-60, -40, 8));
+        var largestBefore = ContinentConfiguration.Analyze(Grid, state).LargestRaggedness;
+
+        // 在最大那塊（北緯30、經度0、半徑40°）的內部每隔幾格打一個洞
+        var cos35 = Math.Cos(35 * Math.PI / 180);
+        var cx = Math.Cos(Math.PI / 6);
+        var cz = Math.Sin(Math.PI / 6);
+        for (var cell = 0; cell < Grid.CellCount; cell += 5)
+        {
+            var dot = Grid.UnitVector[cell * 3] * cx + Grid.UnitVector[cell * 3 + 2] * cz;
+            if (dot >= cos35) state.WaterDepth[cell] = 50f;
+        }
+
+        var r = ContinentConfiguration.Analyze(Grid, state);
+
+        Assert.True(r.TwoLargestShare >= 0.75 && r.BigIslandCount >= 2, "比例條件本身要成立，這個測試才有意義");
+        Assert.False(r.IsMet, $"破碎度 {r.LargestRaggedness:F2}（打洞前 {largestBefore:F2}）");
+        Assert.True(r.LargestRaggedness > ContinentCriteria.Default.MaxRaggedness);
     }
 
     [Fact]
@@ -123,7 +150,7 @@ public class ContinentConfigurationTests
         var engine = new SimulationEngine(Grid, 42)
         {
             // 門檻全部歸零：第一次檢查就一定成立
-            StopCriteria = new ContinentCriteria(0, 0, 0, 0, 1, 0),
+            StopCriteria = new ContinentCriteria(0, 0, 0, 0, 1, 0, double.MaxValue),
         };
 
         var first = engine.StepUntilStopCondition(100);

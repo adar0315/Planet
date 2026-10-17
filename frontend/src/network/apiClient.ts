@@ -221,6 +221,9 @@ export interface ContinentConfiguration {
   secondShare: number
   twoLargestShare: number
   bigIslandCount: number
+  /** 海岸破碎度：海岸格數 ÷ 同面積圓盤的海岸格數。1 ＝ 圓盤，愈大愈破碎。 */
+  largestRaggedness: number
+  secondRaggedness: number
   landMassCount: number
   oceanFraction: number
   isMet: boolean

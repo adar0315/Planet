@@ -20,6 +20,12 @@ namespace Planet.Simulation;
 /// （見 <see cref="SmallIslandCleanup"/>），面積上微不足道但數量壓倒性——不排除的話
 /// 它們不會影響「最大兩塊佔多少」，卻會讓「陸地總面積」的分母包含一堆雜訊。
 /// 所以比例的分母只算**夠大的**陸塊。
+///
+/// ## 兩大塊還要「完整」（2026-10-17 加入）
+///
+/// 只看面積比例會被騙：v1 第一次成立時（第 1,160 步）兩大塊是 51% ＋ 30%，畫出來卻是
+/// 沿板塊邊界彎成弧形的細長山脈帶、串起一堆半淹的碎塊，像一張網。所以兩大塊各自還要量
+/// **海岸破碎度**（<see cref="Raggedness"/>）。內部的湖洞也會算進海岸，不用另外量。
 /// </summary>
 public static class ContinentConfiguration
 {
@@ -34,10 +40,15 @@ public static class ContinentConfiguration
         ArgumentNullException.ThrowIfNull(state);
         var c = criteria ?? ContinentCriteria.Default;
 
-        var sizes = LandMassSizes(grid, state);
+        var label = LabelLandMasses(grid, state, out var sizes);
         var cellAreaKm2 = grid.AverageCellAreaSquareMeters / 1_000_000.0;
         var significant = sizes.Where(s => s * cellAreaKm2 >= c.MinLandMassAreaSquareKm).ToList();
         significant.Sort((a, b) => b.CompareTo(a));
+
+        // 最大兩塊的陸塊編號（同樣大小時取編號小的，結果才是決定性的）
+        var byArea = Enumerable.Range(0, sizes.Count).OrderByDescending(i => sizes[i]).ThenBy(i => i).ToList();
+        var (largestRagged, secondRagged) = Raggedness(grid, state, label,
+            byArea.Count > 0 ? byArea[0] : -1, byArea.Count > 1 ? byArea[1] : -1);
 
         var land = significant.Sum(s => (long)s);
         double Share(int index) => land > 0 && index < significant.Count ? (double)significant[index] / land : 0;
@@ -60,7 +71,9 @@ public static class ContinentConfiguration
         var isMet = twoLargest >= c.MinTwoLargestShare
             && largest >= c.MinEachOfTwoShare
             && second >= c.MinEachOfTwoShare
-            && bigIslands >= c.MinBigIslandCount;
+            && bigIslands >= c.MinBigIslandCount
+            && largestRagged <= c.MaxRaggedness
+            && secondRagged <= c.MaxRaggedness;
 
         return new ContinentConfigurationReport
         {
@@ -68,25 +81,70 @@ public static class ContinentConfiguration
             SecondShare = second,
             TwoLargestShare = twoLargest,
             BigIslandCount = bigIslands,
+            LargestRaggedness = largestRagged,
+            SecondRaggedness = secondRagged,
             LandMassCount = significant.Count,
             OceanFraction = (double)waterCells / state.CellCount,
             IsMet = isMet,
         };
     }
 
-    /// <summary>陸地連通塊的大小（格數）。用明確的堆疊而不是遞迴：大陸可以有五萬多格。</summary>
+    /// <summary>
+    /// 海岸破碎度：海岸格數 ÷ 同面積圓盤的海岸格數（六角網格上半徑 r 的圓盤約 3r² 格、6r 格海岸，
+    /// 所以圓盤的海岸 ≈ 2√3·√面積）。1 ＝ 圓盤；地球的大陸在這個解析度（約 14 公里）估計 2~3。
+    /// 「海岸格」＝至少有一個水鄰居的陸地格，所以內部的湖洞與胡椒狀的海洋地殼也會算進來。
+    /// 沒有那一塊（編號 −1）時回傳 0。
+    /// </summary>
+    private static (double First, double Second) Raggedness(
+        SimulationGrid grid, SimulationState state, int[] label, int first, int second)
+    {
+        int area1 = 0, coast1 = 0, area2 = 0, coast2 = 0;
+        for (var cell = 0; cell < state.CellCount; cell++)
+        {
+            var id = label[cell];
+            if (id < 0 || (id != first && id != second)) continue;
+
+            var wet = false;
+            var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+            for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell && !wet; s++)
+            {
+                var neighbor = grid.Neighbors[baseIndex + s];
+                wet = neighbor != SimulationGrid.NoNeighbor && state.WaterDepth[neighbor] > 0f;
+            }
+
+            if (id == first) { area1++; if (wet) coast1++; }
+            else { area2++; if (wet) coast2++; }
+        }
+
+        static double Ratio(int coast, int area) => area == 0 ? 0 : coast / (2 * Math.Sqrt(3) * Math.Sqrt(area));
+        return (Ratio(coast1, area1), Ratio(coast2, area2));
+    }
+
+    /// <summary>陸地連通塊的大小（格數）。</summary>
     internal static List<int> LandMassSizes(SimulationGrid grid, SimulationState state)
     {
-        var visited = new bool[state.CellCount];
-        var sizes = new List<int>();
+        LabelLandMasses(grid, state, out var sizes);
+        return sizes;
+    }
+
+    /// <summary>
+    /// 把陸地格標上連通塊編號（水格是 −1），並回傳每一塊的大小。
+    /// 用明確的堆疊而不是遞迴：大陸可以有五萬多格。
+    /// </summary>
+    private static int[] LabelLandMasses(SimulationGrid grid, SimulationState state, out List<int> sizes)
+    {
+        var label = new int[state.CellCount];
+        Array.Fill(label, -1);
+        sizes = [];
         var stack = new Stack<int>();
 
         for (var start = 0; start < state.CellCount; start++)
         {
-            if (visited[start] || state.WaterDepth[start] > 0f) continue;
+            if (label[start] >= 0 || state.WaterDepth[start] > 0f) continue;
 
+            var id = sizes.Count;
             var size = 0;
-            visited[start] = true;
+            label[start] = id;
             stack.Push(start);
             while (stack.Count > 0)
             {
@@ -97,8 +155,8 @@ public static class ContinentConfiguration
                 {
                     var neighbor = grid.Neighbors[baseIndex + s];
                     if (neighbor == SimulationGrid.NoNeighbor) continue;
-                    if (visited[neighbor] || state.WaterDepth[neighbor] > 0f) continue;
-                    visited[neighbor] = true;
+                    if (label[neighbor] >= 0 || state.WaterDepth[neighbor] > 0f) continue;
+                    label[neighbor] = id;
                     stack.Push(neighbor);
                 }
             }
@@ -106,7 +164,7 @@ public static class ContinentConfiguration
             sizes.Add(size);
         }
 
-        return sizes;
+        return label;
     }
 }
 
@@ -119,17 +177,22 @@ public static class ContinentConfiguration
 /// <param name="MinBigIslandShare">「大島」的下限。格陵蘭 1.5%。</param>
 /// <param name="MaxBigIslandShare">「大島」的上限，超過就算一塊大陸了。澳洲 5.2%。</param>
 /// <param name="MinLandMassAreaSquareKm">小於這個面積的陸塊當成碎島，不算進任何比例（跟碎島清除同一個門檻）。</param>
+/// <param name="MaxRaggedness">最大兩塊各自的海岸破碎度上限（見 <see cref="ContinentConfigurationReport.LargestRaggedness"/>）。</param>
 public sealed record ContinentCriteria(
     double MinTwoLargestShare,
     double MinEachOfTwoShare,
     int MinBigIslandCount,
     double MinBigIslandShare,
     double MaxBigIslandShare,
-    double MinLandMassAreaSquareKm)
+    double MinLandMassAreaSquareKm,
+    double MaxRaggedness)
 {
     /// <summary>
     /// 預設門檻（2026-10-16）。v1 在水量 1,150、第 1,600 步量到的是 66.9% / 18.2% / 3.4% / 3.4%——
     /// 合計與大島都過了，只差第二塊還沒到 20%。第一次看到實際結果之後很可能要調。
+    ///
+    /// 破碎度上限 4：地球的大陸在這個解析度估計 2~3，v1 第 1,160 步的兩大塊是 12.6 與 12.5
+    /// （把內部湖洞全部填掉也只降到 9.2），v1 的澳洲大小的島是 4.4。
     /// </summary>
     public static ContinentCriteria Default { get; } = new(
         MinTwoLargestShare: 0.75,
@@ -137,7 +200,8 @@ public sealed record ContinentCriteria(
         MinBigIslandCount: 2,
         MinBigIslandShare: 0.01,
         MaxBigIslandShare: 0.10,
-        MinLandMassAreaSquareKm: SmallIslandCleanup.MaxCleanedIslandAreaSquareKm);
+        MinLandMassAreaSquareKm: SmallIslandCleanup.MaxCleanedIslandAreaSquareKm,
+        MaxRaggedness: 4.0);
 }
 
 /// <summary><see cref="ContinentConfiguration.Analyze"/> 的結果。</summary>
@@ -155,12 +219,21 @@ public sealed record ContinentConfigurationReport
     /// <summary>大島的數量（不含最大的兩塊）。</summary>
     public required int BigIslandCount { get; init; }
 
+    /// <summary>
+    /// 最大一塊的海岸破碎度：海岸格數 ÷ 同面積圓盤的海岸格數。1 ＝ 圓盤，愈大愈破碎
+    /// （細長的弧形、內部湖洞、周圍參差的海岸都會讓它變大）。
+    /// </summary>
+    public required double LargestRaggedness { get; init; }
+
+    /// <summary>第二大一塊的海岸破碎度。</summary>
+    public required double SecondRaggedness { get; init; }
+
     /// <summary>排除碎島之後的陸塊總數。</summary>
     public required int LandMassCount { get; init; }
 
     /// <summary>海洋佔全球面積的比例。**只監看，不是停止條件的一部分。**</summary>
     public required double OceanFraction { get; init; }
 
-    /// <summary>四個條件是否全部成立。</summary>
+    /// <summary>全部條件（比例、大島、破碎度）是否成立。</summary>
     public required bool IsMet { get; init; }
 }

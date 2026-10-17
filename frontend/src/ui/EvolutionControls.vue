@@ -99,10 +99,17 @@ const isPanelOpen = ref(true)
         </dd>
         <dt>大島</dt>
         <dd>{{ simulation.status.continents.bigIslandCount }} 個</dd>
+        <dt>海岸破碎度</dt>
+        <dd>
+          {{ simulation.status.continents.largestRaggedness.toFixed(1) }} ／
+          {{ simulation.status.continents.secondRaggedness.toFixed(1) }}
+        </dd>
         <dt>停止條件</dt>
         <dd>{{ simulation.status.continents.isMet ? '✓ 成立' : '尚未成立' }}</dd>
       </dl>
-      <p class="hint">停止條件：兩塊各 ≥20%、合計 ≥75%，大島（1~10%）≥ 2 個</p>
+      <p class="hint">
+        停止條件：兩塊各 ≥20%、合計 ≥75%，大島（1~10%）≥ 2 個，兩塊的海岸破碎度各 ≤4（1 ＝ 圓盤）
+      </p>
     </div>
 
     <p v-if="simulation.stopNotice" class="notice">{{ simulation.stopNotice }}</p>
