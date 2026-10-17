@@ -44,4 +44,10 @@ internal interface ICrustCarrier
     /// <param name="grid">網格。</param>
     /// <param name="thicknessKm">地質作用之後每格的厚度。</param>
     void WriteBack(SimulationGrid grid, float[] thicknessKm);
+
+    /// <summary>
+    /// 每格的地殼實際屬於哪個板塊；null 表示跟 Voronoi 相同。精確解要用它：
+    /// 地殼越過平分線之後，那一格的「正確答案」是它自己板塊轉過來的地殼，不是 Voronoi 板塊的。
+    /// </summary>
+    int[]? Owners => null;
 }

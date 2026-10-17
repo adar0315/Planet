@@ -112,9 +112,9 @@ public static class SimulationDiagnostics
             IceSupplyLimit = engine.IceSupplyLimit,
             CrustTransport = t.Transport,
             FrameNewCrustCells = t.LastFrameNewCrustCells,
-            FrameTransferredCells = t.LastFrameTransferredCells,
             FrameConsumedPoints = t.LastFrameConsumedPoints,
             FrameConsumedContinentalPoints = t.LastFrameConsumedContinentalPoints,
+            FrameContinentOverrides = t.LastFrameContinentOverrides,
         };
     }
 
@@ -204,12 +204,13 @@ public sealed record MechanismCounts
     /// <summary>板塊座標系：上一步長出新海洋地殼的格數（張裂）。</summary>
     public required int FrameNewCrustCells { get; init; }
 
-    /// <summary>板塊座標系：上一步從相鄰板塊轉交過來的格數。</summary>
-    public required int FrameTransferredCells { get; init; }
 
     /// <summary>板塊座標系：上一步被蓋過而消耗掉的點數（隱沒）。</summary>
     public required int FrameConsumedPoints { get; init; }
 
-    /// <summary>板塊座標系：其中是大陸地殼的點數（P4 加碰撞規則之前大陸也會被吃掉）。</summary>
+    /// <summary>板塊座標系：其中是大陸地殼的點數（只剩大陸對撞時被擠掉的那一塊）。</summary>
     public required int FrameConsumedContinentalPoints { get; init; }
+
+    /// <summary>板塊座標系：大陸碰上海洋、由海洋那一方隱沒的次數。</summary>
+    public required int FrameContinentOverrides { get; init; }
 }

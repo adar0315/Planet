@@ -89,7 +89,7 @@ public sealed class PlateTectonics
     /// 留這個容差是因為全球絕大多數海洋地殼的條件都完全一樣，直接比浮點數大小會讓勝負由捨入誤差決定，
     /// 同樣的種子在不同硬體上可能演化出不同的星球。
     /// </summary>
-    private const float BuoyancyToleranceMeters = 5f;
+    internal const float BuoyancyToleranceMeters = 5f;
 
     /// <summary>
     /// 聚合處要有多大的均衡高度差（公尺）才算「隱沒」而不是「對撞增厚」。
@@ -97,7 +97,7 @@ public sealed class PlateTectonics
     /// 取500：海洋地殼與大陸地殼的高度差是數千公尺，一定算隱沒；
     /// 兩塊條件相近的地殼擠在一起則是造山，不該讓其中一塊憑空消失。
     /// </summary>
-    private const float SubductionBuoyancyContrastMeters = 500f;
+    internal const float SubductionBuoyancyContrastMeters = 500f;
 
     /// <summary>
     /// 地殼厚度超過這個值（公里）才會開始重力擴展。
@@ -152,14 +152,14 @@ public sealed class PlateTectonics
     /// 現在有早期大轟炸留下的原始陸塊當核心（見 <c>SimulationState.ApplyEarlyBombardment</c>），
     /// 增生只需要讓大陸長大，不必再負責無中生有。
     /// </summary>
-    private const float AccretedFractionOfSubductedCrust = 0.03f;
+    internal const float AccretedFractionOfSubductedCrust = 0.03f;
 
     /// <summary>
     /// 兩塊大陸對撞時，被擠掉的那一塊有多少厚度轉移到留下的那一塊。
     /// 取0.5：大陸地殼太輕、誰都沉不下去，物質只能往上下擠成山脈與山根——
     /// 這是大陸變厚最主要的機制（喜馬拉雅型造山），跟隱沒的3%增生完全不同量級。
     /// </summary>
-    private const float ContinentalCollisionTransfer = 0.5f;
+    internal const float ContinentalCollisionTransfer = 0.5f;
 
     /// <summary>
     /// 取樣錯配的空格向鄰居借地殼時，實際從鄰居扣掉幾成（見 <see cref="BorrowFromNeighbours"/>）。
@@ -217,14 +217,55 @@ public sealed class PlateTectonics
     /// <summary>診斷用（板塊座標系）：上一步長出新海洋地殼的格數。</summary>
     public int LastFrameNewCrustCells => _frames?.LastNewCrustCells ?? 0;
 
-    /// <summary>診斷用（板塊座標系）：上一步從相鄰板塊轉交過來的格數。</summary>
-    public int LastFrameTransferredCells => _frames?.LastTransferredCells ?? 0;
 
     /// <summary>診斷用（板塊座標系）：上一步被蓋過而消耗掉的點數。</summary>
     public int LastFrameConsumedPoints => _frames?.LastConsumedPoints ?? 0;
 
     /// <summary>診斷用（板塊座標系）：上一步被消耗掉的**大陸**地殼點數（P4 加碰撞規則之前大陸也會被吃掉）。</summary>
     public int LastFrameConsumedContinentalPoints => _frames?.LastConsumedContinentalPoints ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步大陸碰上海洋、由海洋那一方隱沒的次數（大陸不隱沒）。</summary>
+    public int LastFrameContinentOverrides => _frames?.LastContinentOverrides ?? 0;
+
+    /// <summary>
+    /// 診斷用（板塊座標系）：上一步新生地殼落在哪種邊界上（索引是 <see cref="BoundaryType"/>）。
+    /// 正常的話幾乎都在張裂邊界上；落在轉形或非邊界上的是邊界幾何的副作用。
+    /// </summary>
+    public int[] LastFrameNewCrustByBoundary { get; } = new int[4];
+
+    /// <summary>診斷用（板塊座標系）：上一步從最大的板塊裂出新板塊的次數（板塊的地殼被吃光時）。</summary>
+    public int LastFramePlatesReborn => _frames?.LastPlatesReborn ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步縮短增厚的次數（浮力差不多、誰都沉不下去）。</summary>
+    public int LastFrameShortenings => _frames?.LastShortenings ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步因增厚而變成大陸地殼的點數。</summary>
+    public int LastFrameContinentsFormed => _frames?.LastContinentsFormed ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步併進周圍板塊的碎片塊數（歸屬平滑）。</summary>
+    public int LastFrameFragmentsAbsorbed => _frames?.LastFragmentsAbsorbed ?? 0;
+
+    /// <summary>診斷用（板塊座標系）：上一步併進周圍板塊的碎片格數。</summary>
+    public int LastFrameFragmentCellsAbsorbed => _frames?.LastFragmentCellsAbsorbed ?? 0;
+
+    /// <summary>
+    /// 每格顯示的地殼點鍵（板塊座標系時；標記法是 null）。要「跟著地殼走」的東西用它，
+    /// 例如裂縫火山的噴發口（見 <see cref="FissureVolcanism.Step"/>）。
+    /// </summary>
+    public int[]? CrustPointKeys
+    {
+        get
+        {
+            if (_frames is null) return null;
+            _frames.WritePointKeys(_pointKeys!);
+            return _pointKeys;
+        }
+    }
+
+    private readonly int[]? _pointKeys;
+
+    /// <summary>讀檔之後呼叫：板塊座標系要把每格實際的歸屬寫回 <see cref="PlateSet.OwnerByCell"/>（標記法什麼都不做）。</summary>
+    internal void AfterRestore(PlateSet plates) => _frames?.PublishOwnership(plates);
 
     private readonly double[] _convergenceRate; // 公尺／百萬年，每步重算
     private readonly int[] _convergingNeighbor; // 這格主要在跟哪一格聚合，-1 表示沒有
@@ -400,6 +441,8 @@ public sealed class PlateTectonics
         {
             _frames = new PlateFrameCrust(grid.CellCount, plateCount);
             _newCrustCells = new bool[grid.CellCount];
+            _pointKeys = new int[grid.CellCount];
+            Dynamics.SpeedCapEnabled = true;
         }
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plateCount);
 
@@ -573,12 +616,18 @@ public sealed class PlateTectonics
         _frames!.Step(grid, state, plates, deltaMyr, _newCrustCells);
         LastRidgeCrustKm = _frames.LastNewCrustCells * (double)Isostasy.OceanicCrustThicknessKm;
         LastSubductedCrustKm = _frames.LastConsumedCrustKm;
+        LastAccretionCrustKm = _frames.LastAccretedCrustKm;
+        LastOceanSubductionCount = _frames.LastSubductions;
+        LastContinentCollisionCount = _frames.LastContinentCollisions;
 
         // 中洋脊火山：跟 v1 同一個量綱（新生地殼厚度 ÷ 經過的時間），只是這裡每步都更新
         var rate = Isostasy.OceanicCrustThicknessKm / MathF.Max((float)deltaMyr, 1e-6f);
+        Array.Clear(LastFrameNewCrustByBoundary);
         for (var cell = 0; cell < grid.CellCount; cell++)
         {
-            if (_newCrustCells![cell]) state.VolcanicActivity[cell] += rate;
+            if (!_newCrustCells![cell]) continue;
+            state.VolcanicActivity[cell] += rate;
+            LastFrameNewCrustByBoundary[(int)state.Boundary[cell]]++;
         }
     }
 
@@ -1462,7 +1511,7 @@ public sealed class PlateTectonics
             _convergingNeighbor[cell] = -1;
             _boundaryOtherPlate[cell] = -1;
 
-            var myPlate = plates.PlateIdByCell[cell];
+            var myPlate = plates.OwnerByCell[cell];
             var (vx, vy, vz) = plates.VelocityAt(grid, cell);
 
             var rx = grid.UnitVector[cell * 3];
@@ -1478,7 +1527,7 @@ public sealed class PlateTectonics
             {
                 var neighbor = grid.Neighbors[baseIndex + s];
                 if (neighbor == SimulationGrid.NoNeighbor) continue;
-                if (plates.PlateIdByCell[neighbor] == myPlate) continue;
+                if (plates.OwnerByCell[neighbor] == myPlate) continue;
 
                 // 指向鄰居的地表切線方向（把徑向分量去掉，只留下沿著球面的方向）
                 var dx = grid.UnitVector[neighbor * 3] - rx;
@@ -1511,7 +1560,7 @@ public sealed class PlateTectonics
             var isMostlyShear = strongestRelative > 0
                 && Math.Abs(strongestNormal) / strongestRelative < NormalComponentRatioForTransform;
 
-            _boundaryOtherPlate[cell] = plates.PlateIdByCell[strongestNeighbor];
+            _boundaryOtherPlate[cell] = plates.OwnerByCell[strongestNeighbor];
 
             if (isMostlyShear)
             {
@@ -1626,7 +1675,7 @@ public sealed class PlateTectonics
             if (state.Boundary[seed] != BoundaryType.Convergent) continue;
             if (_segmentId[seed] >= 0) continue;
 
-            var plateA = plates.PlateIdByCell[seed];
+            var plateA = plates.OwnerByCell[seed];
             var plateB = _boundaryOtherPlate[seed];
 
             // 這一段的參考速率。速率差太多的鄰居會被排除，於是線在速率變化處自然斷開。
@@ -1650,7 +1699,7 @@ public sealed class PlateTectonics
                     if (state.Boundary[neighbor] != BoundaryType.Convergent) continue;
 
                     // 同一條線段 ＝ 分隔同樣的兩個板塊（兩側各記一邊，所以順序無關）
-                    var theirPlate = plates.PlateIdByCell[neighbor];
+                    var theirPlate = plates.OwnerByCell[neighbor];
                     var theirOther = _boundaryOtherPlate[neighbor];
                     var sameEdge = (theirPlate == plateA && theirOther == plateB)
                         || (theirPlate == plateB && theirOther == plateA);
@@ -1927,14 +1976,14 @@ public sealed class PlateTectonics
             var hops = _orogenHops[cell];
             if (hops >= maxHops) continue;
 
-            var plate = plates.PlateIdByCell[cell];
+            var plate = plates.OwnerByCell[cell];
             var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
             for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
             {
                 var neighbor = grid.Neighbors[baseIndex + n];
                 if (neighbor == SimulationGrid.NoNeighbor) continue;
                 if (_orogenSegment[neighbor] >= 0) continue;
-                if (plates.PlateIdByCell[neighbor] != plate) continue;
+                if (plates.OwnerByCell[neighbor] != plate) continue;
 
                 // **只往大陸地殼裡擴散**（2026-09-07 量測後加的）。
                 //

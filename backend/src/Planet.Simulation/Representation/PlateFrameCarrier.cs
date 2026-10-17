@@ -38,6 +38,9 @@ internal sealed class PlateFrameCarrier : ICrustCarrier
     }
 
     /// <inheritdoc />
+    public int[]? Owners => _crust?.Owners;
+
+    /// <inheritdoc />
     public void Read(float[] thicknessKm, bool[] continental)
     {
         _crust!.Read(_state!);

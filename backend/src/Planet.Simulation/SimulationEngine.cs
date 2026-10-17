@@ -222,7 +222,7 @@ public sealed class SimulationEngine
         Timings.Mark("板塊構造");
         _plumes.Step(Grid, State, YearsPerStep / 1_000_000.0);
         // 裂縫火山要讀這一步剛分類好的板塊邊界（斷層帶在哪），所以排在板塊運動之後
-        _fissures.Step(Grid, State, Plates, YearsPerStep / 1_000_000.0);
+        _fissures.Step(Grid, State, Plates, YearsPerStep / 1_000_000.0, _tectonics.CrustPointKeys);
         Timings.Mark("火山（熱柱＋裂縫）");
 
         // 造礁與侵蝕排在均衡注水**之前**，用的是上一步的水深／水溫／逕流。
@@ -537,6 +537,8 @@ public sealed class SimulationEngine
 
         _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport);
         _tectonics.ReadFrom(reader);
+        _tectonics.AfterRestore(Plates);
+        SyncPlateIdIntoState();
 
         // 地表高度的快取要跟著更新，否則下一次解海平面會用到讀檔前的地形
         Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));
@@ -601,7 +603,7 @@ public sealed class SimulationEngine
 
     /// <summary>板塊歸屬同時存在 PlateSet（模擬用）與 State（顯示用），初始化時要對齊。</summary>
     private void SyncPlateIdIntoState() =>
-        Array.Copy(Plates.PlateIdByCell, State.PlateId, Grid.CellCount);
+        Array.Copy(Plates.OwnerByCell, State.PlateId, Grid.CellCount);
 
     /// <summary>目前的板塊邊界統計，給診斷與測試用。</summary>
     /// <returns>聚合、張裂、轉形三種邊界各有幾格。</returns>

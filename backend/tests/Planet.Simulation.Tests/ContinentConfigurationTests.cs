@@ -42,8 +42,8 @@ public class ContinentConfigurationTests
     [Fact]
     public void TwoContinentsAndTwoBigIslands_IsMet()
     {
-        // 球冠 40° 與 30°（約 60% / 35%），加上兩個 8° 的島（各約 2.5%）
-        var state = Planet((30, 0, 40), (-30, 150, 30), (0, -100, 8), (-60, -40, 8));
+        // 球冠 42° 與 32°（約 60% / 35%），加上兩個 8° 的島（各約 2.3%）；陸地合計約佔表面 21%
+        var state = Planet((30, 0, 42), (-30, 150, 32), (0, -100, 8), (-60, -40, 8));
         var r = ContinentConfiguration.Analyze(Grid, state);
 
         Assert.True(r.IsMet, $"兩塊 {r.LargestShare:P1} / {r.SecondShare:P1}、大島 {r.BigIslandCount}");
@@ -59,7 +59,7 @@ public class ContinentConfigurationTests
     [Fact]
     public void ProportionsRightButContinentFullOfHoles_IsNotMet()
     {
-        var state = Planet((30, 0, 40), (-30, 150, 30), (0, -100, 8), (-60, -40, 8));
+        var state = Planet((30, 0, 42), (-30, 150, 32), (0, -100, 8), (-60, -40, 8));
         var largestBefore = ContinentConfiguration.Analyze(Grid, state).LargestRaggedness;
 
         // 在最大那塊（北緯30、經度0、半徑40°）的內部每隔幾格打一個洞
@@ -77,6 +77,18 @@ public class ContinentConfigurationTests
         Assert.True(r.TwoLargestShare >= 0.75 && r.BigIslandCount >= 2, "比例條件本身要成立，這個測試才有意義");
         Assert.False(r.IsMet, $"破碎度 {r.LargestRaggedness:F2}（打洞前 {largestBefore:F2}）");
         Assert.True(r.LargestRaggedness > ContinentCriteria.Default.MaxRaggedness);
+    }
+
+    /// <summary>比例都對、但陸地太少（P4 實測陸地 1~2% 時停止條件就成立了）——不能算。</summary>
+    [Fact]
+    public void RightProportionsButTooLittleLand_IsNotMet()
+    {
+        var state = Planet((30, 0, 21), (-30, 150, 16), (0, -100, 4), (-60, -40, 4));
+        var r = ContinentConfiguration.Analyze(Grid, state, ContinentCriteria.Default with { MinLandMassAreaSquareKm = 0 });
+
+        Assert.True(r.TwoLargestShare >= 0.75 && r.BigIslandCount >= 2, $"比例條件本身要成立：{r.LargestShare:P0}/{r.SecondShare:P0}、大島 {r.BigIslandCount}");
+        Assert.True(r.LandShareOfSurface < 0.20);
+        Assert.False(r.IsMet);
     }
 
     [Fact]
@@ -116,7 +128,7 @@ public class ContinentConfigurationTests
     {
         // 在符合條件的配置上撒一堆單格碎島。n=24 一格就有 7,481 km²，比預設門檻大，
         // 所以用自訂門檻（約 2.7 格）讓單格碎島被排除。
-        var state = Planet((30, 0, 40), (-30, 150, 30), (0, -100, 8), (-60, -40, 8));
+        var state = Planet((30, 0, 42), (-30, 150, 32), (0, -100, 8), (-60, -40, 8));
         var specks = 0;
         for (var cell = 0; cell < Grid.CellCount && specks < 40; cell += 97)
         {
@@ -150,7 +162,7 @@ public class ContinentConfigurationTests
         var engine = new SimulationEngine(Grid, 42)
         {
             // 門檻全部歸零：第一次檢查就一定成立
-            StopCriteria = new ContinentCriteria(0, 0, 0, 0, 1, 0, double.MaxValue),
+            StopCriteria = new ContinentCriteria(0, 0, 0, 0, 1, 0, double.MaxValue, 0),
         };
 
         var first = engine.StepUntilStopCondition(100);

@@ -68,7 +68,9 @@ public static class ContinentConfiguration
         }
 
         var twoLargest = largest + second;
-        var isMet = twoLargest >= c.MinTwoLargestShare
+        var landShareOfSurface = (double)land / state.CellCount;
+        var isMet = landShareOfSurface >= c.MinLandShareOfSurface
+            && twoLargest >= c.MinTwoLargestShare
             && largest >= c.MinEachOfTwoShare
             && second >= c.MinEachOfTwoShare
             && bigIslands >= c.MinBigIslandCount
@@ -84,6 +86,7 @@ public static class ContinentConfiguration
             LargestRaggedness = largestRagged,
             SecondRaggedness = secondRagged,
             LandMassCount = significant.Count,
+            LandShareOfSurface = landShareOfSurface,
             OceanFraction = (double)waterCells / state.CellCount,
             IsMet = isMet,
         };
@@ -178,6 +181,10 @@ public static class ContinentConfiguration
 /// <param name="MaxBigIslandShare">「大島」的上限，超過就算一塊大陸了。澳洲 5.2%。</param>
 /// <param name="MinLandMassAreaSquareKm">小於這個面積的陸塊當成碎島，不算進任何比例（跟碎島清除同一個門檻）。</param>
 /// <param name="MaxRaggedness">最大兩塊各自的海岸破碎度上限（見 <see cref="ContinentConfigurationReport.LargestRaggedness"/>）。</param>
+/// <param name="MinLandShareOfSurface">
+/// 陸地（排除碎島）至少佔星球表面多少。比例條件只看陸地「內部」的分配，陸地很少時一兩個小島也會符合
+/// 「兩大塊＋大島」——P4 實測陸地只有 1~2% 時停止條件就成立了。2026-10-17 使用者定 20%（地球約 29%）。
+/// </param>
 public sealed record ContinentCriteria(
     double MinTwoLargestShare,
     double MinEachOfTwoShare,
@@ -185,7 +192,8 @@ public sealed record ContinentCriteria(
     double MinBigIslandShare,
     double MaxBigIslandShare,
     double MinLandMassAreaSquareKm,
-    double MaxRaggedness)
+    double MaxRaggedness,
+    double MinLandShareOfSurface)
 {
     /// <summary>
     /// 預設門檻（2026-10-16）。v1 在水量 1,150、第 1,600 步量到的是 66.9% / 18.2% / 3.4% / 3.4%——
@@ -201,7 +209,8 @@ public sealed record ContinentCriteria(
         MinBigIslandShare: 0.01,
         MaxBigIslandShare: 0.10,
         MinLandMassAreaSquareKm: SmallIslandCleanup.MaxCleanedIslandAreaSquareKm,
-        MaxRaggedness: 4.0);
+        MaxRaggedness: 4.0,
+        MinLandShareOfSurface: 0.20);
 }
 
 /// <summary><see cref="ContinentConfiguration.Analyze"/> 的結果。</summary>
@@ -228,12 +237,15 @@ public sealed record ContinentConfigurationReport
     /// <summary>第二大一塊的海岸破碎度。</summary>
     public required double SecondRaggedness { get; init; }
 
+    /// <summary>陸地（排除碎島）佔星球表面的比例。</summary>
+    public required double LandShareOfSurface { get; init; }
+
     /// <summary>排除碎島之後的陸塊總數。</summary>
     public required int LandMassCount { get; init; }
 
     /// <summary>海洋佔全球面積的比例。**只監看，不是停止條件的一部分。**</summary>
     public required double OceanFraction { get; init; }
 
-    /// <summary>全部條件（比例、大島、破碎度）是否成立。</summary>
+    /// <summary>全部條件（陸地面積、比例、大島、破碎度）是否成立。</summary>
     public required bool IsMet { get; init; }
 }

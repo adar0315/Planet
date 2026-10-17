@@ -80,7 +80,12 @@ public sealed class FissureVolcanism
     /// <param name="state">模擬狀態，地殼厚度與火山活動會被更新。</param>
     /// <param name="plates">板塊配置，用來判斷哪些格子屬於重板塊。</param>
     /// <param name="deltaMyr">這一步代表多少百萬年。</param>
-    public void Step(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr)
+    /// <param name="ventKeys">
+    /// 選填：每一格用來挑噴發口的鍵。板塊座標系時是「這一格顯示的地殼點」（見 <c>PlateTectonics.CrustPointKeys</c>），
+    /// 噴發口才會**跟著板塊走**——斷層屬於板塊。用格子索引的話噴發口固定在網格上，轉形邊界的地殼沿著邊界滑過
+    /// 一個固定的噴發口，會拖出一條厚地殼；P4 實測 50 Myr 的地圖上滿是一條條平行的條紋。null 時用格子索引（標記法）。
+    /// </param>
+    public void Step(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr, int[]? ventKeys = null)
     {
         LastAddedCrustKm = 0;
 
@@ -90,7 +95,7 @@ public sealed class FissureVolcanism
 
         for (var cell = 0; cell < state.CellCount; cell++)
         {
-            var anomaly = plates.Plates[plates.PlateIdByCell[cell]].DensityAnomalyKgPerM3;
+            var anomaly = plates.Plates[plates.OwnerByCell[cell]].DensityAnomalyKgPerM3;
             if (anomaly <= 0f) continue;
 
             // 應力集中在斷層與拉張的地方。轉形邊界就是斷層與地震帶
@@ -98,7 +103,7 @@ public sealed class FissureVolcanism
             var boundary = state.Boundary[cell];
             if (boundary is not (BoundaryType.Transform or BoundaryType.Divergent)) continue;
 
-            if (!IsVent(cell, ventSpacing)) continue;
+            if (!IsVent(ventKeys?[cell] ?? cell, ventSpacing)) continue;
 
             // 密度異常越大 → 負浮力越大 → 應力越大 → 裂縫越發達
             var scale = anomaly / PlateSet.DensePlateAnomalyKgPerM3;
@@ -145,11 +150,11 @@ public sealed class FissureVolcanism
     /// 這一格是不是噴發口。用格子索引的雜湊而不是亂數，位置才會穩定（見類別說明）。
     /// 直接用 <c>cell % spacing</c> 不行——網格的索引有空間規律，那樣會挑出一條條的直線。
     /// </summary>
-    /// <param name="cell">格子索引。</param>
+    /// <param name="key">格子索引，或板塊座標系的地殼點鍵。</param>
     /// <param name="spacing">每幾格挑一個，由 <see cref="AreaPerVentSquareKm"/> 換算而來。</param>
-    private static bool IsVent(int cell, int spacing)
+    private static bool IsVent(int key, int spacing)
     {
-        var hash = (uint)cell * 2654435761u; // Knuth 的乘法雜湊
+        var hash = (uint)key * 2654435761u; // Knuth 的乘法雜湊
         return hash % (uint)spacing == 0;
     }
 }

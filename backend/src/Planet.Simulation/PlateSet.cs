@@ -65,8 +65,21 @@ public sealed class PlateSet
     /// <summary>所有板塊，索引即 <see cref="Plate.Id"/>。</summary>
     public Plate[] Plates { get; }
 
-    /// <summary>每一格屬於哪個板塊（長度 = 格數）。會隨著板塊移動而改變。</summary>
+    /// <summary>
+    /// 每一格在種子幾何（旋轉中的 Voronoi）下屬於哪個板塊（長度 = 格數）。會隨著板塊移動而改變。
+    /// 地質作用要用 <see cref="OwnerByCell"/>——這個只用在運動學（種子跟著板塊轉、拖曳的範圍）。
+    /// </summary>
     public int[] PlateIdByCell { get; }
+
+    /// <summary>
+    /// 每一格**實際上**屬於哪個板塊——邊界分類、動力學、火山都用這個。
+    ///
+    /// 標記法時就是 <see cref="PlateIdByCell"/>（同一個陣列）。板塊座標系時是「這一格的地殼是哪個板塊的」
+    /// （見 <c>PlateFrameCrust</c>）：Voronoi 的平分線以兩側的平均速度移動，在隱沒帶上會離開上盤真正的邊緣，
+    /// 海溝跟著它在上盤上滑動、島弧被抹成一大片薄薄的增厚帶（P4 第一次在 n=150 跑 50 Myr，陸地 7.8% 幾乎都是這種，
+    /// 大陸地殼一格都沒長）。改成看地殼在哪，海溝才會停在上盤的邊緣。
+    /// </summary>
+    public int[] OwnerByCell { get; private set; }
 
     /// <summary>
     /// 每個板塊有幾個種子點。
@@ -112,6 +125,13 @@ public sealed class PlateSet
     /// <summary>上一次全掃之後，種子累積轉了多少角度（弧度）。</summary>
     private double _driftAngleSinceFullScan;
 
+    /// <summary>讓 <see cref="OwnerByCell"/> 變成獨立的陣列（板塊座標系用；起始值等於 Voronoi 的歸屬）。</summary>
+    internal void SeparateOwnership()
+    {
+        if (!ReferenceEquals(OwnerByCell, PlateIdByCell)) return;
+        OwnerByCell = (int[])PlateIdByCell.Clone();
+    }
+
     /// <summary>這一次重新分配實際重掃了幾格。診斷與「該不該改回全掃」的判斷用。</summary>
     private int _lastRescanCount;
 
@@ -121,6 +141,7 @@ public sealed class PlateSet
     {
         Plates = plates;
         PlateIdByCell = plateIdByCell;
+        OwnerByCell = plateIdByCell;
         _seedX = seedX;
         _seedY = seedY;
         _seedZ = seedZ;
@@ -702,7 +723,8 @@ public sealed class PlateSet
             };
         }
 
-        RemoveNetRotation(Plates, PlateIdByCell);
+        // 依面積加權用「實際的歸屬」：板塊座標系裡板塊就是它的地殼（標記法時是同一個陣列）
+        RemoveNetRotation(Plates, OwnerByCell);
     }
 
     /// <summary>
@@ -770,7 +792,11 @@ public sealed class PlateSet
     /// <param name="cell">格子索引。</param>
     public (double X, double Y, double Z) VelocityAt(SimulationGrid grid, int cell)
     {
-        var plate = Plates[PlateIdByCell[cell]];
+        // **用這一格地殼實際所屬的板塊（OwnerByCell），不是 Voronoi 的**：速度是地殼的速度。
+        // 板塊座標系時兩者可以不同，邊界兩側的格子常常同屬一個 Voronoi 板塊——用 Voronoi 的話相對速度是 0，
+        // 邊界分類整個亂掉（P4 實測：分類出 10,175 個轉形、107 個聚合，用正確的速度重算是 4,201 個聚合），
+        // 沒有聚合邊界就沒有板片拉力，所有板塊慢到 0.01~0.16°/Myr。標記法時兩者是同一個陣列。
+        var plate = Plates[OwnerByCell[cell]];
         var omegaRad = plate.AngularVelocityDegPerMyr * Math.PI / 180.0;
 
         // r 用實際半徑，算出來的速度才有公尺/百萬年的物理意義

@@ -72,8 +72,16 @@ internal static class RepresentationBenchmark
                 rotation[p] = SphereMath.Normalize(SphereMath.Multiply(SphereMath.StepRotation(plates.Plates[p], deltaMyr), rotation[p]));
             }
 
-            // 精確解
-            var owner = plates.PlateIdByCell;
+            var stepMs = new double[carriers.Count];
+            for (var i = 0; i < carriers.Count; i++)
+            {
+                var watch = Stopwatch.StartNew();
+                carriers[i].Step(grid, plates, deltaMyr);
+                stepMs[i] = watch.Elapsed.TotalMilliseconds;
+            }
+
+            // 精確解：地殼歸屬以候選回報的為準（板塊座標系會讓地殼越過 Voronoi 平分線）
+            var owner = carriers.Select(c => c.Owners).FirstOrDefault(o => o is not null) ?? plates.PlateIdByCell;
             var interiorNow = singleRotation ? null : InteriorMask(grid, owner);
             var u = grid.UnitVector;
             Parallel.For(0, n, c =>
@@ -94,9 +102,6 @@ internal static class RepresentationBenchmark
 
             for (var i = 0; i < carriers.Count; i++)
             {
-                var watch = Stopwatch.StartNew();
-                carriers[i].Step(grid, plates, deltaMyr);
-                watch.Stop();
                 carriers[i].Read(thickness, flags);
                 if (hot.Length > 0)
                 {
@@ -105,7 +110,7 @@ internal static class RepresentationBenchmark
                     stats[i].AddedMass += hot.Length * (double)hotspotKmPerStep;
                     carriers[i].Read(thickness, flags);
                 }
-                stats[i].Record(thickness, flags, exactContinental, exactValid, watch.Elapsed.TotalMilliseconds);
+                stats[i].Record(thickness, flags, exactContinental, exactValid, stepMs[i]);
             }
 
             if (step == reverseAtStep)

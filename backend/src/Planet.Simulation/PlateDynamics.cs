@@ -63,6 +63,25 @@ public sealed class PlateDynamics
     private const double VelocityScale = 1500.0;
 
     /// <summary>
+    /// 速度尺度的倍率。標記法是 1（<see cref="VelocityScale"/> 是在 v1 的 Voronoi 邊界上校準的）；
+    /// 板塊座標系的邊界是地殼的實際邊緣，驅動力的總量不同，要另外校準（見 <see cref="PlateTectonics"/> 的建構子）。
+    /// </summary>
+    internal double VelocityScaleFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// 是否套用 <see cref="MaxPlateSpeedMetersPerYear"/>。只有板塊座標系開（見 <see cref="PlateTectonics"/> 的建構子）：
+    /// 那裡板塊就是它的地殼，地殼快被吃光的小板塊拖曳趨近 0 才需要它。標記法維持 v1 的行為不變——
+    /// 無條件套用的話 v1 的演化會被改掉（P4 實測：SmallIslandCleanupTests 的最大陸塊從 484 變成 486 格）。
+    /// </summary>
+    internal bool SpeedCapEnabled { get; set; }
+
+    /// <summary>
+    /// 板塊最快能跑多快（公尺／年，離歐拉極 90° 處）。地球上最快的板塊約 10~15 公分／年，取 12。
+    /// 不是用來校準的旋鈕，是防止小板塊失控的上限——正常的板塊遠低於它。
+    /// </summary>
+    internal const double MaxPlateSpeedMetersPerYear = 0.12;
+
+    /// <summary>
     /// 角速度往力矩平衡解鬆弛的時間尺度（百萬年）。
     ///
     /// 板塊構造是準靜態的（慣性可以忽略），所以物理上力一變速度就該跟著變。
@@ -123,7 +142,19 @@ public sealed class PlateDynamics
                 _inertia[p * 6 + 3], _inertia[p * 6 + 4], _inertia[p * 6 + 5],
                 _torque[p * 3], _torque[p * 3 + 1], _torque[p * 3 + 2]);
 
-            target = (target.X * VelocityScale, target.Y * VelocityScale, target.Z * VelocityScale);
+            var velocityScale = VelocityScale * VelocityScaleFactor;
+            target = (target.X * velocityScale, target.Y * velocityScale, target.Z * velocityScale);
+
+            // 速度上限：離歐拉極 90° 處的地表速度不超過 MaxPlateSpeedMetersPerYear。
+            // 拖曳正比於板塊面積，一個快消失的小板塊拖曳趨近 0，同樣的驅動力就把它轉到失控
+            // （P4 實測 n=24 一個小板塊從 1.3 跳到 18.8°/Myr，其他板塊都在 1 左右）。
+            var targetMagnitude = Math.Sqrt(target.X * target.X + target.Y * target.Y + target.Z * target.Z);
+            var maxDegPerMyr = MaxPlateSpeedMetersPerYear / grid.PlanetRadiusMeters * 1_000_000 * 180 / Math.PI;
+            if (SpeedCapEnabled && targetMagnitude > maxDegPerMyr)
+            {
+                var capScale = maxDegPerMyr / targetMagnitude;
+                target = (target.X * capScale, target.Y * capScale, target.Z * capScale);
+            }
 
             // 從現在的歐拉極與角速度還原出目前的角速度向量，再往目標鬆弛
             var plate = plates.Plates[p];
@@ -163,7 +194,11 @@ public sealed class PlateDynamics
         var area = grid.AverageCellAreaSquareMeters;
         for (var cell = 0; cell < grid.CellCount; cell++)
         {
-            var p = plates.PlateIdByCell[cell];
+            // **拖曳跟驅動力用同一個範圍：板塊的地殼（OwnerByCell）。**板塊座標系裡板塊就是它的地殼
+            // （見 PlateFrameCrust 的說明），種子不再代表任何東西。一個地殼快被吃光的小板塊拖曳趨近 0，
+            // 會被同樣的驅動力轉到失控——由速度上限 MaxPlateSpeedMetersPerYear 擋住。
+            // 標記法時兩個陣列是同一個，這裡沒有差別。
+            var p = plates.OwnerByCell[cell];
             if ((uint)p >= (uint)plateCount) continue;
 
             var x = grid.UnitVector[cell * 3];
@@ -200,7 +235,7 @@ public sealed class PlateDynamics
             if (direction is null) continue; // 這一格算不出方向就跳過這一格，不是放棄整趟累加
             var (dx, dy, dz) = direction.Value;
 
-            var plate = plates.PlateIdByCell[cell];
+            var plate = plates.OwnerByCell[cell];
             double magnitude;
 
             if (boundary == BoundaryType.Convergent)
@@ -278,13 +313,13 @@ public sealed class PlateDynamics
 
     private static int FindNeighborOnOtherPlate(SimulationGrid grid, PlateSet plates, int cell)
     {
-        var mine = plates.PlateIdByCell[cell];
+        var mine = plates.OwnerByCell[cell];
         var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
         for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
         {
             var neighbor = grid.Neighbors[baseIndex + n];
             if (neighbor == SimulationGrid.NoNeighbor) continue;
-            if (plates.PlateIdByCell[neighbor] != mine) return neighbor;
+            if (plates.OwnerByCell[neighbor] != mine) return neighbor;
         }
         return -1;
     }

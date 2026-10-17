@@ -224,6 +224,8 @@ export interface ContinentConfiguration {
   /** 海岸破碎度：海岸格數 ÷ 同面積圓盤的海岸格數。1 ＝ 圓盤，愈大愈破碎。 */
   largestRaggedness: number
   secondRaggedness: number
+  /** 陸地（排除碎島）佔星球表面的比例。 */
+  landShareOfSurface: number
   landMassCount: number
   oceanFraction: number
   isMet: boolean
