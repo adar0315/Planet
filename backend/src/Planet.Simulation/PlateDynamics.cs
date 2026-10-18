@@ -76,6 +76,14 @@ public sealed class PlateDynamics
     internal bool SpeedCapEnabled { get; set; }
 
     /// <summary>
+    /// 是否在碰撞帶施加碰撞阻力（見 <see cref="AccumulateDrivingTorque"/>）。只有板塊座標系開，標記法維持 v1 的行為不變。
+    /// </summary>
+    internal bool CollisionResistanceEnabled { get; set; }
+
+    /// <summary>診斷用：上一次更新速度時，有幾個聚合格是碰撞（兩側都浮得住）而施加了碰撞阻力。</summary>
+    internal int LastCollisionCells { get; private set; }
+
+    /// <summary>
     /// 板塊最快能跑多快（公尺／年，離歐拉極 90° 處）。地球上最快的板塊約 10~15 公分／年，取 12。
     /// 不是用來校準的旋鈕，是防止小板塊失控的上限——正常的板塊遠低於它。
     /// </summary>
@@ -220,6 +228,7 @@ public sealed class PlateDynamics
         SimulationGrid grid, SimulationState state, PlateSet plates, int[] convergingNeighbor)
     {
         var width = grid.AverageCellSpacingMeters;
+        LastCollisionCells = 0;
 
         for (var cell = 0; cell < grid.CellCount; cell++)
         {
@@ -238,7 +247,21 @@ public sealed class PlateDynamics
             var plate = plates.OwnerByCell[cell];
             double magnitude;
 
-            if (boundary == BoundaryType.Convergent)
+            if (boundary == BoundaryType.Convergent && CollisionResistanceEnabled
+                && ResistsSubduction(state, cell) && ResistsSubduction(state, neighbor))
+            {
+                // **碰撞阻力**（v2 P4，2026-10-18）：兩側都浮得住（大陸或厚島弧）時誰都沉不下去，
+                // 沒有板片可以拉，反而是浮起來的地殼頂住、抵抗繼續聚合——印度撞上亞洲後從 15 降到約 5 公分／年。
+                // 兩側的格子各自把自己的板塊往**遠離**對方的方向推，大小取一整條老板片的拉力。
+                //
+                // 少了這一條，碰撞帶上浮力略低的那一側照樣拿到全額板片拉力（強度只看年齡），
+                // 兩塊大陸撞上之後永遠互推，碰撞前緣的大陸面積每步被縮短增厚吃掉：3 億年長跑每步互撞 5~12 次、
+                // 新成大陸每步約 9 格，兩者抵銷，大陸地殼停在 8%，也不會因為碰撞停住而拼成超大陸。
+                dx = -dx; dy = -dy; dz = -dz;
+                magnitude = CollisionResistancePerWidth * width;
+                LastCollisionCells++;
+            }
+            else if (boundary == BoundaryType.Convergent)
             {
                 // **只有正在隱沒的那一側被拉**：拉力來自沉下去的板片，
                 // 上盤不會被自己的隱沒帶拉走。誰是下盤用相對浮力判斷，
@@ -307,6 +330,17 @@ public sealed class PlateDynamics
         var b = plate * 3;
         return Math.Sqrt(v[b] * v[b] + v[b + 1] * v[b + 1] + v[b + 2] * v[b + 2]);
     }
+
+    /// <summary>
+    /// 碰撞阻力的強度（每公尺邊界），取一整條老板片的拉力：岩石圈長到上限時的熱虧損
+    /// （跟板片拉力同一個公式，見 <see cref="AccumulateDrivingTorque"/>）。
+    /// 碰撞要能把一塊被板片拉著的板塊頂住，阻力至少要跟拉力同量級。
+    /// </summary>
+    private const double CollisionResistancePerWidth =
+        Isostasy.MaxLithosphereThicknessKm * 1000.0 * Isostasy.LithosphereMantleDensityExcess / Isostasy.MantleDensity;
+
+    private static bool ResistsSubduction(SimulationState state, int cell) =>
+        Isostasy.ResistsSubduction(state.Crust[cell], state.CrustThickness[cell], state.CrustDensity[cell], state.OceanicOnly[cell]);
 
     private static float Buoyancy(SimulationState state, int cell) => Isostasy.LithosphereBuoyancyMeters(
         state.Crust[cell], state.CrustThickness[cell], state.CrustDensity[cell], state.CrustAge[cell]);

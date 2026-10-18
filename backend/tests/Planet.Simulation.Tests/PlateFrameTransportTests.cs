@@ -40,7 +40,8 @@ public class PlateFrameTransportTests
 
             var sizes = new int[engine.Plates.Plates.Length];
             foreach (var p in engine.Plates.OwnerByCell) sizes[p]++;
-            Assert.True(sizes.All(n => n > 0), $"第 {(block + 1) * 50} 步有板塊塌縮成 0 格：{string.Join(",", sizes)}");
+            // 焊接之後休眠的板塊（被併進別的板塊、等著之後裂出來）0 格是正常的
+            Assert.True(sizes.Select((n, p) => n > 0 || engine.Tectonics.IsPlateDormant(p)).All(ok => ok), $"第 {(block + 1) * 50} 步有板塊塌縮成 0 格：{string.Join(",", sizes)}");
 
             boundaryShares.Add(s.Boundary.Count(b => b != BoundaryType.None) / (double)s.CellCount);
         }

@@ -4,6 +4,11 @@
     <ProjectReference Include="..\Planet.Domain\Planet.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 模擬的大陸配置生成（v2 方向 2）共用同一套 simplex noise -->
+    <InternalsVisibleTo Include="Planet.Simulation" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -49,6 +49,15 @@ internal sealed class PlateFrameCrust
     private readonly int[][] _origin;
     private int _nextOrigin;
 
+    /// <summary>從開始到現在經過的時間（百萬年），給焊接後的休眠計時用。</summary>
+    private double _elapsedMyr;
+
+    /// <summary>每個板塊編號休眠到什麼時候（百萬年）：被焊接併掉的板塊在這之前不重生（見 <see cref="WeldSuturedPlates"/>）。</summary>
+    private readonly double[] _dormantUntilMyr;
+
+    /// <summary>這一步有發生大陸碰撞（兩邊都是大陸的縮短增厚）的板塊對，小的編號在前。焊接只考慮這些（見 <see cref="WeldSuturedPlates"/>）。</summary>
+    private readonly HashSet<(int, int)> _collidingPairs = [];
+
     /// <summary>每一格現在顯示的是哪個板塊、它座標系裡的哪一點。</summary>
     private int[] _owner, _bodyCell, _newOwner, _newBodyCell;
 
@@ -59,6 +68,12 @@ internal sealed class PlateFrameCrust
 
     /// <summary>歸屬平滑用的連通塊編號（暫存）。</summary>
     private readonly int[] _component;
+
+    /// <summary>這一步大陸碰撞縮短下來、還沒攤開的地殼（公里·格），記在發生碰撞的那一格（見 <see cref="DistributeCollisionThickening"/>）。</summary>
+    private readonly float[] _collisionBudget;
+
+    /// <summary>正在判定的是哪一格（<see cref="Resolve"/> 要知道碰撞發生在哪裡）。</summary>
+    private int _resolveCell;
     private int _stamp;
 
     /// <summary>建立空的板塊座標系地殼。</summary>
@@ -83,7 +98,13 @@ internal sealed class PlateFrameCrust
         _categoryChanged = new bool[cellCount];
         _hidden = new bool[cellCount];
         _component = new int[cellCount];
+        _dormantUntilMyr = new double[plateCount];
+        _collisionBudget = new float[cellCount];
+        _collisionUpper = new int[cellCount];
     }
+
+    /// <summary>這個板塊編號是不是焊接之後在休眠（0 格是正常的，見 <see cref="WeldSuturedPlates"/>）。</summary>
+    internal bool IsDormant(int plate) => _elapsedMyr < _dormantUntilMyr[plate];
 
     /// <summary>每格的地殼屬於哪個板塊（唯讀用途）。</summary>
     internal int[] Owners => _owner;
@@ -131,6 +152,15 @@ internal sealed class PlateFrameCrust
     /// <summary>上一步從最大的板塊裂出新板塊的次數（見 <see cref="RebirthDeadPlates"/>）。</summary>
     internal int LastPlatesReborn { get; private set; }
 
+    /// <summary>上一步焊接（兩塊板塊沿著大陸碰撞帶合併成一塊）的次數，見 <see cref="WeldSuturedPlates"/>。</summary>
+    internal int LastPlatesWelded { get; private set; }
+
+    /// <summary>診斷用：上一步保險段（被別的板塊蓋住、沒有顯示的點）解決了幾次重疊。</summary>
+    internal int LastHiddenResolves { get; private set; }
+
+    /// <summary>診斷用：其中幾次是縮短增厚（整層疊上去）。</summary>
+    internal int LastHiddenShortenings { get; private set; }
+
     /// <summary>上一步併進周圍板塊的碎片塊數（見 <see cref="AbsorbFragments"/>）。</summary>
     internal int LastFragmentsAbsorbed { get; private set; }
 
@@ -175,6 +205,8 @@ internal sealed class PlateFrameCrust
             _valid[p][c] = true;
         }
         _nextOrigin = _cellCount;
+        _elapsedMyr = 0;
+        Array.Clear(_dormantUntilMyr);
         PublishOwnership(plates);
     }
 
@@ -201,8 +233,12 @@ internal sealed class PlateFrameCrust
         }
 
         _stamp++;
+        _elapsedMyr += deltaMyr;
         var u = grid.UnitVector;
         ResetCounters();
+        if (_plateSizes.Length != _rotation.Length) _plateSizes = new int[_rotation.Length];
+        Array.Clear(_plateSizes);
+        for (var c = 0; c < _cellCount; c++) _plateSizes[_owner[c]]++;
         if (newCrustCells is not null) Array.Clear(newCrustCells);
 
         // 0. 老化：年齡是地殼自己的性質，要在板塊座標系裡長。
@@ -282,7 +318,11 @@ internal sealed class PlateFrameCrust
                 var otherBody = _newBodyCell[g];
                 if (!_valid[other][otherBody]) continue;
                 // 顯示中的那一個是在位者，放在前面（見 Resolve 的縮短增厚規則）
+                var shortBefore = LastShortenings;
+                _resolveCell = g;
                 var winner = Resolve(other, otherBody, plate, b);
+                LastHiddenResolves++;
+                if (LastShortenings > shortBefore) LastHiddenShortenings++;
                 if (winner == plate) { _newOwner[g] = plate; _newBodyCell[g] = b; }
             }
         }
@@ -302,6 +342,8 @@ internal sealed class PlateFrameCrust
 
         (_owner, _newOwner) = (_newOwner, _owner);
         (_bodyCell, _newBodyCell) = (_newBodyCell, _bodyCell);
+        DistributeCollisionThickening(grid);
+        WeldSuturedPlates(grid, plates);
         RebirthDeadPlates(grid, plates);
         Array.Copy(_owner, plates.OwnerByCell, _cellCount);
         Read(state);
@@ -357,6 +399,30 @@ internal sealed class PlateFrameCrust
     private const double RiftAngularVelocityDegPerMyr = 1.0;
 
     /// <summary>
+    /// 重生要從哪個板塊裂出來：海洋地殼最多、而且大陸地殼不超過 <see cref="MaxRebirthParentContinentalShare"/> 的那個
+    /// （新板塊從大洋裡裂出來，像中洋脊上的板塊重組）；沒有這種板塊才退而取海洋地殼最多的。
+    ///
+    /// 原本取「格數最多的」：大陸配置起始時最大的板塊就是焊起來的大陸，重生直接把它從中間切開，
+    /// 兩半各自漂走又撞回來（方向 2 劇本第二次跑：4,000 萬年 → 4,500 萬年大陸互撞每步 2.7 → 21 次、
+    /// 合併後的大陸裂成網狀、破碎度 2.7 → 9.0）。大陸要裂開是劇本的事（見 ContinentScenario）。
+    /// </summary>
+    private static int RebirthParent(int[] sizes, int[] oceanic, int[] continental)
+    {
+        var best = -1;
+        for (var p = 0; p < sizes.Length; p++)
+        {
+            if (sizes[p] == 0 || continental[p] > MaxRebirthParentContinentalShare * sizes[p]) continue;
+            if (best < 0 || oceanic[p] > oceanic[best]) best = p;
+        }
+        if (best >= 0) return best;
+        for (var p = 0; p < sizes.Length; p++) if (best < 0 || oceanic[p] > oceanic[best]) best = p;
+        return best;
+    }
+
+    /// <summary>重生的母板塊最多可以有多少比例的大陸地殼（小島弧、碎片不算大陸）。</summary>
+    private const double MaxRebirthParentContinentalShare = 0.02;
+
+    /// <summary>
     /// 地殼歸零的板塊，用它的編號從最大的板塊裂出一塊新的（大陸裂谷，例如東非）。
     ///
     /// 板塊就是它的地殼之後，一個被吃光的板塊不會再生（沒有種子了），板塊只會越來越少，
@@ -369,14 +435,21 @@ internal sealed class PlateFrameCrust
     private void RebirthDeadPlates(SimulationGrid grid, PlateSet plates)
     {
         var sizes = new int[_rotation.Length];
-        for (var c = 0; c < _cellCount; c++) sizes[_owner[c]]++;
+        var oceanic = new int[_rotation.Length];
+        var continental = new int[_rotation.Length];
+        for (var c = 0; c < _cellCount; c++)
+        {
+            var o = _owner[c];
+            sizes[o]++;
+            if (_crust[o][_bodyCell[c]] == CrustType.Continental) continental[o]++;
+            else oceanic[o]++;
+        }
 
         for (var dead = 0; dead < sizes.Length; dead++)
         {
-            if (sizes[dead] > 0) continue;
+            if (sizes[dead] > 0 || _elapsedMyr < _dormantUntilMyr[dead]) continue;
             RetirePlate(grid, plates, dead);
-            var parent = 0;
-            for (var p = 1; p < sizes.Length; p++) if (sizes[p] > sizes[parent]) parent = p;
+            var parent = RebirthParent(sizes, oceanic, continental);
             if (sizes[parent] < 2) return;
 
             var u = grid.UnitVector;
@@ -431,8 +504,336 @@ internal sealed class PlateFrameCrust
             };
             sizes[dead] = moved;
             sizes[parent] -= moved;
+            oceanic[parent] = Math.Max(0, oceanic[parent] - moved);
             LastPlatesReborn++;
         }
+    }
+
+    /// <summary>
+    /// 兩塊板塊之間「兩側都是大陸」的邊界長到這裡就焊接成一塊（公里）。
+    /// 印度與歐亞的碰撞帶約 2,500 公里、阿帕拉契（勞倫西亞與岡瓦納）約 3,000 公里；取 1,000 公里，
+    /// 小島弧或大陸角擦過不算，真的有一段大陸迎面撞上才算。
+    /// </summary>
+    private const double WeldSutureLengthKm = 1_000;
+
+    /// <summary>
+    /// 被焊接併掉的板塊編號休眠多久才重生（百萬年）。超大陸聚合之後大約維持一億年才裂開（盤古約 3.35 億到 1.75 億年前）；
+    /// 不休眠的話，下一步重生就從最大的板塊切一塊出來，剛焊起來的大陸馬上又被拆開。
+    /// </summary>
+    private const double WeldedPlateDormancyMyr = 100;
+
+    /// <summary>焊接之後至少要留幾個還活著的板塊——全部焊成一塊就沒有邊界、沒有構造活動了。</summary>
+    private const int MinLivePlates = 6;
+
+    /// <summary>
+    /// **板塊焊接**（v2 P4，2026-10-18）：兩塊板塊沿著夠長的大陸碰撞帶撞上之後合併成一塊（印度併進歐亞、
+    /// 勞倫西亞與岡瓦納焊成盤古）。小的那一塊把**目前顯示的地殼**整片抄進大的那一塊的座標系，之後跟著它走；
+    /// 它的編號休眠 <see cref="WeldedPlateDormancyMyr"/>，期滿再由 <see cref="RebirthDeadPlates"/> 從最大的板塊裂出來。
+    ///
+    /// 為什麼要有：板塊數固定、碰撞之後兩塊板塊永遠各走各的，大陸只長在板塊邊緣、而碰撞帶永遠在互相吃
+    /// （碰撞阻力擋不住），陸地的形狀就是板塊邊界的形狀——3 億年長跑：陸地 22.9%，但最大兩塊只佔陸地 9%＋8%、
+    /// 一圈一圈的環狀島弧圍著海盆。超大陸旋迴需要「撞上 → 焊成一塊 → 之後裂開」這一步。
+    ///
+    /// 被別的板塊蓋在下面、沒有顯示的點不搬（它們本來就在隱沒或等著被保險段解決）。
+    /// </summary>
+    private void WeldSuturedPlates(SimulationGrid grid, PlateSet plates)
+    {
+        var plateCount = _rotation.Length;
+        var sizes = new int[plateCount];
+        for (var c = 0; c < _cellCount; c++) sizes[_owner[c]]++;
+        var live = sizes.Count(s => s > 0);
+        if (live <= MinLivePlates) return;
+
+        // 每一對板塊之間兩側都是大陸的邊界格數（兩側各算一次，所以門檻要乘 2）
+        var suture = new Dictionary<(int, int), int>();
+        Span<int> seen = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
+        for (var c = 0; c < _cellCount; c++)
+        {
+            var p = _owner[c];
+            if (_crust[p][_bodyCell[c]] != CrustType.Continental) continue;
+            var count = 0;
+            var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+            for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+            {
+                var n = grid.Neighbors[baseIndex + s];
+                if (n == SimulationGrid.NoNeighbor) continue;
+                var q = _owner[n];
+                if (q == p || seen[..count].Contains(q)) continue;
+                if (_crust[q][_bodyCell[n]] != CrustType.Continental) continue;
+                seen[count++] = q;
+                var key = p < q ? (p, q) : (q, p);
+                suture[key] = suture.TryGetValue(key, out var k) ? k + 1 : 1;
+            }
+        }
+
+        var threshold = 2.0 * WeldSutureLengthKm * 1000.0 / grid.AverageCellSpacingMeters;
+        var u = grid.UnitVector;
+        var welded = new bool[plateCount];
+        // 最長的碰撞帶先焊；同樣長取編號小的，結果才是決定性的
+        foreach (var ((a, b), length) in suture.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key))
+        {
+            if (length < threshold) break;
+            // 要這一步真的在碰撞才焊：只是並排、沒有在聚合的兩塊大陸不算（例如兩塊板塊剛好用同一個旋轉在走）
+            if (!_collidingPairs.Contains((a, b))) continue;
+            if (WeldBlocked?.Invoke(a, b) == true) continue;
+            if (welded[a] || welded[b] || live <= MinLivePlates) continue;
+            var (keep, gone) = sizes[a] >= sizes[b] ? (a, b) : (b, a);
+            MergePlate(grid, plates, keep, gone);
+
+            sizes[keep] += sizes[gone];
+            sizes[gone] = 0;
+            welded[keep] = welded[gone] = true;
+            live--;
+            LastPlatesWelded++;
+        }
+    }
+
+/// <summary>
+    /// 把板塊 gone 整塊併進 keep：gone 目前顯示的地殼抄進 keep 的座標系（先推、再拉補洞），gone 的編號休眠
+    /// <see cref="WeldedPlateDormancyMyr"/>。焊接（<see cref="WeldSuturedPlates"/>）與劇本的強制焊接（<see cref="ForceWeld"/>）共用。
+    /// </summary>
+    private void MergePlate(SimulationGrid grid, PlateSet plates, int keep, int gone)
+    {
+        var u = grid.UnitVector;
+        var wasGone = new bool[_cellCount];
+        var oldBody = new int[_cellCount];
+        for (var c = 0; c < _cellCount; c++)
+        {
+            wasGone[c] = _owner[c] == gone;
+            oldBody[c] = _bodyCell[c];
+        }
+
+        for (var c = 0; c < _cellCount; c++)
+        {
+            if (!wasGone[c]) continue;
+            var from = _bodyCell[c];
+            var (x, y, z) = SphereMath.Rotate(_rotation[keep], u[c * 3], u[c * 3 + 1], u[c * 3 + 2], inverse: true);
+            var to = grid.FindNearestCell(x, y, z);
+            if (_valid[gone][from])
+            {
+                CopyPoint(gone, from, keep, to);
+                _valid[keep][to] = true;
+            }
+            else if (!_valid[keep][to]) continue; // 不會發生：顯示中的點都有地殼
+            _owner[c] = keep;
+            _bodyCell[c] = to;
+        }
+        // 再「拉」一次：只推的話，兩個座標系的網格對不齊，保留板塊的座標系裡有些點被寫兩次、有些點沒寫到，
+        // 之後從它讀回來時那些點是空缺、長出新的海洋地殼——焊起來的大陸中間一顆顆胡椒
+        // （方向 2 第一次跑：焊接那一步胡椒 253 → 1,105、最大一塊的破碎度 3.6 → 6.1）。
+        // 所以保留板塊座標系裡還沒有地殼的點，看它現在落在哪一格，那一格原本是被併掉的板塊的就抄過來。
+        var keepRotation = _rotation[keep];
+        Parallel.For(0, _cellCount, body =>
+        {
+            if (_valid[keep][body]) return;
+            var (x, y, z) = SphereMath.Rotate(keepRotation, u[body * 3], u[body * 3 + 1], u[body * 3 + 2]);
+            var g = grid.FindNearestCell(x, y, z);
+            if (!wasGone[g] || !_valid[gone][oldBody[g]]) return;
+            CopyPoint(gone, oldBody[g], keep, body);
+            _valid[keep][body] = true;
+        });
+        Array.Clear(_valid[gone]);
+        plates.Plates[gone] = plates.Plates[gone] with { AngularVelocityDegPerMyr = 0 };
+        _dormantUntilMyr[gone] = _elapsedMyr + WeldedPlateDormancyMyr;
+    }
+
+    /// <summary>
+    /// 板塊座標系裡 region 的點沉成新生的海洋地殼（劇本用：小島之間的段落在裂開時變成海床）。在兩步之間呼叫。
+    /// </summary>
+    /// <param name="plate">板塊編號。</param>
+    /// <param name="region">哪些點（座標系的點編號）。</param>
+    internal void SinkToOcean(int plate, Func<int, bool> region)
+    {
+        for (var b = 0; b < _cellCount; b++)
+        {
+            if (!_valid[plate][b] || !region(b)) continue;
+            _crust[plate][b] = CrustType.Oceanic;
+            _thickness[plate][b] = Isostasy.OceanicCrustThicknessKm;
+            _density[plate][b] = Isostasy.OceanicCrustDensity;
+            _age[plate][b] = 0f;
+            _organic[plate][b] = 0f;
+        }
+    }
+
+    /// <summary>板塊編號休眠到什麼時候（百萬年）：休眠中的板塊 0 格是正常的，不會被重生拿去用。</summary>
+    /// <param name="plate">板塊編號。</param>
+    /// <param name="untilMyr">休眠到幾百萬年。</param>
+    internal void SetDormantUntil(int plate, double untilMyr) => _dormantUntilMyr[plate] = untilMyr;
+
+    /// <summary>
+    /// 劇本的裂開（見 <see cref="ContinentScenario.DueSplits"/>）：母板塊座標系裡 region 的點整塊搬到新板塊，
+    /// 新板塊的旋轉照抄母板塊（點的編號不用換，跟重生同一個做法），格子的歸屬跟著改。速度之後由劇本給。
+    /// 在兩步之間呼叫。
+    /// </summary>
+    internal void SplitOff(PlateSet plates, int parent, int child, Func<int, bool> region)
+    {
+        _rotation[child] = _rotation[parent];
+        Array.Clear(_valid[child]);
+        for (var b = 0; b < _cellCount; b++)
+        {
+            if (!_valid[parent][b] || !region(b)) continue;
+            CopyPoint(parent, b, child, b);
+            _valid[child][b] = true;
+            _valid[parent][b] = false;
+        }
+        for (var c = 0; c < _cellCount; c++)
+            if (_owner[c] == parent && _valid[child][_bodyCell[c]]) _owner[c] = child;
+        _dormantUntilMyr[child] = 0;
+        plates.Plates[child] = plates.Plates[child] with
+        {
+            PoleX = plates.Plates[parent].PoleX, PoleY = plates.Plates[parent].PoleY, PoleZ = plates.Plates[parent].PoleZ,
+            AngularVelocityDegPerMyr = plates.Plates[parent].AngularVelocityDegPerMyr,
+            DensityAnomalyKgPerM3 = 0f, IsOceanicOnly = false,
+        };
+        Array.Copy(_owner, plates.OwnerByCell, _cellCount);
+    }
+
+    /// <summary>
+    /// 劇本的強制焊接（見 <see cref="ContinentScenario"/>）：不看碰撞帶多長，直接把 gone 併進 keep。
+    /// gone 已經沒有任何一格（例如續跑時已經焊過）就什麼都不做。在兩步之間呼叫。
+    /// </summary>
+    internal void ForceWeld(SimulationGrid grid, PlateSet plates, int keep, int gone)
+    {
+        if (Array.IndexOf(_owner, gone) < 0) return;
+        MergePlate(grid, plates, keep, gone);
+        Array.Copy(_owner, plates.OwnerByCell, _cellCount);
+    }
+
+    /// <summary>上一步這兩塊板塊之間有沒有發生大陸碰撞（劇本用來偵測「撞上了」）。在下一步開始之前呼叫才有意義。</summary>
+    internal bool WereColliding(int a, int b) => _collidingPairs.Contains(a < b ? (a, b) : (b, a));
+
+    /// <summary>選填：哪些板塊對不准自動焊接（劇本用：碰撞還在推的兩塊、大島與母大陸）。</summary>
+    internal Func<int, int, bool>? WeldBlocked { get; set; }
+
+    /// <summary>
+    /// 選填：哪個板塊重疊時永遠留下、不會被消耗（劇本用：固定不動、面積不減的太平洋）。
+    /// 擠進它的大陸地殼被吃掉，厚度記進碰撞增厚、攤到撞上來的那塊大陸的前緣（見 <see cref="Resolve"/>）。
+    /// </summary>
+    internal Func<int, bool>? Unconsumable { get; set; }
+
+    /// <summary>
+    /// 大陸碰撞的增厚分成兩份（2026-10-18 使用者指定：碰撞線上是高山山脈，山脈後方是高原，像喜馬拉雅與青藏高原）：
+    ///
+    /// 2026-10-18 使用者改成只要高山、不要高原，所以現在取 1（高原那一份是 0，程式留著以後要高原時調回來）。
+    ///
+    /// - **山脈**：<see cref="CollisionMountainFraction"/> 集中在碰撞處 <see cref="CollisionMountainWidthKm"/> 以內（兩側都算），
+    ///   越近分得越多——窄而高。
+    /// - **高原**：其餘平均攤到**上盤**碰撞處後方 <see cref="CollisionPlateauWidthKm"/> 以內的大陸——寬而平。
+    ///   上盤取兩塊裡比較大的那塊（印度插到亞洲底下，高原長在亞洲那一側）。
+    ///
+    /// 第一版整份按線性權重攤在 400 公里內、兩側對稱：長出來的是一道以接縫為中心的隆起，沒有山脈與高原之分。
+    /// 更早的版本整份疊在前緣那一格，撞出來的是一道一格寬、約 70 公里厚的牆。
+    /// </summary>
+    private const double CollisionMountainFraction = 1.0;
+
+    /// <summary>山脈的寬度（公里，從碰撞處往兩側）。喜馬拉雅約 200~300 公里寬；這顆星球半徑約地球的 0.3。</summary>
+    private const double CollisionMountainWidthKm = 120;
+
+    /// <summary>高原的寬度（公里，從碰撞處往上盤內側）。青藏高原約 1,000 公里。</summary>
+    private const double CollisionPlateauWidthKm = 500;
+
+    /// <summary>上一步大陸碰撞攤開的增厚（公里·格），診斷用。</summary>
+    internal double LastCollisionThickeningKm { get; private set; }
+
+    /// <summary>這一步每個碰撞處的上盤（兩塊裡較大的那塊），高原長在它上面。</summary>
+    private readonly int[] _collisionUpper;
+
+    /// <summary>每個板塊這一步開始時有幾格（判斷上盤用）。</summary>
+    private int[] _plateSizes = [];
+
+    /// <summary>
+    /// 把這一步大陸碰撞縮短下來的地殼攤到碰撞帶上（山脈＋高原，見 <see cref="CollisionMountainFraction"/>）。
+    /// 每一格歸最近的那個碰撞處（多源廣度優先，依格子索引排序起步，結果與執行緒無關）。
+    /// 質量守恆：高原那份找不到上盤的格子就併進山脈；只有頂到厚度上限的部分會丟掉。
+    /// </summary>
+    private void DistributeCollisionThickening(SimulationGrid grid)
+    {
+        LastCollisionThickeningKm = 0;
+        var any = false;
+        for (var c = 0; c < _cellCount && !any; c++) any = _collisionBudget[c] > 0f;
+        if (!any) return;
+
+        var spacing = grid.AverageCellSpacingMeters;
+        var mountainHops = Math.Max(1, (int)(CollisionMountainWidthKm * 1000.0 / spacing));
+        var plateauHops = Math.Max(1, (int)(CollisionPlateauWidthKm * 1000.0 / spacing));
+
+        // 高原：沿大陸地殼走，只有上盤的格子拿得到（權重相同）
+        var (pSource, _) = NearestCollision(grid, plateauHops);
+        var plateauCount = new int[_cellCount];
+        for (var c = 0; c < _cellCount; c++)
+            if (pSource[c] >= 0 && _owner[c] == _collisionUpper[pSource[c]] && IsContinentalCell(c)) plateauCount[pSource[c]]++;
+
+        var mountainBudget = new float[_cellCount];
+        for (var c = 0; c < _cellCount; c++)
+        {
+            if (_collisionBudget[c] <= 0f) continue;
+            mountainBudget[c] = plateauCount[c] > 0 ? _collisionBudget[c] * (float)CollisionMountainFraction : _collisionBudget[c];
+        }
+        for (var c = 0; c < _cellCount; c++)
+        {
+            var src = pSource[c];
+            if (src < 0 || plateauCount[src] == 0 || _owner[c] != _collisionUpper[src] || !IsContinentalCell(c)) continue;
+            AddThickness(c, (_collisionBudget[src] - mountainBudget[src]) / plateauCount[src]);
+        }
+
+        // 山脈：兩側都走，越近分得越多
+        var (mSource, mHops) = NearestCollision(grid, mountainHops);
+        double Weight(int h) => 1.0 - (double)h / (mountainHops + 1);
+        var weightSum = new double[_cellCount];
+        for (var c = 0; c < _cellCount; c++)
+            if (mSource[c] >= 0 && IsContinentalCell(c)) weightSum[mSource[c]] += Weight(mHops[c]);
+        for (var c = 0; c < _cellCount; c++)
+        {
+            var src = mSource[c];
+            if (src < 0 || weightSum[src] <= 0 || !IsContinentalCell(c)) continue;
+            AddThickness(c, (float)(mountainBudget[src] * Weight(mHops[c]) / weightSum[src]));
+        }
+    }
+
+    /// <summary>
+    /// 這一格現在顯示的是不是大陸地殼。碰撞增厚只加在大陸格上：一般的大陸碰撞，碰撞處本身就是大陸；
+    /// 撞上不會被消耗的板塊（見 <see cref="Unconsumable"/>）時，碰撞處已經歸那塊海洋板塊，增厚要全部落在撞上來的大陸那一側。
+    /// </summary>
+    private bool IsContinentalCell(int cell) => _crust[_owner[cell]][_bodyCell[cell]] == CrustType.Continental;
+
+    private void AddThickness(int cell, float add)
+    {
+        var p = _owner[cell];
+        var b = _bodyCell[cell];
+        var before = _thickness[p][b];
+        _thickness[p][b] = MathF.Min(before + add, Isostasy.MaxCrustThicknessKm);
+        LastCollisionThickeningKm += _thickness[p][b] - before;
+    }
+
+    /// <summary>從每個碰撞處沿著大陸地殼往外走 maxHops 格，每一格歸最近的碰撞處。</summary>
+    private (int[] Source, int[] Hops) NearestCollision(SimulationGrid grid, int maxHops)
+    {
+        var source = new int[_cellCount];
+        var hops = new int[_cellCount];
+        Array.Fill(source, -1);
+        var queue = new Queue<int>();
+        for (var c = 0; c < _cellCount; c++)
+        {
+            if (_collisionBudget[c] <= 0f) continue;
+            source[c] = c;
+            queue.Enqueue(c);
+        }
+        while (queue.Count > 0)
+        {
+            var c = queue.Dequeue();
+            if (hops[c] >= maxHops) continue;
+            var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+            for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+            {
+                var n = grid.Neighbors[baseIndex + s];
+                if (n == SimulationGrid.NoNeighbor || source[n] >= 0) continue;
+                if (_crust[_owner[n]][_bodyCell[n]] != CrustType.Continental) continue;
+                source[n] = source[c];
+                hops[n] = hops[c] + 1;
+                queue.Enqueue(n);
+            }
+        }
+        return (source, hops);
     }
 
     /// <summary>
@@ -568,6 +969,7 @@ internal sealed class PlateFrameCrust
     {
         var winner = -1;
         var winnerBody = -1;
+        _resolveCell = c;
         for (var i = 0; i < candidates.Length; i++)
         {
             var q = candidates[i];
@@ -627,7 +1029,7 @@ internal sealed class PlateFrameCrust
     /// 兩塊地殼在同一個地方重疊（聚合）——用岩石圈淨浮力決定誰沉下去，回傳留下的那一個板塊。
     /// v1 的碰撞規則，常數共用 <see cref="PlateTectonics"/> 的：
     ///
-    /// - 兩邊都是大陸：誰都沉不下去，**縮短增厚**（大陸碰撞），厚度整個疊上去、在位者留下（見方法內的說明）。
+    /// - 兩邊都是大陸或夠厚的島弧（<see cref="IsSuturable"/>）：誰都沉不下去，**縮短增厚**（大陸碰撞、島弧拼接），厚度整個疊上去、在位者留下（見方法內的說明）。
     /// - 否則浮得低的隱沒（差距在容差內就是比較老的那塊），一部分刮下來增生到留下的那一塊。
     ///   大陸碰上海洋時一定是海洋那一方沉——大陸跟著自己的板塊繼續往前，海洋在它前面消失，
     ///   直到另一邊的大陸撞上來。這就是海洋關閉、大陸碰撞的那一段威爾遜旋迴。
@@ -648,14 +1050,41 @@ internal sealed class PlateFrameCrust
             return a;
         }
 
+        // 不會被消耗的板塊（劇本的太平洋，2026-10-18 使用者指定：固定、演化中面積也不減）永遠留下。
+        // 擠進來的洋殼照常隱沒到它底下（不增生，它保持原樣）；擠進來的大陸地殼沉不下去，等於撞上一道牆——
+        // 前緣被吃掉的厚度記進碰撞增厚，攤到那塊大陸的前緣（DistributeCollisionThickening 只加在大陸格上），西岸因此長山。
+        if (Unconsumable is { } fixedPlate && fixedPlate(a) != fixedPlate(b))
+        {
+            var (keep, gone, goneBody) = fixedPlate(a) ? (a, b, bBody) : (b, a, aBody);
+            var goneThickness = _thickness[gone][goneBody];
+            if (_crust[gone][goneBody] == CrustType.Continental)
+            {
+                LastShortenings++;
+                _collisionBudget[_resolveCell] += goneThickness;
+                _collisionUpper[_resolveCell] = gone;
+            }
+            else
+            {
+                LastSubductions++;
+            }
+            _valid[gone][goneBody] = false;
+            LastConsumedPoints++;
+            LastConsumedCrustKm += goneThickness;
+            return keep;
+        }
+
         var liftA = Isostasy.LithosphereBuoyancyMeters(_crust[a][aBody], _thickness[a][aBody], _density[a][aBody], _age[a][aBody]);
         var liftB = Isostasy.LithosphereBuoyancyMeters(_crust[b][bBody], _thickness[b][bBody], _density[b][bBody], _age[b][bBody]);
-        // 縮短增厚只發生在**兩邊都是大陸地殼**的時候（大陸碰撞）。洋殼一律由浮力低的那一方隱沒——
+        // 縮短增厚只發生在**兩邊都浮得住**的時候：大陸碰大陸，或夠厚的島弧（見下）。一般洋殼一律由浮力低的那一方隱沒——
         // 隱沒是被聚合的力推著走的，浮力只決定誰在下面，連年輕的洋殼也照樣隱沒（例如 Cascadia）；
         // 洋殼被擠到增厚在地球上很少見。試過兩種更寬的條件（P4，2026-10-17），都讓洋殼大片增厚、浮到海平面附近成碎斑：
         // - 浮力差 < 500 公尺：年齡相近的老洋殼浮力差也很小，50 Myr 時 10~20 公里的增厚洋殼 3.7 萬格、海床中位深度只有 2,060 公尺
         // - 兩邊淨浮力都 ≥ 0：洋殼很年輕時幾乎都成立，縮短每步 790 次、隱沒反而只剩 130，胡椒 1,644
-        var shortening = _crust[a][aBody] == CrustType.Continental && _crust[b][bBody] == CrustType.Continental;
+        //
+        // **島弧拼接**（P4，2026-10-18）：夠厚的島弧也算——跟大陸或另一條島弧碰撞時一樣縮短拼接，不隱沒。
+        // 少了這一條，島弧多半停在 15~25 公里、還不是大陸地殼，碰撞時照洋殼的規則被吃掉；3 億年長跑
+        // 陸地停在 14%、而且是一條條細長的島弧，從來沒有拼成大陸（地球的大陸大多是島弧拼接長大的）。
+        var shortening = IsSuturable(a, aBody) && IsSuturable(b, bBody);
 
         // 縮短增厚時**在位者留下**（a 是原本就佔著這一格的那個，呼叫端保證）：浮力差不多時，看浮力
         // 決定誰留下等於看極小的差異擲骰子，沿著同一條邊界這一格 p 贏、隔壁格 q 贏，兩塊板塊的地殼交錯咬合、
@@ -682,7 +1111,15 @@ internal sealed class PlateFrameCrust
             // 要是所有聚合都變成增厚，就是 P2 量到的那種大陸棘輪。
             gain = loserThickness;
             LastShortenings++;
-            if (winnerContinental && loserContinental) LastContinentCollisions++;
+            if (winnerContinental && loserContinental)
+            {
+                LastContinentCollisions++;
+                _collidingPairs.Add(winner < loser ? (winner, loser) : (loser, winner));
+                // 大陸碰撞的增厚不疊在前緣這一格，先記下來、這一步的歸屬決定之後攤到整條碰撞帶（見 DistributeCollisionThickening）
+                _collisionBudget[_resolveCell] += loserThickness;
+                _collisionUpper[_resolveCell] = _plateSizes[winner] >= _plateSizes[loser] ? winner : loser;
+                gain = 0f;
+            }
         }
         else
         {
@@ -703,7 +1140,9 @@ internal sealed class PlateFrameCrust
         {
             var added = after - before;
             _density[winner][winnerBody] = (_density[winner][winnerBody] * before + _density[loser][loserBody] * added) / after;
+            // 轉成大陸地殼除了厚度還要夠輕（分異過）：被擠厚的玄武岩不是大陸（見 Isostasy.DifferentiatedCrustMaxDensity）
             if (_crust[winner][winnerBody] == CrustType.Oceanic && after >= Isostasy.ContinentalThresholdKm
+                && _density[winner][winnerBody] <= Isostasy.DifferentiatedCrustMaxDensity
                 && !_oceanicOnly[winner][winnerBody])
             {
                 _crust[winner][winnerBody] = CrustType.Continental;
@@ -716,6 +1155,9 @@ internal sealed class PlateFrameCrust
         LastConsumedCrustKm += loserThickness;
         return winner;
     }
+
+    /// <summary>這塊地殼碰撞時是否浮得住、會縮短拼接而不隱沒（見 <see cref="Isostasy.ResistsSubduction"/>）。</summary>
+    private bool IsSuturable(int p, int b) => Isostasy.ResistsSubduction(_crust[p][b], _thickness[p][b], _density[p][b], _oceanicOnly[p][b]);
 
     private void ResetCounters()
     {
@@ -733,6 +1175,11 @@ internal sealed class PlateFrameCrust
         LastFragmentsAbsorbed = 0;
         LastFragmentCellsAbsorbed = 0;
         LastPlatesReborn = 0;
+        LastPlatesWelded = 0;
+        LastHiddenResolves = 0;
+        LastHiddenShortenings = 0;
+        _collidingPairs.Clear();
+        Array.Clear(_collisionBudget);
     }
 
     /// <summary>把每格看得到的地殼寫進 <paramref name="state"/>。</summary>
@@ -834,6 +1281,8 @@ internal sealed class PlateFrameCrust
             }
         }
         writer.Write(_nextOrigin);
+        writer.Write(_elapsedMyr);
+        foreach (var d in _dormantUntilMyr) writer.Write(d);
     }
 
     /// <summary>
@@ -867,6 +1316,8 @@ internal sealed class PlateFrameCrust
             }
         }
         _nextOrigin = reader.ReadInt32();
+        _elapsedMyr = reader.ReadDouble();
+        for (var p = 0; p < plateCount; p++) _dormantUntilMyr[p] = reader.ReadDouble();
         _stamp = 0;
     }
 

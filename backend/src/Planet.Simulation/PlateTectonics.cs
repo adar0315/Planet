@@ -236,6 +236,36 @@ public sealed class PlateTectonics
     /// <summary>診斷用（板塊座標系）：上一步從最大的板塊裂出新板塊的次數（板塊的地殼被吃光時）。</summary>
     public int LastFramePlatesReborn => _frames?.LastPlatesReborn ?? 0;
 
+    /// <summary>診斷用（板塊座標系）：上一步焊接（兩塊板塊沿大陸碰撞帶合併）的次數。</summary>
+    public int LastFramePlatesWelded => _frames?.LastPlatesWelded ?? 0;
+
+    /// <summary>板塊座標系：這個板塊編號是不是焊接之後在休眠（休眠中 0 格是正常的）。標記法永遠是 false。</summary>
+    /// <summary>診斷用（板塊座標系）：上一步保險段解決的重疊次數與其中的縮短增厚次數。</summary>
+    internal (int Resolves, int Shortenings) LastFrameHiddenResolves => (_frames?.LastHiddenResolves ?? 0, _frames?.LastHiddenShortenings ?? 0);
+
+    /// <summary>
+    /// 大陸配置的劇本（見 <see cref="ContinentScenario"/>），沒有就是 null。只能配板塊座標系。
+    /// 設定時順便告訴板塊座標系哪些板塊對不准自動焊接、哪個板塊不會被消耗。
+    /// </summary>
+    internal ContinentScenario? Scenario
+    {
+        get => _scenario;
+        set
+        {
+            _scenario = value;
+            if (_frames is null) return;
+            _frames.WeldBlocked = value is null ? null : (a, b) => value.IsWeldBlocked(a, b, _elapsedMyr);
+            _frames.Unconsumable = value is null ? null : p => value.IsUnconsumable(p, _elapsedMyr);
+        }
+    }
+
+    private ContinentScenario? _scenario;
+
+    /// <summary>這一步開始時經過了多少百萬年（劇本與焊接封鎖用）。</summary>
+    private double _elapsedMyr;
+
+    internal bool IsPlateDormant(int plate) => _frames?.IsDormant(plate) ?? false;
+
     /// <summary>診斷用（板塊座標系）：上一步縮短增厚的次數（浮力差不多、誰都沉不下去）。</summary>
     public int LastFrameShortenings => _frames?.LastShortenings ?? 0;
 
@@ -443,6 +473,7 @@ public sealed class PlateTectonics
             _newCrustCells = new bool[grid.CellCount];
             _pointKeys = new int[grid.CellCount];
             Dynamics.SpeedCapEnabled = true;
+            Dynamics.CollisionResistanceEnabled = true;
         }
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(plateCount);
 
@@ -501,6 +532,9 @@ public sealed class PlateTectonics
         if (_frames is not null)
         {
             _frames.Initialize(state, plates);
+            // 大陸配置的劇本：還沒裂開的大島，板塊編號先休眠（否則 0 格的板塊會被當成死掉、馬上從別的板塊重生）
+            if (_scenario is not null)
+                foreach (var (plate, until) in _scenario.InitialDormancy) _frames.SetDormantUntil(plate, until);
             return;
         }
 
@@ -573,6 +607,19 @@ public sealed class PlateTectonics
     public void Step(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaYears)
     {
         var deltaMyr = deltaYears / 1_000_000.0;
+        _elapsedMyr = state.ElapsedYears / 1_000_000.0;
+
+        // 劇本的強制焊接排在最前面：用的是上一步結束時的歸屬與旋轉，焊完之後這一步的邊界分類就看得到合併後的板塊
+        if (Scenario is { } scenario && _frames is not null)
+        {
+            foreach (var (keep, gone) in scenario.DueWelds(_elapsedMyr, plates.OwnerByCell).ToList())
+                _frames.ForceWeld(grid, plates, keep, gone);
+            foreach (var (parent, child, region, sink) in scenario.DueSplits(_elapsedMyr, plates.OwnerByCell).ToList())
+            {
+                _frames.SplitOff(plates, parent, child, region);
+                if (sink is not null) _frames.SinkToOcean(child, sink);
+            }
+        }
         LastRidgeCrustKm = 0;
         LastMisfitFillCrustKm = 0;
         LastMisfitFillCount = 0;
@@ -594,6 +641,7 @@ public sealed class PlateTectonics
         // **邊界分類完才更新板塊速度**：驅動力來自邊界（板片拉力在隱沒帶、洋脊推力在張裂帶），
         // 所以要先知道邊界在哪、哪一側在隱沒。解出來的速度下一步生效。
         Dynamics.UpdateVelocities(grid, state, plates, _convergingNeighbor, deltaMyr);
+        Scenario?.ApplyVelocities(grid, state, plates, _elapsedMyr, (a, b) => _frames?.WereColliding(a, b) == true);
 
         if (_frames is not null) StepPlateFrames(grid, state, plates, deltaMyr);
         else MoveMarkersAndMaybeRasterize(grid, state, plates, deltaMyr);

@@ -10,6 +10,13 @@
     <InternalsVisibleTo Include="Planet.Simulation.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- v2 方向 2：使用者畫的大陸配置草圖（見 ContinentSketch），左＝西、上＝北，寬度是一整圈經度、高度是北極到南極 -->
+    <EmbeddedResource Include="Templates\continent-sketch.png" LogicalName="continent-sketch.png" />
+    <!-- 使用者在第 0 步板塊圖上改過的海洋板塊範圍（見 ContinentPlateMap） -->
+    <EmbeddedResource Include="Templates\plate-override.png" LogicalName="plate-override.png" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

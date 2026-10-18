@@ -116,13 +116,21 @@ public sealed class SimulationEngine
     /// </param>
     /// <param name="densePlateCount">有幾個板塊一開始就是高密度的海洋板塊，見 <see cref="PlateSet.DensePlateCount"/>。</param>
     /// <param name="crustTransport">地殼怎麼跟著板塊移動（v1 標記法或 v2 板塊座標系），見 <see cref="CrustTransport"/>。</param>
+    /// <param name="continentLayout">
+    /// 不是 null 時，起始的大陸照程序化生成的配置放好（v2 方向 2，見 <see cref="ContinentLayout"/>），取代早期大轟炸。
+    /// 只能配板塊座標系。
+    /// </param>
     public SimulationEngine(
         SimulationGrid grid,
         int seed = 42,
         float oceanDepthMeters = SimulationState.DefaultOceanDepthMeters,
         int densePlateCount = PlateSet.DensePlateCount,
-        CrustTransport crustTransport = CrustTransport.Markers)
+        CrustTransport crustTransport = CrustTransport.Markers,
+        ContinentLayoutParameters? continentLayout = null)
     {
+        if (continentLayout is not null && crustTransport != CrustTransport.PlateFrame)
+            throw new ArgumentException("大陸配置起始只能配板塊座標系（標記法每一步都從種子重算 Voronoi，起始的板塊歸屬會被蓋掉）。", nameof(continentLayout));
+        _continentLayout = continentLayout;
         _crustTransport = crustTransport;
         _oceanDepthMeters = oceanDepthMeters;
         _densePlateCount = densePlateCount;
@@ -132,16 +140,40 @@ public sealed class SimulationEngine
         _volumePartials = new double[WaterVolumePartitionCount];
         _climate = new Climate(grid);
         _erosion = new Erosion(grid);
-        Plates = PlateSet.CreateRandom(grid, seed, densePlateCount: _densePlateCount);
-        State = SimulationState.CreateInitialOceanWorld(grid, _oceanDepthMeters, seed);
-        _tectonics = new PlateTectonics(grid, Plates.Plates.Length, _crustTransport);
-        _plumes = new MantlePlumes(seed);
+        CreateInitialWorld();
+    }
+
+    /// <summary>大陸配置的劇本（沒有用大陸配置起始就是 null），見 <see cref="ContinentScenario"/>。</summary>
+    public ContinentScenario? Scenario => _tectonics.Scenario;
+
+    /// <summary>起始的大陸配置（null ＝ v1 的早期大轟炸）。</summary>
+    private readonly ContinentLayoutParameters? _continentLayout;
+
+    /// <summary>
+    /// 建立起始的星球：板塊、地殼（早期大轟炸或大陸配置）、構造、注水。建構子與 <see cref="Reset"/> 共用。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(Plates), nameof(State), nameof(_tectonics), nameof(_plumes))]
+    private void CreateInitialWorld()
+    {
+        // 大陸配置起始時板塊數固定（陸地、太平洋與之後才裂出來的大島各一塊，見 ContinentLayout.PlateCount）
+        var plateCount = _continentLayout is null ? PlateSet.DefaultPlateCount : ContinentLayout.PlateCount;
+        Plates = PlateSet.CreateRandom(Grid, _seed, plateCount, densePlateCount: _densePlateCount);
+        State = SimulationState.CreateInitialOceanWorld(Grid, _oceanDepthMeters, _seed);
+        ContinentScenario? scenario = null;
+        if (_continentLayout is not null)
+        {
+            var layout = ContinentLayout.Generate(Grid, _seed, _continentLayout);
+            var plateOf = ContinentLayout.ApplyTo(Grid, State, Plates, layout, _seed);
+            scenario = new ContinentScenario(_continentLayout, plateOf, layout, Grid.PlanetRadiusMeters);
+        }
+        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport) { Scenario = scenario };
+        _plumes = new MantlePlumes(_seed);
         SyncPlateIdIntoState();
         // 一定要排在 _tectonics.Reset 之前：標記的密度是從 State.CrustDensity 拷過去的，
         // 順序反了的話重板塊的密度異常永遠不會進到標記裡。
         // 也要排在 SyncPlateIdIntoState 之後：TryMakeContinental 要讀 State.PlateId。
         Plates.ApplyDensityAnomaliesTo(State);
-        _tectonics.Reset(grid, State, Plates);
+        _tectonics.Reset(Grid, State, Plates);
         InitializeWater();
     }
 
@@ -198,6 +230,9 @@ public sealed class SimulationEngine
 
     private void CheckStopCondition()
     {
+        // 大陸配置的劇本跑完之前不檢查：起始的配置本來就符合條件，一開始就會停下來
+        if (Scenario is { } scenario && State.ElapsedYears < scenario.EndMyr * 1_000_000.0) return;
+
         _yearsSinceStopCheck += YearsPerStep;
         if (_yearsSinceStopCheck < StopCheckIntervalYears) return;
         _yearsSinceStopCheck = 0;
@@ -535,7 +570,7 @@ public sealed class SimulationEngine
         }
         _plumes.RestoreRandomState(plumeDraws);
 
-        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport);
+        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport) { Scenario = _tectonics.Scenario };
         _tectonics.ReadFrom(reader);
         _tectonics.AfterRestore(Plates);
         SyncPlateIdIntoState();
@@ -544,19 +579,10 @@ public sealed class SimulationEngine
         Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));
     }
 
-    /// <summary>整個重來：回到起始的全海洋星球，板塊也重新生成。</summary>
+    /// <summary>整個重來：回到起始的星球（全海洋或大陸配置），板塊也重新生成。</summary>
     public void Reset()
     {
-        Plates = PlateSet.CreateRandom(Grid, _seed, densePlateCount: _densePlateCount);
-        State = SimulationState.CreateInitialOceanWorld(Grid, _oceanDepthMeters, _seed);
-        _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport);
-        _plumes = new MantlePlumes(_seed);
-        SyncPlateIdIntoState();
-        // 一定要排在 _tectonics.Reset 之前：標記的密度是從 State.CrustDensity 拷過去的，
-        // 順序反了的話重板塊的密度異常永遠不會進到標記裡。
-        // 也要排在 SyncPlateIdIntoState 之後：TryMakeContinental 要讀 State.PlateId。
-        Plates.ApplyDensityAnomaliesTo(State);
-        _tectonics.Reset(Grid, State, Plates);
+        CreateInitialWorld();
         _yearsSinceClimateSolve = double.MaxValue;
         _yearsSinceBreachCheck = double.MaxValue;
         _yearsSinceStopCheck = 0;
@@ -576,10 +602,27 @@ public sealed class SimulationEngine
     /// </summary>
     private void InitializeWater()
     {
-        _totalWaterVolume = (double)_oceanDepthMeters
-            * Grid.AverageCellAreaSquareMeters * Grid.CellCount;
-
         Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));
+
+        if (_continentLayout is null)
+        {
+            _totalWaterVolume = (double)_oceanDepthMeters
+                * Grid.AverageCellAreaSquareMeters * Grid.CellCount;
+        }
+        else
+        {
+            // 大陸配置起始：水量由**起始海平面**反推，不用平均海深。平均海深 1,550 是在 v1 的全海洋星球上校準的，
+            // 放了 28% 的厚大陸之後海平面落在 −3,293 m，比新生洋脊（約 −2,500）還低——板塊一張裂洋脊就整條浮出水面、
+            // 把大陸全部串起來（P4 方向 2 第一次跑，500 萬年後陸地 28% → 38.7%、最大一塊 97%）。
+            // 固定加總順序（逐格依序），結果才是決定性的。
+            var target = _continentLayout.InitialSeaLevelMeters;
+            double volume = 0;
+            for (var cell = 0; cell < State.CellCount; cell++)
+            {
+                volume += Math.Max(0.0, target - _surfaceElevation[cell]);
+            }
+            _totalWaterVolume = volume * Grid.AverageCellAreaSquareMeters;
+        }
         State.SeaLevelMeters = SolveSeaLevel();
         Parallel.For(0, State.CellCount, cell =>
         {

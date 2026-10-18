@@ -24,6 +24,31 @@ public static class Isostasy
     /// <summary>厚度超過這個值就視為已經成熟到算大陸地殼（島弧不斷增生最終形成大陸的門檻）。</summary>
     public const float ContinentalThresholdKm = 25f;
 
+    /// <summary>
+    /// 海洋地殼厚到這裡就算島弧：碰撞時縮短拼接、不隱沒（見 <see cref="ResistsSubduction"/>）。
+    /// 一般洋殼在 8 公里以下；v2 P4 的 3 億年長跑（n=150）海洋地殼 15~25 公里有約 9,900 格、六成露出水面，就是那些島弧。
+    /// 地球上厚度 15~20 公里以上的島弧與海底高原多半拼接到大陸邊緣，不會整個隱沒。
+    /// </summary>
+    internal const float ArcSutureThicknessKm = 15f;
+
+    /// <summary>
+    /// 分異過的地殼最重可以多重（kg/m³）。島弧的岩漿分異把地殼往大陸地殼的 2,700 拉，被擠厚的洋殼還是 2,900 的玄武岩——
+    /// 「大陸地殼」是由成分定義的，不是由厚度。v2 方向 2 第一次跑（5,000 萬年）量到兩群分得很開：真正的大陸 2,650~2,750
+    /// 有 6.1 萬格、幾乎都在水上；≥ 2,880 的「大陸」6,100 格、5,800 格泡在水下，那是被擠厚的洋殼轉了類型；
+    /// ≥ 15 公里的洋殼全部 ≥ 2,850。取 2,850。只有板塊座標系用。
+    /// </summary>
+    internal const float DifferentiatedCrustMaxDensity = 2850f;
+
+    /// <summary>
+    /// 這塊地殼碰撞時是否浮得住、會縮短拼接而不隱沒：大陸地殼，或厚度到 <see cref="ArcSutureThicknessKm"/>、
+    /// 密度不超過 <see cref="DifferentiatedCrustMaxDensity"/> 的島弧。被擠厚的洋殼（還是玄武岩）照常隱沒，
+    /// 否則兩塊大陸聚合時夾在中間的海洋會被疊成又厚又重、沉在水下的地殼——大陸內部一片泡水的斑點。
+    /// 「只能是海洋」的地殼（重板塊）不算，照 v1 的設計隱沒。只有板塊座標系用（見 PlateFrameCrust 與 PlateDynamics）。
+    /// </summary>
+    internal static bool ResistsSubduction(CrustType crust, float thicknessKm, float densityKgPerM3, bool oceanicOnly) =>
+        crust == CrustType.Continental
+        || (thicknessKm >= ArcSutureThicknessKm && densityKgPerM3 <= DifferentiatedCrustMaxDensity && !oceanicOnly);
+
     /// <summary>地殼厚度上限（公里）。青藏高原下方約70公里，這裡留一點餘裕當作物理上限，避免碰撞區無限增厚。</summary>
     public const float MaxCrustThicknessKm = 75f;
 
