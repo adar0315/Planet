@@ -99,7 +99,7 @@ public sealed class Climate
     private const float AdvectionFraction = 0.9f;
 
     /// <summary>降水轉成逕流的比例；其餘蒸散回大氣。地球陸地的平均逕流係數約0.35。</summary>
-    private const float RunoffFraction = 0.35f;
+    internal const float RunoffFraction = 0.35f;
 
     private readonly SimulationGrid _grid;
 

@@ -60,6 +60,14 @@ public sealed class SimulationEngine
     /// <summary>外營力（流水／冰川／海浪／風化）。只有暫存緩衝，Reset 也不用重建。</summary>
     private readonly Erosion _erosion;
 
+    /// <summary>
+    /// 依連通性注水（v2 P5，只在板塊座標系模式；標記法是 null，照舊用單一全球海平面）。見 <see cref="Simulation.Hydrology"/>。
+    /// </summary>
+    private readonly Hydrology? _hydrology;
+
+    /// <summary>依連通性注水的結果（湖與盆地），標記法是 null。</summary>
+    public Hydrology? Hydrology => _hydrology;
+
     /// <summary>冰凍圈。沒有自己的狀態（全部寫在 <c>IceThickness</c> 裡），Reset 也不用重建。</summary>
     private readonly Cryosphere _ice = new();
 
@@ -140,6 +148,7 @@ public sealed class SimulationEngine
         _volumePartials = new double[WaterVolumePartitionCount];
         _climate = new Climate(grid);
         _erosion = new Erosion(grid);
+        if (crustTransport == CrustTransport.PlateFrame) _hydrology = new Hydrology(grid);
         CreateInitialWorld();
     }
 
@@ -376,6 +385,12 @@ public sealed class SimulationEngine
         // 四層相加的話，光這件事就會吃掉三分之二的運算時間（實測 25 步/秒 → 7.9 步/秒）。
         Parallel.For(0, State.CellCount, cell => _surfaceElevation[cell] = State.SurfaceElevationAt(cell));
 
+        if (_hydrology is not null)
+        {
+            FillWaterByConnectivity(_hydrology);
+            return;
+        }
+
         State.SeaLevelMeters = SolveSeaLevel();
 
         Parallel.For(0, State.CellCount, cell =>
@@ -383,6 +398,46 @@ public sealed class SimulationEngine
             State.WaterDepth[cell] = MathF.Max(0f, State.SeaLevelMeters - _surfaceElevation[cell]);
         });
     }
+
+    /// <summary>
+    /// 依連通性注水（v2 P5，見 <see cref="Simulation.Hydrology"/>）：從上一步的主洋泛洪，海只算通得到主洋的格子；
+    /// 封閉盆地依水量收支存湖水，湖水從總水量扣掉之後再解海平面。
+    ///
+    /// 湖跟海平面互相依賴（溢出口淹到海面下的盆地併進海裡），所以交替解到盆地不再變為止，通常一兩輪。
+    /// 最後一輪的湖水體積就是解海平面時扣掉的那一份，水量才守恆。
+    /// </summary>
+    private void FillWaterByConnectivity(Hydrology hydrology)
+    {
+        hydrology.Flood(_surfaceElevation, State.SeaLevelMeters);
+        var liquid = _totalWaterVolume - Cryosphere.LockedWaterVolume(State, Grid.AverageCellAreaSquareMeters);
+        if (liquid < 0.0)
+            throw new InvalidOperationException($"液態水量是負的（{liquid} 立方公尺）——冰蓋鎖住的水超過總水量，Cryosphere 的供給上限沒有生效。");
+        var lakeVolume = hydrology.SolveLakes(State, _surfaceElevation, State.SeaLevelMeters);
+        var converged = false;
+        for (var round = 0; round < MaxLakeSeaLevelRounds && !converged; round++)
+        {
+            State.SeaLevelMeters = hydrology.SolveSeaLevel(_surfaceElevation, liquid - lakeVolume);
+            var again = hydrology.SolveLakes(State, _surfaceElevation, State.SeaLevelMeters);
+            converged = again == lakeVolume;
+            lakeVolume = again;
+        }
+        // 沒收斂的話，用最後一輪的湖重解一次海平面，讓扣掉的湖水跟寫出去的湖水是同一份
+        if (!converged) State.SeaLevelMeters = hydrology.SolveSeaLevel(_surfaceElevation, liquid - lakeVolume);
+
+        var seaLevel = State.SeaLevelMeters;
+        hydrology.ComputeDischarge(State, seaLevel);
+        var flood = hydrology.FloodLevel;
+        Parallel.For(0, State.CellCount, cell =>
+        {
+            var surface = _surfaceElevation[cell];
+            State.WaterDepth[cell] = flood[cell] < seaLevel
+                ? seaLevel - surface
+                : hydrology.LakeDepthAt(cell, surface);
+        });
+    }
+
+    /// <summary>湖與海平面交替求解最多幾輪（見 <see cref="FillWaterByConnectivity"/>）。</summary>
+    private const int MaxLakeSeaLevelRounds = 4;
 
     /// <summary>
     /// 由**守恆的水量**反解出海平面高度。
@@ -624,6 +679,12 @@ public sealed class SimulationEngine
             _totalWaterVolume = volume * Grid.AverageCellAreaSquareMeters;
         }
         State.SeaLevelMeters = SolveSeaLevel();
+        if (_hydrology is not null)
+        {
+            // 起始還沒有氣候（降水全是 0），盆地都是乾的；第一次解氣候之後才會有湖
+            FillWaterByConnectivity(_hydrology);
+            return;
+        }
         Parallel.For(0, State.CellCount, cell =>
         {
             State.WaterDepth[cell] = MathF.Max(0f, State.SeaLevelMeters - _surfaceElevation[cell]);
