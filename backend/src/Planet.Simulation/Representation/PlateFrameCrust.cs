@@ -36,7 +36,7 @@ internal sealed class PlateFrameCrust
 {
     private readonly int _cellCount;
     private readonly (double W, double X, double Y, double Z)[] _rotation;
-    private readonly float[][] _thickness, _age, _density, _organic, _relief;
+    private readonly float[][] _thickness, _age, _density, _organic, _relief, _sediment;
     private readonly CrustType[][] _crust;
     private readonly bool[][] _oceanicOnly, _valid;
     private readonly int[][] _usedStamp, _forward;
@@ -62,7 +62,7 @@ internal sealed class PlateFrameCrust
     private int[] _owner, _bodyCell, _newOwner, _newBodyCell;
 
 
-    private readonly float[] _dThickness, _dAge, _dDensity, _dOrganic;
+    private readonly float[] _dThickness, _dAge, _dDensity, _dOrganic, _dRelief;
     private readonly bool[] _categoryChanged;
     private readonly bool[] _hidden;
 
@@ -86,6 +86,7 @@ internal sealed class PlateFrameCrust
         _rotation = Enumerable.Repeat((1.0, 0.0, 0.0, 0.0), plateCount).ToArray();
         _thickness = Allocate<float>(plateCount); _age = Allocate<float>(plateCount);
         _density = Allocate<float>(plateCount); _organic = Allocate<float>(plateCount); _relief = Allocate<float>(plateCount);
+        _sediment = Allocate<float>(plateCount);
         _crust = Allocate<CrustType>(plateCount);
         _oceanicOnly = Allocate<bool>(plateCount); _valid = Allocate<bool>(plateCount);
         _usedStamp = Allocate<int>(plateCount);
@@ -95,7 +96,7 @@ internal sealed class PlateFrameCrust
         _owner = new int[cellCount]; _bodyCell = new int[cellCount];
         _newOwner = new int[cellCount]; _newBodyCell = new int[cellCount];
         _dThickness = new float[cellCount]; _dAge = new float[cellCount];
-        _dDensity = new float[cellCount]; _dOrganic = new float[cellCount];
+        _dDensity = new float[cellCount]; _dOrganic = new float[cellCount]; _dRelief = new float[cellCount];
         _categoryChanged = new bool[cellCount];
         _hidden = new bool[cellCount];
         _component = new int[cellCount];
@@ -147,6 +148,12 @@ internal sealed class PlateFrameCrust
 
     /// <summary>上一步增生到留下那一方的地殼（公里·格）。</summary>
     internal double LastAccretedCrustKm { get; private set; }
+
+    /// <summary>這一步在隱沒帶刮進增積楔的沉積物（換成地殼的公里數，所有點加總），見 <see cref="ScrapeSediment"/>。</summary>
+    internal double LastScrapedSedimentKm { get; private set; }
+
+    /// <summary>這一步刮進增積楔時地殼已經頂到上限、放不下的沉積物（公里，所有點加總），應該是 0 或極少。</summary>
+    internal double LastSedimentOverflowKm { get; private set; }
 
     /// <summary>上一步丟掉的重複拷貝（同一塊地殼在兩個板塊座標系各留一份，不是碰撞）。</summary>
     internal int LastDuplicatesDropped { get; private set; }
@@ -202,6 +209,7 @@ internal sealed class PlateFrameCrust
             _density[p][c] = state.CrustDensity[c];
             _organic[p][c] = state.OrganicThickness[c];
             _relief[p][c] = state.StructuralRelief[c];
+            _sediment[p][c] = state.SedimentThickness[c];
             _crust[p][c] = state.Crust[c];
             _oceanicOnly[p][c] = state.OceanicOnly[c];
             _origin[p][c] = c;
@@ -386,6 +394,7 @@ internal sealed class PlateFrameCrust
         _density[p][body] = Isostasy.OceanicCrustDensity + plate.DensityAnomalyKgPerM3;
         _organic[p][body] = 0f;
         _relief[p][body] = 0f;
+        _sediment[p][body] = 0f;
         _crust[p][body] = CrustType.Oceanic;
         _oceanicOnly[p][body] = plate.IsOceanicOnly;
         _origin[p][body] = _nextOrigin++;
@@ -1073,6 +1082,7 @@ internal sealed class PlateFrameCrust
         _density[to][toBody] = _density[from][fromBody];
         _organic[to][toBody] = _organic[from][fromBody];
         _relief[to][toBody] = _relief[from][fromBody];
+        _sediment[to][toBody] = _sediment[from][fromBody];
         _crust[to][toBody] = _crust[from][fromBody];
         _oceanicOnly[to][toBody] = _oceanicOnly[from][fromBody];
         _origin[to][toBody] = _origin[from][fromBody];
@@ -1186,6 +1196,7 @@ internal sealed class PlateFrameCrust
             {
                 LastSubductions++;
             }
+            ScrapeSediment(gone, goneBody, keep, fixedPlate(a, b) ? aBody : bBody);
             _valid[gone][goneBody] = false;
             LastConsumedPoints++;
             LastConsumedCrustKm += goneThickness;
@@ -1277,10 +1288,30 @@ internal sealed class PlateFrameCrust
             }
         }
 
+        ScrapeSediment(loser, loserBody, winner, winnerBody);
         _valid[loser][loserBody] = false;
         LastConsumedPoints++;
         LastConsumedCrustKm += loserThickness;
         return winner;
+    }
+
+    /// <summary>
+    /// 被吃掉的那一點上的沉積物刮下來、併進留下那一點的地殼（增積楔，v2 P7，2026-10-19 使用者選定）。
+    /// 沉積物跟著地殼點走之後，到了隱沒帶一定要有去路：跟著隱沒掉的話大陸物質會慢慢流失，
+    /// 留在原地又會在海溝那一格無上限累積。併進地殼（體積相同：沉積物的公尺換成地殼的公里），均衡再把它抬起來——
+    /// 台灣、日本的增積岩體就是這樣長出來的。地殼頂到上限時多出來的那一點記在 <see cref="LastSedimentOverflowKm"/>。
+    /// </summary>
+    private void ScrapeSediment(int from, int fromBody, int to, int toBody)
+    {
+        var sediment = _sediment[from][fromBody];
+        if (sediment <= 0f) return;
+        _sediment[from][fromBody] = 0f;
+        var addKm = sediment / 1000f;
+        var before = _thickness[to][toBody];
+        var after = MathF.Min(before + addKm, Isostasy.MaxCrustThicknessKm);
+        _thickness[to][toBody] = after;
+        LastScrapedSedimentKm += addKm;
+        LastSedimentOverflowKm += addKm - (after - before);
     }
 
     /// <summary>這塊地殼碰撞時是否浮得住、會縮短拼接而不隱沒（見 <see cref="Isostasy.ResistsSubduction"/>）。</summary>
@@ -1298,6 +1329,8 @@ internal sealed class PlateFrameCrust
         LastShortenings = 0;
         LastContinentsFormed = 0;
         LastAccretedCrustKm = 0;
+        LastScrapedSedimentKm = 0;
+        LastSedimentOverflowKm = 0;
         LastDuplicatesDropped = 0;
         LastFragmentsAbsorbed = 0;
         LastFragmentCellsAbsorbed = 0;
@@ -1322,6 +1355,7 @@ internal sealed class PlateFrameCrust
             state.CrustDensity[c] = _density[p][b];
             state.OrganicThickness[c] = _organic[p][b];
             state.StructuralRelief[c] = _relief[p][b];
+            state.SedimentThickness[c] = _sediment[p][b];
             state.Crust[c] = _crust[p][b];
             state.OceanicOnly[c] = _oceanicOnly[p][b];
         });
@@ -1351,6 +1385,7 @@ internal sealed class PlateFrameCrust
             _dAge[c] = state.CrustAge[c] - _age[p][b];
             _dDensity[c] = state.CrustDensity[c] - _density[p][b];
             _dOrganic[c] = state.OrganicThickness[c] - _organic[p][b];
+            _dRelief[c] = state.StructuralRelief[c] - _relief[p][b];
             _categoryChanged[c] = state.Crust[c] != _crust[p][b] || state.OceanicOnly[c] != _oceanicOnly[p][b];
         });
 
@@ -1373,6 +1408,8 @@ internal sealed class PlateFrameCrust
                     _age[plate][b] = state.CrustAge[g];
                     _density[plate][b] = state.CrustDensity[g];
                     _organic[plate][b] = state.OrganicThickness[g];
+                    _sediment[plate][b] = state.SedimentThickness[g];
+                    _relief[plate][b] = state.StructuralRelief[g];
                 }
                 else
                 {
@@ -1381,6 +1418,10 @@ internal sealed class PlateFrameCrust
                     _age[plate][b] = MathF.Max(0f, _age[plate][b] + _dAge[g]);
                     _density[plate][b] += _dDensity[g];
                     _organic[plate][b] = MathF.Max(0f, _organic[plate][b] + _dOrganic[g]);
+                    // 沉積物不加差值、直接照抄：一格的堆積是好幾十公尺到好幾公里，加差值的話混疊出來的點每一步都多拿一份，
+                    // 之後被顯示出來就是一根兩倍厚的沉積柱（P7 第一次校準：40 Myr 單格 39 公里、四周 18 公里）
+                    _sediment[plate][b] = state.SedimentThickness[g];
+                    _relief[plate][b] = Math.Clamp(_relief[plate][b] + _dRelief[g], -MaxReliefMeters, MaxReliefMeters);
                 }
                 if (!_categoryChanged[g]) return;
                 _crust[plate][b] = state.Crust[g];
@@ -1404,7 +1445,7 @@ internal sealed class PlateFrameCrust
             {
                 writer.Write(b);
                 writer.Write(_thickness[p][b]); writer.Write(_age[p][b]);
-                writer.Write(_density[p][b]); writer.Write(_organic[p][b]); writer.Write(_relief[p][b]);
+                writer.Write(_density[p][b]); writer.Write(_organic[p][b]); writer.Write(_relief[p][b]); writer.Write(_sediment[p][b]);
                 writer.Write((byte)_crust[p][b]); writer.Write(_oceanicOnly[p][b]);
                 writer.Write(_origin[p][b]);
             }
@@ -1438,7 +1479,7 @@ internal sealed class PlateFrameCrust
             {
                 var b = reader.ReadInt32();
                 _thickness[p][b] = reader.ReadSingle(); _age[p][b] = reader.ReadSingle();
-                _density[p][b] = reader.ReadSingle(); _organic[p][b] = reader.ReadSingle(); _relief[p][b] = reader.ReadSingle();
+                _density[p][b] = reader.ReadSingle(); _organic[p][b] = reader.ReadSingle(); _relief[p][b] = reader.ReadSingle(); _sediment[p][b] = reader.ReadSingle();
                 _crust[p][b] = (CrustType)reader.ReadByte(); _oceanicOnly[p][b] = reader.ReadBoolean();
                 _origin[p][b] = reader.ReadInt32();
                 _valid[p][b] = true;

@@ -113,6 +113,30 @@ public sealed class Hydrology
     /// <summary>每一格屬於哪個盆地的湖水（<see cref="Basins"/> 的索引），沒有湖水是 −1。</summary>
     public int[] LakeOf => _lakeOf;
 
+    /// <summary>每一格的流向（泛洪記下的 parent，灌滿之後往主洋的那一格；-1 ＝ 主洋的種子）。</summary>
+    internal int[] FlowParent => _parent;
+
+    /// <summary>泛洪的處理順序（前 <see cref="FlowOrderCount"/> 個有效）：反過來走就是上游先。</summary>
+    internal int[] FlowOrder => _order;
+
+    /// <summary><see cref="FlowOrder"/> 裡有效的格數。</summary>
+    internal int FlowOrderCount => _orderCount;
+
+    /// <summary>每一格屬於哪個窪地盆地（-1 ＝ 不在窪地裡）。</summary>
+    internal int[] BasinOf => _basinOf;
+
+    /// <summary>這個盆地有沒有存水（湖）。</summary>
+    /// <param name="basin">盆地編號（<see cref="BasinOf"/>）。</param>
+    internal bool HoldsWater(int basin) => basin >= 0 && basin < _firstCell.Count && _holdsWater[basin];
+
+    /// <summary>盆地滿了之後水從哪一格流出去（溢出口外面那一格；-1 ＝ 沒有）。</summary>
+    /// <param name="basin">盆地編號（<see cref="BasinOf"/>）。</param>
+    internal int BasinOutlet(int basin) => _parent[_firstCell[basin]];
+
+    /// <summary>湖面高度（公尺），只對 <see cref="LakeOf"/> ≥ 0 的格子有意義。</summary>
+    /// <param name="cell">格子。</param>
+    internal float LakeLevelAt(int cell) => _lakeLevel[cell];
+
     /// <summary>上一次泛洪：主洋的種子有幾格（地表低於上一步海平面的最大連通塊）。</summary>
     public int LastSeedCells { get; private set; }
 
@@ -159,6 +183,44 @@ public sealed class Hydrology
     /// 海與湖裡是 0。上一次 <see cref="ComputeDischarge"/> 的結果。
     /// </summary>
     public float[] Discharge => _discharge;
+
+    /// <summary>
+    /// 存檔：外營力（<see cref="FluvialErosion"/>）每一步用的是**上一步**的水系（流向、處理順序、盆地、湖、流量），
+    /// 讀檔之後第一步要拿到同一份，續跑才會位元相同。不能讀檔時重算：解氣候的那一步降水在注水之後才更新，重算會得到不同的湖。
+    /// </summary>
+    /// <param name="writer">目標。</param>
+    internal void WriteTo(BinaryWriter writer)
+    {
+        writer.Write(_orderCount);
+        for (var i = 0; i < _orderCount; i++) writer.Write(_order[i]);
+        SimulationSnapshot.WriteArray(writer, _parent);
+        SimulationSnapshot.WriteArray(writer, _basinOf);
+        SimulationSnapshot.WriteArray(writer, _lakeOf);
+        SimulationSnapshot.WriteArray(writer, _lakeLevel);
+        SimulationSnapshot.WriteArray(writer, _discharge);
+        writer.Write(_firstCell.Count);
+        for (var b = 0; b < _firstCell.Count; b++) { writer.Write(_firstCell[b]); writer.Write(_holdsWater[b]); }
+    }
+
+    /// <summary>讀檔，見 <see cref="WriteTo"/>。</summary>
+    /// <param name="reader">來源。</param>
+    internal void ReadFrom(BinaryReader reader)
+    {
+        _orderCount = reader.ReadInt32();
+        for (var i = 0; i < _orderCount; i++) _order[i] = reader.ReadInt32();
+        SimulationSnapshot.ReadArray(reader, _parent);
+        SimulationSnapshot.ReadArray(reader, _basinOf);
+        SimulationSnapshot.ReadArray(reader, _lakeOf);
+        SimulationSnapshot.ReadArray(reader, _lakeLevel);
+        SimulationSnapshot.ReadArray(reader, _discharge);
+        var basins = reader.ReadInt32();
+        _firstCell.Clear();
+        if (_holdsWater.Length < basins) { _holdsWater = new bool[basins]; _outflow = new double[basins]; }
+        for (var b = 0; b < basins; b++) { _firstCell.Add(reader.ReadInt32()); _holdsWater[b] = reader.ReadBoolean(); }
+        _lakeCellsWritten.Clear();
+        for (var c = 0; c < _lakeOf.Length; c++) if (_lakeOf[c] >= 0) _lakeCellsWritten.Add(c);
+        _orderVersion++;
+    }
 
     /// <summary>
     /// 沿流向（泛洪記下的 <c>_parent</c>，灌滿之後往主洋的方向）把每一格的逕流往下游累加成河流流量。

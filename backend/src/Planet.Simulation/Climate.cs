@@ -218,7 +218,7 @@ public sealed class Climate
             _capacity[cell] = MoistureCapacityAt15C
                 * MathF.Exp((state.Temperature[cell] - 15f) / MoistureCapacityEFoldingC);
 
-            var climbKm = (DownwindElevation(state, cell) - state.SurfaceElevationAt(cell)) / 1000f;
+            var climbKm = (DownwindElevation(state, cell) - AirFloorAt(state, cell)) / 1000f;
             _orographicFraction[cell] = climbKm > 0f
                 ? MathF.Min(climbKm * OrographicFractionPerKm, 1f)
                 : 0f;
@@ -469,7 +469,7 @@ public sealed class Climate
 
             // 3. 基礎降水（對流雨、鋒面雨），受三胞環流的垂直運動調節：
             //    上升區（赤道、極鋒）加成，下沉區（副熱帶、極區）抑制——後者就是沙漠帶
-            var convective = BaselineRainFraction * (1f + _verticalMotion[cell]);
+            var convective = BaselineRainPerIteration * (1f + _verticalMotion[cell]);
             if (convective > 0f) rain += (moisture - rain) * convective;
 
             // 4. 超過持水能力的部分一定降下來
@@ -495,11 +495,38 @@ public sealed class Climate
         {
             var weight = _outflowWeight[baseIndex + s];
             if (weight <= 0f) continue;
-            elevation += state.SurfaceElevationAt(_grid.Neighbors[baseIndex + s]) * weight;
+            elevation += AirFloorAt(state, _grid.Neighbors[baseIndex + s]) * weight;
             totalWeight += weight;
         }
-        return totalWeight > 0f ? elevation / totalWeight : state.SurfaceElevationAt(cell);
+        return totalWeight > 0f ? elevation / totalWeight : AirFloorAt(state, cell);
     }
+
+    /// <summary>
+    /// 空氣底下的高度：地表，有水的話是水面（<see cref="OrographyAboveWater"/>）。
+    /// </summary>
+    private float AirFloorAt(SimulationState state, int cell) => OrographyAboveWater
+        ? state.SurfaceElevationAt(cell) + state.WaterDepth[cell]
+        : state.SurfaceElevationAt(cell);
+
+    /// <summary>
+    /// 地形抬升從水面算起（v2 P7，2026-10-19；只在板塊座標系模式開，標記法照舊用水底的地表）。
+    ///
+    /// 空氣在水面上，海面就是海平面。原本用水底的地表：海上的空氣「從 −4 公里的海床爬上大陸坡」，
+    /// 靠岸的海格就把 56% 的水氣逼成雨（種子 42 劇本第 1 步），上岸的空氣幾乎是乾的——
+    /// 陸地降水只有全球平均的 0~1%。之前量到的「陸地 11%」是海平面下降露出來的大陸棚、還留著當海時的降水。
+    /// </summary>
+    public bool OrographyAboveWater { get; set; }
+
+    /// <summary>
+    /// 不是 0 時（v2 P7），基礎降水的 <see cref="BaselineRainFraction"/> 是「每走這麼多公里」降下的比例，
+    /// 換算成每次迭代（一格）的比例；0 ＝ 標記法的舊行為，每次迭代固定 <see cref="BaselineRainFraction"/>。
+    /// </summary>
+    internal double BaselineRainReferenceKm { get; set; }
+
+    /// <summary>每次迭代的基礎降水比例，見 <see cref="BaselineRainReferenceKm"/>。</summary>
+    private float BaselineRainPerIteration => BaselineRainReferenceKm > 0
+        ? (float)(1 - Math.Pow(1 - BaselineRainFraction, _grid.AverageCellSpacingMeters / 1000.0 / BaselineRainReferenceKm))
+        : BaselineRainFraction;
 
     /// <summary>
     /// 把水氣沿著風送給下風的鄰居們（上風法）。

@@ -68,6 +68,11 @@ public sealed class SimulationEngine
     /// <summary>依連通性注水的結果（湖與盆地），標記法是 null。</summary>
     public Hydrology? Hydrology => _hydrology;
 
+    /// <summary>v2 的外營力（只有板塊座標系模式有，否則是 null），見 <see cref="Simulation.FluvialErosion"/>。</summary>
+    public FluvialErosion? FluvialErosion => _fluvial;
+
+    private readonly FluvialErosion? _fluvial;
+
     /// <summary>冰凍圈。沒有自己的狀態（全部寫在 <c>IceThickness</c> 裡），Reset 也不用重建。</summary>
     private readonly Cryosphere _ice = new();
 
@@ -151,11 +156,15 @@ public sealed class SimulationEngine
         if (crustTransport == CrustTransport.PlateFrame)
         {
             _hydrology = new Hydrology(grid);
+            _fluvial = new FluvialErosion(grid);
             // v2 P6：冰蓋依降雪打折、溫度每一步更新、海洋熱輸送（見 Cryosphere.SnowLimited、Climate.UpdateTemperatureOnly、Climate.OceanHeatTransport）
             _ice.SnowLimited = true;
             _climate.OceanHeatTransport = true;
+            _climate.OrographyAboveWater = true; // v2 P7：地形抬升從水面算起
+            _climate.BaselineRainReferenceKm = 200; // v2 P7：基礎降水是每 200 公里 6%，不是每格
             // 海岸破碎度不算大陸內部的水（湖），見 ContinentCriteria.InlandWaterIsCoast
-            StopCriteria = ContinentCriteria.Default with { InlandWaterIsCoast = false };
+            // 大島的下限 1% → 0.8%（2026-10-20 使用者決定）：P7 的侵蝕把劇本的第二座大島削到陸地的 0.84~0.89%
+            StopCriteria = ContinentCriteria.Default with { InlandWaterIsCoast = false, MinBigIslandShare = 0.008 };
         }
         CreateInitialWorld();
     }
@@ -284,7 +293,8 @@ public sealed class SimulationEngine
         // 排在前面，下面那一次求解就會把造礁堆高、侵蝕削低、沉積墊高全部一起算進去。
         // 用上一步的水深判斷海陸有一步的延遲，但一步是5萬年、地形變化極小，完全可以接受。
         _reefs.Step(State, YearsPerStep);
-        _erosion.Step(State, YearsPerStep);
+        if (_fluvial is not null && _hydrology is not null) _fluvial.Step(State, _hydrology, YearsPerStep);
+        else _erosion.Step(State, YearsPerStep);
         Timings.Mark("造礁＋侵蝕");
 
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
@@ -609,6 +619,7 @@ public sealed class SimulationEngine
         writer.Write(_stopConditionWasMet);
         writer.Write(_plumes.RandomDraws);
         _tectonics.WriteTo(writer);
+        _hydrology?.WriteTo(writer);
     }
 
     /// <summary>
@@ -641,6 +652,7 @@ public sealed class SimulationEngine
         _tectonics = new PlateTectonics(Grid, Plates.Plates.Length, _crustTransport) { Scenario = _tectonics.Scenario };
         _tectonics.ReadFrom(reader);
         _tectonics.AfterRestore(Plates);
+        _hydrology?.ReadFrom(reader);
         SyncPlateIdIntoState();
 
         // 地表高度的快取要跟著更新，否則下一次解海平面會用到讀檔前的地形
