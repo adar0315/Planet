@@ -618,8 +618,12 @@ public static class ContinentLayout
     /// </summary>
     private const double CoastCrustKm = 32;
 
-    /// <summary>內陸的大陸地殼厚度（公里）。地球的大陸平均約 35~40。</summary>
-    private const double InteriorCrustKm = 38;
+    /// <summary>
+    /// 內陸的大陸地殼厚度（公里）。地球的大陸平均約 35~40。
+    /// 原本取 38：內陸是一片高原，起步時陸地平均高出海面約 1.3 km（地球約 0.84 km），氣溫依高度遞減、水氣在海岸就被抬升降光，
+    /// 陸地又冷又乾（P6 診斷，2026-10-19）。改成 35，內陸低約 550 m。
+    /// </summary>
+    private const double InteriorCrustKm = 35;
 
     /// <summary>從海岸到內陸厚度的距離（公里）。</summary>
     private const double InteriorRampKm = 400;
@@ -797,8 +801,17 @@ public sealed record ContinentLayoutResult(int[] Label, bool[] Pacific, bool[] R
 /// 起始海平面（公尺），水量由它反推（見 SimulationEngine 的注水）。洋脊（約 −2,500）要在水下 2 公里以上——
 /// 沿用全海洋星球校準的平均海深 1,550 時，放了大陸之後海平面落在 −3,293 m、洋脊整條浮出水面。
 /// </param>
-/// <param name="AWestSpeed">A 往西的速度（全程）。這顆星球小，3 公分／年走 40 Myr（1,200 公里）就撞上對面。</param>
+/// <param name="AWestSpeed">
+/// A 往西的速度（全程）。這顆星球小，3 公分／年走 40 Myr（1,200 公里）就撞上對面。
+/// 太平洋固定、不會被吃，A 往西推進多少，西岸就被吃掉多寬：原本 1.5（40 Myr 吃掉 600 公里寬的一條，跟 C 加起來陸地少了約兩成、
+/// 被吃掉的地殼堆成山讓大陸又小又厚、浮得更高），2026-10-19 使用者選擇放慢成 0.5。
+/// </param>
 /// <param name="AOpeningSpeed">A 南半繞西側支點轉開的速度（離支點約 30° 處）。</param>
+/// <param name="ASouthEastSpeed">
+/// A 南再沿著跟 A 北的交界（大致東西向）往東滑的速度。繞西側支點轉開時，支點以南的部分會往西走，
+/// A 南西岸因此以 0.55 公分／年撞進太平洋（A 北只有 0.37），40 Myr 被吃掉約 22%。
+/// 2026-10-19 使用者要求減少 A 南被吃掉的量：往東滑抵銷轉動帶來的西推；沿著交界滑動，兩塊仍然相連。
+/// </param>
 /// <param name="DRiftStart">D 開始裂開。</param>
 /// <param name="DRiftEnd">D 不再被推開。</param>
 /// <param name="DRiftSpeed">D 離開 A 南半的速度。</param>
@@ -809,7 +822,7 @@ public sealed record ContinentLayoutResult(int[] Label, bool[] Pacific, bool[] R
 /// <param name="FRiftEnd">F 不再被推開。</param>
 /// <param name="FRiftSpeed">F 離開 B 的速度。</param>
 /// <param name="CBearing">C 前進的方向（往東北擠向太平洋）。</param>
-/// <param name="CSpeed">C 的速度（全程）。</param>
+/// <param name="CSpeed">C 的速度（全程）。跟 A 同樣的理由，2026-10-19 從 1 放慢成 0.5。</param>
 /// <param name="ERiftStart">E 開始裂開。</param>
 /// <param name="ERiftEnd">E 不再被推開。</param>
 /// <param name="ERiftSpeed">E 滑出去的速度；小島群用一半，最後落在兩者之間。</param>
@@ -826,6 +839,7 @@ public sealed record ContinentLayoutParameters(
     float InitialSeaLevelMeters,
     double AWestSpeed,
     double AOpeningSpeed,
+    double ASouthEastSpeed,
     double DRiftStart,
     double DRiftEnd,
     double DRiftSpeed,
@@ -850,8 +864,9 @@ public sealed record ContinentLayoutParameters(
         SketchWarpDegrees: 0.8,
         MaxFilledLakeAreaSquareKm: 50_000,
         InitialSeaLevelMeters: -200f,
-        AWestSpeed: 1.5,
+        AWestSpeed: 0.5,
         AOpeningSpeed: 0.5,
+        ASouthEastSpeed: 0,
         DRiftStart: 10,
         DRiftEnd: 30,
         DRiftSpeed: 2,
@@ -862,7 +877,7 @@ public sealed record ContinentLayoutParameters(
         FRiftEnd: 30,
         FRiftSpeed: 2,
         CBearing: 45,
-        CSpeed: 1,
+        CSpeed: 0.5,
         ERiftStart: 15,
         ERiftEnd: 35,
         ERiftSpeed: 3,

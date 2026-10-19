@@ -583,23 +583,16 @@ public sealed class Hydrology
     /// <summary>
     /// 這一格的降水有多少變成逕流（2026-10-18 使用者指定：淡水要算高山融雪的水）。
     /// 雨的部分照 <see cref="Climate.RunoffFraction"/>（其餘蒸散掉）；雪的部分存到融雪季才流下來，蒸散損失很少，
-    /// 用 <see cref="SnowmeltRunoffFraction"/>。降雪的比例依年均溫：<see cref="AllSnowBelowC"/> 以下全是雪、
-    /// <see cref="AllRainAboveC"/> 以上全是雨，中間線性。冰蓋往平衡厚度鬆弛、沒有記融化量，冰河本身的消融不另外算。
+    /// 用 <see cref="SnowmeltRunoffFraction"/>。降雪的比例見 <see cref="Climate.SnowFraction"/>。冰蓋往平衡厚度鬆弛、沒有記融化量，冰河本身的消融不另外算。
     /// </summary>
     private static float RunoffFractionAt(SimulationState state, int cell)
     {
-        var snow = Math.Clamp((AllRainAboveC - state.Temperature[cell]) / (AllRainAboveC - AllSnowBelowC), 0f, 1f);
+        var snow = Climate.SnowFraction(state.Temperature[cell]);
         return Climate.RunoffFraction + (SnowmeltRunoffFraction - Climate.RunoffFraction) * snow;
     }
 
     /// <summary>融雪的逕流係數。以融雪為主的高山集水區（阿爾卑斯、天山）年逕流係數約 0.6~0.9。</summary>
     private const float SnowmeltRunoffFraction = 0.8f;
-
-    /// <summary>年均溫低於這個（攝氏）降水全是雪。</summary>
-    private const float AllSnowBelowC = -5f;
-
-    /// <summary>年均溫高於這個（攝氏）降水全是雨。</summary>
-    private const float AllRainAboveC = 5f;
 
     /// <summary>湖面蒸發（降水的相對單位）：15°C 時是全球平均降水的 <see cref="EvaporationAt15CPerMeanPrecipitation"/> 倍，隨溫度指數變化。</summary>
     private float EvaporationAt(SimulationState state, int cell, double meanPrecipitation)

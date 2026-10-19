@@ -57,6 +57,15 @@ public sealed class SimulationState
     public float[] VegetationThickness { get; }
 
     /// <summary>
+    /// 構造起伏（公尺，可正可負）：碰撞帶裡被擠出來的褶皺——一排排平行的山脊夾著谷地，疊在均衡算出來的基岩高度上。
+    /// v2 P6（2026-10-19，使用者指出地球的造山帶是一整片被擠皺的地殼、不是只有一排山）。
+    ///
+    /// 不放進地殼厚度，是因為厚度會被重力擴展（模型在沒有侵蝕時唯一的增厚出口）當成擴散抹平，75 公里波長的褶皺約 100 萬年就消失；
+    /// 地球上的褶皺靠地殼本身的強度撐住，只會被侵蝕慢慢削掉。只有板塊座標系會寫它（跟著地殼點走），標記法永遠是 0。
+    /// </summary>
+    public float[] StructuralRelief { get; }
+
+    /// <summary>
     /// 冰蓋厚度（公尺）。只累積在**露出水面**的格子上——浮在海上的海冰不影響海平面
     /// （阿基米德原理），只有擱淺在陸地上的冰才會把水從海洋裡鎖走，見 <see cref="Cryosphere"/>。
     /// </summary>
@@ -176,6 +185,7 @@ public sealed class SimulationState
         SedimentThickness = new float[cellCount];
         OrganicThickness = new float[cellCount];
         VegetationThickness = new float[cellCount];
+        StructuralRelief = new float[cellCount];
         IceThickness = new float[cellCount];
         WaterDepth = new float[cellCount];
         Moisture = new float[cellCount];
@@ -193,13 +203,14 @@ public sealed class SimulationState
     }
 
     /// <summary>
-    /// 實際地表高度（公尺）＝基岩 ＋ 沉積物 ＋ 有機物 ＋ 植被。
+    /// 實際地表高度（公尺）＝基岩 ＋ 構造起伏 ＋ 沉積物 ＋ 有機物 ＋ 植被 ＋ 冰。
     /// 「沉澱物、砂石、植被有厚度會覆蓋在格子上」這個需求就是靠這幾層相加表現的，
     /// 渲染時每一層可以畫成不同顏色/材質。
     /// </summary>
     /// <param name="cellIndex">格子索引。</param>
     public float SurfaceElevationAt(int cellIndex) =>
         BedrockElevation[cellIndex]
+        + StructuralRelief[cellIndex]
         + SedimentThickness[cellIndex]
         + OrganicThickness[cellIndex]
         + VegetationThickness[cellIndex]
@@ -241,6 +252,7 @@ public sealed class SimulationState
         SimulationSnapshot.WriteArray(writer, Boundary);
         SimulationSnapshot.WriteArray(writer, VolcanicActivity);
         SimulationSnapshot.WriteArray(writer, OceanicOnly);
+        SimulationSnapshot.WriteArray(writer, StructuralRelief);
 
         writer.Write(SeaLevelMeters);
         writer.Write(ElapsedYears);
@@ -269,6 +281,7 @@ public sealed class SimulationState
         SimulationSnapshot.ReadArray(reader, Boundary);
         SimulationSnapshot.ReadArray(reader, VolcanicActivity);
         SimulationSnapshot.ReadArray(reader, OceanicOnly);
+        SimulationSnapshot.ReadArray(reader, StructuralRelief);
 
         SeaLevelMeters = reader.ReadSingle();
         ElapsedYears = reader.ReadDouble();

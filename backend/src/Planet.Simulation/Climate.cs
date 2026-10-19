@@ -243,14 +243,170 @@ public sealed class Climate
     }
 
     /// <summary>
-    /// 溫度＝緯度基準 −（高度×遞減率）＋大陸度修正。
+    /// 只更新溫度、不解降水（v2 P6：板塊座標系模式每一步呼叫）。溫度只看緯度、相對海平面的高度與海陸，很便宜；
+    /// 原本跟著降水每 200 萬年才更新一次，冰蓋在解氣候的那一步一口氣追上 200 萬年累積的溫度變化，海平面跟著跳一截
+    /// （種子 42 劇本第 42 步 −26 公尺，平常每步 0.8 公尺）。
+    /// </summary>
+    /// <param name="state">模擬狀態，溫度會被更新。</param>
+    public void UpdateTemperatureOnly(SimulationState state) => UpdateTemperature(state);
+
+    /// <summary>
+    /// 降水裡有多少是雪（0~1），依年均溫：<see cref="AllSnowBelowC"/> 以下全是雪、<see cref="AllRainAboveC"/> 以上全是雨，中間線性。
+    /// 依連通性注水的融雪逕流（<see cref="Hydrology"/>）與冰蓋的降雪供給（<see cref="Cryosphere"/>）共用。
+    /// </summary>
+    /// <param name="temperatureC">年均溫（攝氏）。</param>
+    internal static float SnowFraction(float temperatureC) =>
+        Math.Clamp((AllRainAboveC - temperatureC) / (AllRainAboveC - AllSnowBelowC), 0f, 1f);
+
+    /// <summary>年均溫低於這個（攝氏）降水全是雪。</summary>
+    internal const float AllSnowBelowC = -5f;
+
+    /// <summary>年均溫高於這個（攝氏）降水全是雨。</summary>
+    internal const float AllRainAboveC = 5f;
+
+    /// <summary>
+    /// 海洋熱輸送（v2 P6，2026-10-19；只在板塊座標系模式開，標記法照舊用 <see cref="EquatorTemperatureC"/> 的緯度公式）。
+    ///
+    /// 原本溫度只看緯度（30 − 55 sin²緯度），沒有任何熱量從赤道搬到高緯度——45° 是 2.5°C、地球同緯度約 10°C。
+    /// 地球上海流與大氣各搬大約一半的熱，這是中高緯度能住人的原因。
+    ///
+    /// 做法是一維的能量平衡模型（<see cref="SolveZonalTemperature"/>）：全球分成 2° 一條的緯度帶，
+    /// 每條帶往輻射平衡溫度（<see cref="RadiativeEquatorC"/> − <see cref="RadiativePoleDropC"/>·sin²緯度）鬆弛，
+    /// 同時跟相鄰的帶擴散熱量，擴散係數跟那條帶的海洋比例成正比（海流在搬熱）。
+    /// 海面的溫度就是那條帶的溫度；陸地拿到「大氣那一半」的輸送，加上離海岸越遠越少的「海洋那一半」
+    /// （<see cref="MaritimeReachKm"/>）——沿海溫和、內陸極端。
+    /// </summary>
+    public bool OceanHeatTransport { get; set; }
+
+    /// <summary>沒有熱輸送時赤道的輻射平衡溫度（攝氏）。跟擴散一起校準：七成是海時赤道約 26°C、45° 約 8°C、60° 約 −2°C、極區約 −10°C。</summary>
+    private const float RadiativeEquatorC = 34f;
+
+    /// <summary>輻射平衡溫度從赤道到極區降多少（攝氏），乘上 sin²緯度。</summary>
+    private const float RadiativePoleDropC = 60f;
+
+    /// <summary>熱量擴散的強度（以弧度² 計、相對於往輻射平衡鬆弛的強度），再乘上海洋比例。校準見 <see cref="RadiativeEquatorC"/>。</summary>
+    private const double ZonalDiffusion = 0.15;
+
+    /// <summary>陸地拿得到的熱輸送裡，大氣搬的那一份（到處都有），其餘是海洋搬的（只到得了沿海）。</summary>
+    private const float AtmosphericTransportShare = 0.5f;
+
+    /// <summary>海洋那一份熱輸送往內陸遞減的距離尺度（公里，指數遞減）。</summary>
+    private const double MaritimeReachKm = 800;
+
+    /// <summary>緯度帶的數目（每條 2°）。</summary>
+    private const int ZonalBands = 90;
+
+    /// <summary>能量平衡模型每次更新的 Gauss–Seidel 迭代次數（從上一次的解出發）。</summary>
+    private const int ZonalIterations = 3000;
+
+    private readonly double[] _zonalTemperature = new double[ZonalBands];
+    private bool _zonalInitialized;
+    private int[] _coastHops = [];
+
+    private static double RadiativeAt(double latitudeDegrees)
+    {
+        var sinLat = Math.Sin(latitudeDegrees * Math.PI / 180.0);
+        return RadiativeEquatorC - RadiativePoleDropC * sinLat * sinLat;
+    }
+
+    /// <summary>
+    /// 各緯度帶的穩態溫度：0 ＝ λ·f/cosφ · d/dφ(cosφ dT/dφ) ＋（輻射平衡 − T），f 是相鄰兩帶海洋比例的平均。
+    /// Gauss–Seidel 解，從上一次的解出發。
+    /// </summary>
+    private void SolveZonalTemperature(SimulationState state)
+    {
+        var ocean = new double[ZonalBands];
+        var count = new double[ZonalBands];
+        for (var c = 0; c < state.CellCount; c++)
+        {
+            var band = Math.Clamp((int)((_grid.Latitude[c] + 90.0) / 180.0 * ZonalBands), 0, ZonalBands - 1);
+            count[band]++;
+            if (state.WaterDepth[c] > 0f) ocean[band]++;
+        }
+        for (var i = 0; i < ZonalBands; i++) ocean[i] = count[i] > 0 ? ocean[i] / count[i] : 0;
+
+        var dphi = Math.PI / ZonalBands;
+        var phi = new double[ZonalBands];
+        var radiative = new double[ZonalBands];
+        for (var i = 0; i < ZonalBands; i++)
+        {
+            phi[i] = -Math.PI / 2 + (i + 0.5) * dphi;
+            radiative[i] = RadiativeAt(phi[i] * 180.0 / Math.PI);
+        }
+        if (!_zonalInitialized)
+        {
+            Array.Copy(radiative, _zonalTemperature, ZonalBands);
+            _zonalInitialized = true;
+        }
+        for (var iteration = 0; iteration < ZonalIterations; iteration++)
+        {
+            for (var i = 0; i < ZonalBands; i++)
+            {
+                var north = i < ZonalBands - 1 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i + 1]) * Math.Cos(phi[i] + dphi / 2) : 0;
+                var south = i > 0 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i - 1]) * Math.Cos(phi[i] - dphi / 2) : 0;
+                var scale = 1.0 / (Math.Cos(phi[i]) * dphi * dphi);
+                var neighbors = north * (i < ZonalBands - 1 ? _zonalTemperature[i + 1] : 0) + south * (i > 0 ? _zonalTemperature[i - 1] : 0);
+                _zonalTemperature[i] = (radiative[i] + scale * neighbors) / (1 + scale * (north + south));
+            }
+        }
+    }
+
+    /// <summary>某個緯度的帶溫度（相鄰兩帶中心之間線性內插）。</summary>
+    private double ZonalAt(double latitudeDegrees)
+    {
+        var x = (latitudeDegrees + 90.0) / 180.0 * ZonalBands - 0.5;
+        var i = Math.Clamp((int)Math.Floor(x), 0, ZonalBands - 2);
+        var t = Math.Clamp(x - i, 0, 1);
+        return _zonalTemperature[i] * (1 - t) + _zonalTemperature[i + 1] * t;
+    }
+
+    /// <summary>每一格離海岸幾格（水面是 0）。</summary>
+    private void ComputeCoastHops(SimulationState state)
+    {
+        var n = state.CellCount;
+        if (_coastHops.Length != n) _coastHops = new int[n];
+        Array.Fill(_coastHops, int.MaxValue);
+        var queue = new Queue<int>();
+        for (var c = 0; c < n; c++)
+            if (state.WaterDepth[c] > 0f) { _coastHops[c] = 0; queue.Enqueue(c); }
+        while (queue.Count > 0)
+        {
+            var c = queue.Dequeue();
+            var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+            for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+            {
+                var nb = _grid.Neighbors[baseIndex + k];
+                if (nb == SimulationGrid.NoNeighbor || _coastHops[nb] != int.MaxValue) continue;
+                _coastHops[nb] = _coastHops[c] + 1;
+                queue.Enqueue(nb);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 溫度＝緯度基準（有海洋熱輸送時見 <see cref="OceanHeatTransport"/>）−（高度×遞減率）＋大陸度修正。
     /// </summary>
     private void UpdateTemperature(SimulationState state)
     {
+        if (OceanHeatTransport)
+        {
+            SolveZonalTemperature(state);
+            ComputeCoastHops(state);
+        }
+        var spacingKm = _grid.AverageCellSpacingMeters / 1000.0;
         Parallel.For(0, state.CellCount, cell =>
         {
             var sinLat = Math.Sin(_grid.Latitude[cell] * Math.PI / 180.0);
             var baseC = EquatorTemperatureC - PoleTemperatureDropC * (float)(sinLat * sinLat);
+            if (OceanHeatTransport)
+            {
+                var radiative = RadiativeAt(_grid.Latitude[cell]);
+                var zonal = ZonalAt(_grid.Latitude[cell]);
+                var share = state.WaterDepth[cell] > 0f
+                    ? 1.0
+                    : AtmosphericTransportShare + (1 - AtmosphericTransportShare) * Math.Exp(-_coastHops[cell] * spacingKm / MaritimeReachKm);
+                baseC = (float)(radiative + (zonal - radiative) * share);
+            }
 
             // 高度一定要**相對海平面**算，不能用絕對高度（2026-09-06 踩過）：
             // 這個模型的海平面是由守恆的水量反解出來的，會一路漲到 +3,000 公尺以上，
@@ -265,7 +421,9 @@ public sealed class Climate
             // 大陸度：陸地把「相對全球平均」的偏差放大（海洋熱容量大，會把溫度拉回平均）
             if (state.WaterDepth[cell] <= 0f)
             {
-                const float globalMean = EquatorTemperatureC - PoleTemperatureDropC / 3f;
+                var globalMean = OceanHeatTransport
+                    ? RadiativeEquatorC - RadiativePoleDropC / 3f
+                    : EquatorTemperatureC - PoleTemperatureDropC / 3f;
                 temperature += (temperature - globalMean) * ContinentalityFactor;
             }
 

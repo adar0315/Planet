@@ -64,6 +64,24 @@ public sealed class Cryosphere
     /// </summary>
     private const float RelaxationPerStep = 0.5f;
 
+    /// <summary>
+    /// 平衡冰厚要不要依降雪打折（v2 P6，2026-10-19；只在板塊座標系模式開，標記法照舊只看氣溫）。
+    ///
+    /// 原本平衡冰厚只看年均溫：一片又冷又乾、幾乎不下雪的沙漠也長出幾公里厚的冰。種子 42 劇本 1 Myr 時冰就蓋住 34% 的陸地、
+    /// 40 Myr 時 57%（地球約 10%，冰期最盛約 25%），鎖住的水讓海平面一路降、大陸相對變高變冷，又長更多冰。
+    /// 真實的冰蓋要有降雪才長得起來——冰期的西伯利亞夠冷，但太乾，沒有大冰蓋。
+    ///
+    /// 打折的比例 ＝ 降雪 ÷（全球平均降水 × <see cref="SnowForFullIcePerMeanPrecipitation"/>），上限 1。
+    /// 降雪 ＝ 降水 × <see cref="Climate.SnowFraction"/>。還沒解過氣候（全球都沒有降水）時沒有雪，也就沒有冰。
+    /// </summary>
+    public bool SnowLimited { get; set; }
+
+    /// <summary>
+    /// 降雪達到全球平均降水的這個比例，冰才長到只看氣溫的平衡厚度。
+    /// 南極沿海的年降雪約 200~600 公釐、內陸約 50 公釐，全球平均降水約 1,000 公釐；取 0.25。
+    /// </summary>
+    private const float SnowForFullIcePerMeanPrecipitation = 0.25f;
+
     /// <summary>每格這一步的平衡冰厚（公尺），先算好才知道全球加起來要不要按供給打折。</summary>
     private float[] _equilibrium = [];
 
@@ -95,6 +113,13 @@ public sealed class Cryosphere
     public void Step(SimulationState state, double totalWaterVolume, double cellAreaSquareMeters)
     {
         if (_equilibrium.Length != state.CellCount) _equilibrium = new float[state.CellCount];
+        var snowForFullIce = 0f;
+        if (SnowLimited)
+        {
+            var precipitationSum = 0.0;
+            for (var cell = 0; cell < state.CellCount; cell++) precipitationSum += state.Precipitation[cell];
+            snowForFullIce = (float)(precipitationSum / state.CellCount) * SnowForFullIcePerMeanPrecipitation;
+        }
 
         Parallel.For(0, state.CellCount, cell =>
         {
@@ -105,6 +130,11 @@ public sealed class Cryosphere
             _equilibrium[cell] = onLand && below > 0f
                 ? MathF.Min(below * MetersPerDegreeBelowFreezing, MaxIceThicknessM)
                 : 0f;
+            if (SnowLimited && _equilibrium[cell] > 0f)
+            {
+                var snow = state.Precipitation[cell] * Climate.SnowFraction(state.Temperature[cell]);
+                _equilibrium[cell] *= snowForFullIce > 0f ? MathF.Min(1f, snow / snowForFullIce) : 0f;
+            }
         });
 
         var wantedThicknessSum = 0.0;

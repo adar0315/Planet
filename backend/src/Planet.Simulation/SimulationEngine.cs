@@ -148,7 +148,15 @@ public sealed class SimulationEngine
         _volumePartials = new double[WaterVolumePartitionCount];
         _climate = new Climate(grid);
         _erosion = new Erosion(grid);
-        if (crustTransport == CrustTransport.PlateFrame) _hydrology = new Hydrology(grid);
+        if (crustTransport == CrustTransport.PlateFrame)
+        {
+            _hydrology = new Hydrology(grid);
+            // v2 P6：冰蓋依降雪打折、溫度每一步更新、海洋熱輸送（見 Cryosphere.SnowLimited、Climate.UpdateTemperatureOnly、Climate.OceanHeatTransport）
+            _ice.SnowLimited = true;
+            _climate.OceanHeatTransport = true;
+            // 海岸破碎度不算大陸內部的水（湖），見 ContinentCriteria.InlandWaterIsCoast
+            StopCriteria = ContinentCriteria.Default with { InlandWaterIsCoast = false };
+        }
         CreateInitialWorld();
     }
 
@@ -326,6 +334,11 @@ public sealed class SimulationEngine
         {
             _climate.Solve(State);
             _yearsSinceClimateSolve = 0;
+        }
+        else if (_crustTransport == CrustTransport.PlateFrame)
+        {
+            // v2：溫度每一步更新（便宜），降水才照舊每 200 萬年解一次
+            _climate.UpdateTemperatureOnly(State);
         }
         Timings.Mark("氣候");
 

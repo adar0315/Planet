@@ -36,7 +36,7 @@ internal sealed class PlateFrameCrust
 {
     private readonly int _cellCount;
     private readonly (double W, double X, double Y, double Z)[] _rotation;
-    private readonly float[][] _thickness, _age, _density, _organic;
+    private readonly float[][] _thickness, _age, _density, _organic, _relief;
     private readonly CrustType[][] _crust;
     private readonly bool[][] _oceanicOnly, _valid;
     private readonly int[][] _usedStamp, _forward;
@@ -71,6 +71,7 @@ internal sealed class PlateFrameCrust
 
     /// <summary>這一步大陸碰撞縮短下來、還沒攤開的地殼（公里·格），記在發生碰撞的那一格（見 <see cref="DistributeCollisionThickening"/>）。</summary>
     private readonly float[] _collisionBudget;
+    private readonly bool[] _collisionFromWall;
 
     /// <summary>正在判定的是哪一格（<see cref="Resolve"/> 要知道碰撞發生在哪裡）。</summary>
     private int _resolveCell;
@@ -84,7 +85,7 @@ internal sealed class PlateFrameCrust
         _cellCount = cellCount;
         _rotation = Enumerable.Repeat((1.0, 0.0, 0.0, 0.0), plateCount).ToArray();
         _thickness = Allocate<float>(plateCount); _age = Allocate<float>(plateCount);
-        _density = Allocate<float>(plateCount); _organic = Allocate<float>(plateCount);
+        _density = Allocate<float>(plateCount); _organic = Allocate<float>(plateCount); _relief = Allocate<float>(plateCount);
         _crust = Allocate<CrustType>(plateCount);
         _oceanicOnly = Allocate<bool>(plateCount); _valid = Allocate<bool>(plateCount);
         _usedStamp = Allocate<int>(plateCount);
@@ -100,6 +101,7 @@ internal sealed class PlateFrameCrust
         _component = new int[cellCount];
         _dormantUntilMyr = new double[plateCount];
         _collisionBudget = new float[cellCount];
+        _collisionFromWall = new bool[cellCount];
         _collisionUpper = new int[cellCount];
     }
 
@@ -199,6 +201,7 @@ internal sealed class PlateFrameCrust
             _age[p][c] = state.CrustAge[c];
             _density[p][c] = state.CrustDensity[c];
             _organic[p][c] = state.OrganicThickness[c];
+            _relief[p][c] = state.StructuralRelief[c];
             _crust[p][c] = state.Crust[c];
             _oceanicOnly[p][c] = state.OceanicOnly[c];
             _origin[p][c] = c;
@@ -245,11 +248,14 @@ internal sealed class PlateFrameCrust
         //    引擎的老化在回寫**之後**（ApplyIsostasyAndFillWater），標記法每兩步才重新取樣一次、頂多少一步，
         //    這裡每步都重新讀，靠引擎老化的話年齡每一步都被讀回原值——P3 第一次跑，300 步後全球地殼年齡都是 0。
         var ageStep = (float)deltaMyr;
+        // 構造起伏被侵蝕慢慢削掉（P7 有河流侵蝕之後由它接手，見 ReliefDecayMyr）
+        var reliefKeep = (float)Math.Exp(-deltaMyr / ReliefDecayMyr);
         for (var p = 0; p < _rotation.Length; p++)
         {
             var age = _age[p];
+            var relief = _relief[p];
             var valid = _valid[p];
-            Parallel.For(0, _cellCount, b => { if (valid[b]) age[b] += ageStep; });
+            Parallel.For(0, _cellCount, b => { if (valid[b]) { age[b] += ageStep; relief[b] *= reliefKeep; } });
         }
 
         // 1. 上一步在這裡的板塊，在這一點的對應點（彼此無相依，平行）
@@ -379,6 +385,7 @@ internal sealed class PlateFrameCrust
         // 新生地殼繼承板塊的密度異常（否則重板塊會被自己擴張出來的普通地殼稀釋掉，見 v1 的 SeedRidgeMarker）
         _density[p][body] = Isostasy.OceanicCrustDensity + plate.DensityAnomalyKgPerM3;
         _organic[p][body] = 0f;
+        _relief[p][body] = 0f;
         _crust[p][body] = CrustType.Oceanic;
         _oceanicOnly[p][body] = plate.IsOceanicOnly;
         _origin[p][body] = _nextOrigin++;
@@ -652,6 +659,7 @@ internal sealed class PlateFrameCrust
             _density[plate][b] = Isostasy.OceanicCrustDensity;
             _age[plate][b] = 0f;
             _organic[plate][b] = 0f;
+            _relief[plate][b] = 0f;
         }
     }
 
@@ -709,7 +717,74 @@ internal sealed class PlateFrameCrust
     /// 選填：哪個板塊重疊時永遠留下、不會被消耗（劇本用：固定不動、面積不減的太平洋）。
     /// 擠進它的大陸地殼被吃掉，厚度記進碰撞增厚、攤到撞上來的那塊大陸的前緣（見 <see cref="Resolve"/>）。
     /// </summary>
-    internal Func<int, bool>? Unconsumable { get; set; }
+    /// <remarks>參數是（這個板塊、碰上的板塊）：同一塊板塊可以只對某些板塊不會被消耗（劇本的太平洋讓 A 南隱沒進去）。</remarks>
+    internal Func<int, int, bool>? Unconsumable { get; set; }
+
+    /// <summary>
+    /// 安地斯型造山（v2 P6，2026-10-19 使用者指定；只在大陸配置的劇本模式開）：這裡回傳 true 的板塊隱沒到大陸底下時，
+    /// 大陸前緣被擠壓縮短——每隱沒一點，就把那一格大陸地殼厚度的 <see cref="AndeanShorteningFraction"/> 記進碰撞增厚
+    /// （照山脈的方式攤開、疊上撞牆那一級的褶皺），但大陸不少掉面積。地球上安地斯的高度主要來自大陸邊緣的縮短。
+    ///
+    /// 太平洋改成隱沒到 A 南底下之後（A 南不再被那道牆吃掉），A 南西岸的山整排不見了。第一版用「隱沒的海洋地殼的 50%」，
+    /// 洋殼只有 7 公里厚、A 南那一段又只有 0.53 公分／年，每格的量只有撞牆的十分之一，A 南還是沒有山；
+    /// 反而套用在所有海洋隱沒到大陸底下的地方，極區板塊（1~2 公分／年）在 A 北、C 的北岸堆出了山。
+    /// 所以只限指定的板塊（劇本的太平洋），量比照撞牆時被吃掉的大陸厚度。
+    ///
+    /// 這份增厚沒有從別處扣，質量不守恆——是劇本為了外觀做的調整。沒有劇本的隨機起始不開。
+    /// </summary>
+    internal Func<int, bool>? AndeanSubductingPlate { get; set; }
+
+    /// <summary>安地斯型造山：每隱沒一點，大陸前緣地殼厚度（<see cref="AndeanReferenceCrustKm"/>）的多少比例變成造山增厚（見 <see cref="AndeanSubductingPlate"/>）。</summary>
+    private const float AndeanShorteningFraction = 0.5f;
+
+    /// <summary>
+    /// 安地斯型造山用的大陸前緣厚度（公里）。接觸的常常是大陸棚外側自己的海洋地殼，不能用接觸那一點的厚度，
+    /// 取一般大陸的厚度——比照撞牆時被吃掉的大陸。
+    /// </summary>
+    private const float AndeanReferenceCrustKm = 35f;
+
+    /// <summary>
+    /// 碰撞處不在大陸地殼上時（安地斯型造山接觸的是大陸前緣自己的海洋地殼），造山量往同一個板塊最近的大陸格找，最遠幾公里。
+    /// 原本攤開只沿著大陸格走、從海洋格出發走不到大陸上：A 南西岸跟太平洋之間大多隔著一條自己的海洋地殼，只有中段一小塊長出山。
+    /// </summary>
+    private const double CollisionToContinentReachKm = 150;
+
+    /// <summary>不在大陸地殼上的碰撞處，把造山量搬到同一個板塊、<see cref="CollisionToContinentReachKm"/> 以內最近的大陸格（找不到就留著，照舊攤不出去）。</summary>
+    private void MoveBudgetToContinent(SimulationGrid grid)
+    {
+        var maxHops = Math.Max(1, (int)(CollisionToContinentReachKm * 1000.0 / grid.AverageCellSpacingMeters));
+        var hops = new Dictionary<int, int>();
+        var queue = new Queue<int>();
+        for (var start = 0; start < _cellCount; start++)
+        {
+            if (_collisionBudget[start] <= 0f || IsContinentalCell(start)) continue;
+            var plate = _owner[start];
+            hops.Clear();
+            queue.Clear();
+            hops[start] = 0;
+            queue.Enqueue(start);
+            var target = -1;
+            while (queue.Count > 0 && target < 0)
+            {
+                var c = queue.Dequeue();
+                if (hops[c] >= maxHops) continue;
+                var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+                for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell && target < 0; k++)
+                {
+                    var nb = grid.Neighbors[baseIndex + k];
+                    if (nb == SimulationGrid.NoNeighbor || _owner[nb] != plate || hops.ContainsKey(nb)) continue;
+                    hops[nb] = hops[c] + 1;
+                    if (IsContinentalCell(nb)) target = nb;
+                    else queue.Enqueue(nb);
+                }
+            }
+            if (target < 0) continue;
+            _collisionBudget[target] += _collisionBudget[start];
+            _collisionFromWall[target] |= _collisionFromWall[start];
+            _collisionUpper[target] = _collisionUpper[start];
+            _collisionBudget[start] = 0f;
+        }
+    }
 
     /// <summary>
     /// 大陸碰撞的增厚分成兩份（2026-10-18 使用者指定：碰撞線上是高山山脈，山脈後方是高原，像喜馬拉雅與青藏高原）：
@@ -726,8 +801,18 @@ internal sealed class PlateFrameCrust
     /// </summary>
     private const double CollisionMountainFraction = 1.0;
 
-    /// <summary>山脈的寬度（公里，從碰撞處往兩側）。喜馬拉雅約 200~300 公里寬；這顆星球半徑約地球的 0.3。</summary>
-    private const double CollisionMountainWidthKm = 120;
+    /// <summary>
+    /// 山脈的寬度（公里，從碰撞處往兩側）。喜馬拉雅約 200~300 公里寬。
+    /// 原本取 120：只堆得出一道窄窄的山脊。2026-10-19 使用者指出地球的造山帶是一整片被擠皺的地殼、不是只有一排山，改成 300，褶皺見 <see cref="FoldWavelengthKm"/>。
+    /// </summary>
+    private const double CollisionMountainWidthKm = 300;
+
+    /// <summary>
+    /// 褶皺的波長（公里）：碰撞帶裡平行於碰撞處的山脊每隔這麼遠一排，中間是谷地（疊在構造起伏上，見 SimulationState.StructuralRelief）。
+    /// 喜馬拉雅從南到北是西瓦利克、小喜馬拉雅、大喜馬拉雅幾排，間距幾十到一百公里；n=150 一格約 15 公里，75 公里是 5 格，解析得出來。
+    /// </summary>
+    private const double FoldWavelengthKm = 75;
+
 
     /// <summary>高原的寬度（公里，從碰撞處往上盤內側）。青藏高原約 1,000 公里。</summary>
     private const double CollisionPlateauWidthKm = 500;
@@ -752,6 +837,7 @@ internal sealed class PlateFrameCrust
         var any = false;
         for (var c = 0; c < _cellCount && !any; c++) any = _collisionBudget[c] > 0f;
         if (!any) return;
+        MoveBudgetToContinent(grid);
 
         var spacing = grid.AverageCellSpacingMeters;
         var mountainHops = Math.Max(1, (int)(CollisionMountainWidthKm * 1000.0 / spacing));
@@ -776,8 +862,9 @@ internal sealed class PlateFrameCrust
             AddThickness(c, (_collisionBudget[src] - mountainBudget[src]) / plateauCount[src]);
         }
 
-        // 山脈：兩側都走，越近分得越多
+        // 山脈：兩側都走，越近分得越多（地殼厚度，平滑的包絡）；褶皺另外疊在構造起伏上（見 FoldWavelengthKm）
         var (mSource, mHops) = NearestCollision(grid, mountainHops);
+        var foldHops = FoldWavelengthKm * 1000.0 / spacing;
         double Weight(int h) => 1.0 - (double)h / (mountainHops + 1);
         var weightSum = new double[_cellCount];
         for (var c = 0; c < _cellCount; c++)
@@ -786,7 +873,10 @@ internal sealed class PlateFrameCrust
         {
             var src = mSource[c];
             if (src < 0 || weightSum[src] <= 0 || !IsContinentalCell(c)) continue;
-            AddThickness(c, (float)(mountainBudget[src] * Weight(mHops[c]) / weightSum[src]));
+            var added = (float)(mountainBudget[src] * Weight(mHops[c]) / weightSum[src]);
+            AddThickness(c, added);
+            var reliefPerKm = _collisionFromWall[src] ? WallReliefPerKmOfThickening : ReliefPerKmOfThickening;
+            AddRelief(c, (float)(added * reliefPerKm * Math.Cos(2 * Math.PI * mHops[c] / foldHops)));
         }
     }
 
@@ -795,6 +885,33 @@ internal sealed class PlateFrameCrust
     /// 撞上不會被消耗的板塊（見 <see cref="Unconsumable"/>）時，碰撞處已經歸那塊海洋板塊，增厚要全部落在撞上來的大陸那一側。
     /// </summary>
     private bool IsContinentalCell(int cell) => _crust[_owner[cell]][_bodyCell[cell]] == CrustType.Continental;
+
+    /// <summary>在這一格顯示的那一點疊上構造起伏，夾在 ±<see cref="MaxReliefMeters"/>。</summary>
+    private void AddRelief(int cell, float add)
+    {
+        var p = _owner[cell];
+        var b = _bodyCell[cell];
+        _relief[p][b] = Math.Clamp(_relief[p][b] + add, -MaxReliefMeters, MaxReliefMeters);
+    }
+
+    /// <summary>
+    /// 碰撞增厚每 1 公里，褶皺的起伏長多少公尺（山脊加、谷地減，平均起來是 0，不改變山脈的總高度）。
+    /// 碰撞帶前緣累積增厚幾十公里時，山脊與谷地相差約兩三公里，像喜馬拉雅幾排山之間的谷地。
+    /// </summary>
+    private const float ReliefPerKmOfThickening = 100f;
+
+    /// <summary>
+    /// 大陸撞上不會被消耗的板塊（劇本的太平洋）時，每增厚 1 公里長多少構造起伏。
+    /// A 往西撞太平洋的速度只有 0.5 公分／年，增厚量小，照 <see cref="ReliefPerKmOfThickening"/> 的話西岸看不出褶皺；
+    /// 2026-10-19 使用者要求加大 A 西岸的褶皺，取 4 倍。
+    /// </summary>
+    private const float WallReliefPerKmOfThickening = 400f;
+
+    /// <summary>構造起伏的上限（公尺，正負）。</summary>
+    private const float MaxReliefMeters = 2000f;
+
+    /// <summary>構造起伏被侵蝕削掉的特徵時間（百萬年）。造山帶的地形在停止擠壓之後幾千萬年才被夷平。</summary>
+    private const double ReliefDecayMyr = 20;
 
     private void AddThickness(int cell, float add)
     {
@@ -955,6 +1072,7 @@ internal sealed class PlateFrameCrust
         _age[to][toBody] = _age[from][fromBody];
         _density[to][toBody] = _density[from][fromBody];
         _organic[to][toBody] = _organic[from][fromBody];
+        _relief[to][toBody] = _relief[from][fromBody];
         _crust[to][toBody] = _crust[from][fromBody];
         _oceanicOnly[to][toBody] = _oceanicOnly[from][fromBody];
         _origin[to][toBody] = _origin[from][fromBody];
@@ -1053,15 +1171,16 @@ internal sealed class PlateFrameCrust
         // 不會被消耗的板塊（劇本的太平洋，2026-10-18 使用者指定：固定、演化中面積也不減）永遠留下。
         // 擠進來的洋殼照常隱沒到它底下（不增生，它保持原樣）；擠進來的大陸地殼沉不下去，等於撞上一道牆——
         // 前緣被吃掉的厚度記進碰撞增厚，攤到那塊大陸的前緣（DistributeCollisionThickening 只加在大陸格上），西岸因此長山。
-        if (Unconsumable is { } fixedPlate && fixedPlate(a) != fixedPlate(b))
+        if (Unconsumable is { } fixedPlate && fixedPlate(a, b) != fixedPlate(b, a))
         {
-            var (keep, gone, goneBody) = fixedPlate(a) ? (a, b, bBody) : (b, a, aBody);
+            var (keep, gone, goneBody) = fixedPlate(a, b) ? (a, b, bBody) : (b, a, aBody);
             var goneThickness = _thickness[gone][goneBody];
             if (_crust[gone][goneBody] == CrustType.Continental)
             {
                 LastShortenings++;
                 _collisionBudget[_resolveCell] += goneThickness;
                 _collisionUpper[_resolveCell] = gone;
+                _collisionFromWall[_resolveCell] = true;
             }
             else
             {
@@ -1127,6 +1246,14 @@ internal sealed class PlateFrameCrust
             LastAccretedCrustKm += gain;
             LastSubductions++;
             if (winnerContinental) LastContinentOverrides++;
+            // 安地斯型造山（只在劇本模式、只有指定的板塊隱沒時，見 AndeanSubductingPlate）：大陸前緣被擠壓縮短、增厚、起褶皺
+            // 接觸的可以是大陸本身，也可以是大陸前緣那一窄條自己的海洋地殼（造山量之後交給最近的大陸格，見 MoveBudgetToContinent）
+            if (AndeanSubductingPlate is { } andean && andean(loser) && !loserContinental)
+            {
+                _collisionBudget[_resolveCell] += AndeanReferenceCrustKm * AndeanShorteningFraction;
+                _collisionUpper[_resolveCell] = winner;
+                _collisionFromWall[_resolveCell] = true;
+            }
         }
         var before = _thickness[winner][winnerBody];
         var after = MathF.Min(before + gain, Isostasy.MaxCrustThicknessKm);
@@ -1180,6 +1307,7 @@ internal sealed class PlateFrameCrust
         LastHiddenShortenings = 0;
         _collidingPairs.Clear();
         Array.Clear(_collisionBudget);
+        Array.Clear(_collisionFromWall);
     }
 
     /// <summary>把每格看得到的地殼寫進 <paramref name="state"/>。</summary>
@@ -1193,6 +1321,7 @@ internal sealed class PlateFrameCrust
             state.CrustAge[c] = _age[p][b];
             state.CrustDensity[c] = _density[p][b];
             state.OrganicThickness[c] = _organic[p][b];
+            state.StructuralRelief[c] = _relief[p][b];
             state.Crust[c] = _crust[p][b];
             state.OceanicOnly[c] = _oceanicOnly[p][b];
         });
@@ -1275,7 +1404,7 @@ internal sealed class PlateFrameCrust
             {
                 writer.Write(b);
                 writer.Write(_thickness[p][b]); writer.Write(_age[p][b]);
-                writer.Write(_density[p][b]); writer.Write(_organic[p][b]);
+                writer.Write(_density[p][b]); writer.Write(_organic[p][b]); writer.Write(_relief[p][b]);
                 writer.Write((byte)_crust[p][b]); writer.Write(_oceanicOnly[p][b]);
                 writer.Write(_origin[p][b]);
             }
@@ -1309,7 +1438,7 @@ internal sealed class PlateFrameCrust
             {
                 var b = reader.ReadInt32();
                 _thickness[p][b] = reader.ReadSingle(); _age[p][b] = reader.ReadSingle();
-                _density[p][b] = reader.ReadSingle(); _organic[p][b] = reader.ReadSingle();
+                _density[p][b] = reader.ReadSingle(); _organic[p][b] = reader.ReadSingle(); _relief[p][b] = reader.ReadSingle();
                 _crust[p][b] = (CrustType)reader.ReadByte(); _oceanicOnly[p][b] = reader.ReadBoolean();
                 _origin[p][b] = reader.ReadInt32();
                 _valid[p][b] = true;

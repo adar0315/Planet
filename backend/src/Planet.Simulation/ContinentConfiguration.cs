@@ -48,7 +48,8 @@ public static class ContinentConfiguration
         // 最大兩塊的陸塊編號（同樣大小時取編號小的，結果才是決定性的）
         var byArea = Enumerable.Range(0, sizes.Count).OrderByDescending(i => sizes[i]).ThenBy(i => i).ToList();
         var (largestRagged, secondRagged) = Raggedness(grid, state, label,
-            byArea.Count > 0 ? byArea[0] : -1, byArea.Count > 1 ? byArea[1] : -1);
+            byArea.Count > 0 ? byArea[0] : -1, byArea.Count > 1 ? byArea[1] : -1,
+            c.InlandWaterIsCoast ? null : MainOceanMask(grid, state));
 
         var land = significant.Sum(s => (long)s);
         double Share(int index) => land > 0 && index < significant.Count ? (double)significant[index] / land : 0;
@@ -99,7 +100,7 @@ public static class ContinentConfiguration
     /// 沒有那一塊（編號 −1）時回傳 0。
     /// </summary>
     private static (double First, double Second) Raggedness(
-        SimulationGrid grid, SimulationState state, int[] label, int first, int second)
+        SimulationGrid grid, SimulationState state, int[] label, int first, int second, bool[]? ocean)
     {
         int area1 = 0, coast1 = 0, area2 = 0, coast2 = 0;
         for (var cell = 0; cell < state.CellCount; cell++)
@@ -112,7 +113,8 @@ public static class ContinentConfiguration
             for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell && !wet; s++)
             {
                 var neighbor = grid.Neighbors[baseIndex + s];
-                wet = neighbor != SimulationGrid.NoNeighbor && state.WaterDepth[neighbor] > 0f;
+                wet = neighbor != SimulationGrid.NoNeighbor && state.WaterDepth[neighbor] > 0f
+                    && (ocean is null || ocean[neighbor]);
             }
 
             if (id == first) { area1++; if (wet) coast1++; }
@@ -121,6 +123,42 @@ public static class ContinentConfiguration
 
         static double Ratio(int coast, int area) => area == 0 ? 0 : coast / (2 * Math.Sqrt(3) * Math.Sqrt(area));
         return (Ratio(coast1, area1), Ratio(coast2, area2));
+    }
+
+    /// <summary>主洋（最大的水域連通塊）的格子（見 <see cref="ContinentCriteria.InlandWaterIsCoast"/>）。</summary>
+    private static bool[] MainOceanMask(SimulationGrid grid, SimulationState state)
+    {
+        var n = state.CellCount;
+        var label = new int[n];
+        Array.Fill(label, -1);
+        var sizes = new List<int>();
+        var stack = new Stack<int>();
+        for (var start = 0; start < n; start++)
+        {
+            if (label[start] >= 0 || state.WaterDepth[start] <= 0f) continue;
+            var id = sizes.Count;
+            var size = 0;
+            label[start] = id;
+            stack.Push(start);
+            while (stack.Count > 0)
+            {
+                var c = stack.Pop();
+                size++;
+                var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+                for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+                {
+                    var nb = grid.Neighbors[baseIndex + k];
+                    if (nb == SimulationGrid.NoNeighbor || label[nb] >= 0 || state.WaterDepth[nb] <= 0f) continue;
+                    label[nb] = id;
+                    stack.Push(nb);
+                }
+            }
+            sizes.Add(size);
+        }
+        var main = sizes.Count == 0 ? -1 : sizes.IndexOf(sizes.Max());
+        var mask = new bool[n];
+        for (var c = 0; c < n; c++) mask[c] = label[c] == main && main >= 0;
+        return mask;
     }
 
     /// <summary>陸地連通塊的大小（格數）。</summary>
@@ -181,6 +219,11 @@ public static class ContinentConfiguration
 /// <param name="MaxBigIslandShare">「大島」的上限，超過就算一塊大陸了。澳洲 5.2%。</param>
 /// <param name="MinLandMassAreaSquareKm">小於這個面積的陸塊當成碎島，不算進任何比例（跟碎島清除同一個門檻）。</param>
 /// <param name="MaxRaggedness">最大兩塊各自的海岸破碎度上限（見 <see cref="ContinentConfigurationReport.LargestRaggedness"/>）。</param>
+/// <param name="InlandWaterIsCoast">
+/// 海岸破碎度要不要把大陸內部的水（湖、被圍住的內海）也算成海岸。v1 是（用來抓大陸中間夾著洋殼的胡椒）；
+/// v2（板塊座標系）不算：依連通性注水之後大陸上有湖、褶皺的谷地裡也有小湖，湖是大陸的一部分，不該讓大陸看起來破碎
+/// （2026-10-19 使用者指定；褶皺加大後第二塊的破碎度被谷地的小湖推到 4.1）。只有碰到主洋（最大的水域）的才算海岸。
+/// </param>
 /// <param name="MinLandShareOfSurface">
 /// 陸地（排除碎島）至少佔星球表面多少。比例條件只看陸地「內部」的分配，陸地很少時一兩個小島也會符合
 /// 「兩大塊＋大島」——P4 實測陸地只有 1~2% 時停止條件就成立了。2026-10-17 使用者定 20%（地球約 29%）。
@@ -193,7 +236,8 @@ public sealed record ContinentCriteria(
     double MaxBigIslandShare,
     double MinLandMassAreaSquareKm,
     double MaxRaggedness,
-    double MinLandShareOfSurface)
+    double MinLandShareOfSurface,
+    bool InlandWaterIsCoast = true)
 {
     /// <summary>
     /// 預設門檻（2026-10-16）。v1 在水量 1,150、第 1,600 步量到的是 66.9% / 18.2% / 3.4% / 3.4%——

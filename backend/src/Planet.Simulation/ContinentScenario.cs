@@ -13,7 +13,7 @@ namespace Planet.Simulation;
 /// | B | 跟著 C，再往東北相對靠近；撞上 C 之後改成慢慢推到劇本結束（高山才不會被重力擴展削平） |
 /// | F | 裂開之前是 B 的一部分；裂開後往遠離 B 的方向推開 |
 /// | E、小島群 | 裂開之前是 C 的一部分（E 連同周圍的海）；裂開後貼著太平洋的西緣往正南滑出去（小島群一半速度，落在兩者之間），裂谷期結束後停住 |
-/// | 太平洋 | 固定不動、面積不減：A 與 C 撞上它時被吃掉的是大陸前緣，厚度堆成山（見 <see cref="IsUnconsumable"/>） |
+/// | 太平洋 | 固定不動：A 北與 C 撞上它時被吃掉的是大陸前緣，厚度堆成山；A 南那一段是太平洋隱沒進去（見 <see cref="IsUnconsumable"/>） |
 ///
 /// **大島裂開之前不是獨立的板塊**（2026-10-18 使用者指出：C 與 E 之間一開始不該有高山）：起始時它們的格子歸給母大陸的板塊，
 /// 自己的板塊編號休眠；到裂開的那一刻才沿草圖的切線切成新板塊（<see cref="DueSplits"/>）。
@@ -140,7 +140,15 @@ public sealed class ContinentScenario
     /// 這個板塊現在是不是不會被消耗：劇本期間的太平洋（2026-10-18 使用者指定：固定不動、演化中面積也不減）。
     /// 原本太平洋交給動力學，被 C 那一側的隱沒拉著往西走約 2.9 公分／年，比 A 快，A 西岸跟它是分開的、長不出山。
     /// </summary>
-    internal bool IsUnconsumable(int plate, double elapsedMyr) => plate == ContinentLayout.PacificPlate && elapsedMyr < EndMyr;
+    /// <remarks>
+    /// 例外是 A 南（2026-10-19 使用者指定）：A 南繞西側支點轉開時西岸會往西推，撞上這道牆每百萬年被吃掉約 1.5 萬平方公里，
+    /// 40 Myr 少了約 22%；改成讓太平洋在 A 南那一段像安地斯那樣隱沒進去，A 南不被吃，太平洋在那一段縮小一點。
+    /// </remarks>
+    /// <param name="plate">這個板塊。</param>
+    /// <param name="other">碰上的板塊。</param>
+    /// <param name="elapsedMyr">現在幾百萬年。</param>
+    internal bool IsUnconsumable(int plate, int other, double elapsedMyr) =>
+        plate == ContinentLayout.PacificPlate && other != _plate[ContinentLayout.ASouth] && elapsedMyr < EndMyr;
 
     /// <summary>劇本結束時要強制焊接的（留下、併掉）；被併掉的那塊已經沒有格子就跳過（續跑時已經焊過）。</summary>
     internal IEnumerable<(int Keep, int Gone)> DueWelds(double elapsedMyr, int[] ownerByCell)
@@ -176,6 +184,8 @@ public sealed class ContinentScenario
         // A 北往西；A 南跟著它，再繞西側支點轉開（角速度向量平行於支點的位置向量，支點本身不動；速度以離支點 30° 處計）
         omega[an] = Bearing(center[an], 270, _p.AWestSpeed);
         omega[aS] = Add(omega[an], Scale(_hinge, ToDegPerMyr(_p.AOpeningSpeed) / Math.Sin(30.0 * Math.PI / 180.0) * _hingeSign));
+        // 再往東滑，抵銷轉動讓西岸往西推的那一份（見 ContinentLayoutParameters.ASouthEastSpeed）
+        omega[aS] = Add(omega[aS], Bearing(center[aS], 90, _p.ASouthEastSpeed));
         omega[d] = omega[aS];
         if (t >= _p.DRiftStart && t < _p.DRiftEnd) omega[d] = Add(omega[d], Away(center[d], center[aS], _p.DRiftSpeed));
 

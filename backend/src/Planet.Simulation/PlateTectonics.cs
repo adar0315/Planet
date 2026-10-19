@@ -255,7 +255,8 @@ public sealed class PlateTectonics
             _scenario = value;
             if (_frames is null) return;
             _frames.WeldBlocked = value is null ? null : (a, b) => value.IsWeldBlocked(a, b, _elapsedMyr);
-            _frames.Unconsumable = value is null ? null : p => value.IsUnconsumable(p, _elapsedMyr);
+            _frames.Unconsumable = value is null ? null : (p, other) => value.IsUnconsumable(p, other, _elapsedMyr);
+            _frames.AndeanSubductingPlate = value is null ? null : p => p == ContinentLayout.PacificPlate && _elapsedMyr < value.EndMyr;
         }
     }
 
