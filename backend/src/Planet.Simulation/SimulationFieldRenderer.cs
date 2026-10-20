@@ -62,6 +62,12 @@ public enum SimulationField
     /// 冰蓋厚度。應該只出現在兩極與高山；冰把水鎖住，所以冰一多海平面就下降。
     /// </summary>
     IceThickness = 14,
+
+    /// <summary>
+    /// 河流與湖（v2 P9）：陸地淡淡的灰綠當底，湖是亮青色，河依流量由淺藍到深藍（見 <see cref="Rivers"/>）。
+    /// 要有依連通性注水的水系（v2）才畫得出河；沒有的話只有湖與海。
+    /// </summary>
+    RiversAndLakes = 15,
 }
 
 /// <summary>
@@ -87,10 +93,13 @@ public sealed class SimulationFieldRenderer
     /// <summary>每個像素對應哪一格（長度 = Width*Height）。建構時算好，之後每次renderer只查表。</summary>
     private readonly int[] _cellByPixel;
 
+    private readonly SimulationGrid _grid;
+
     /// <summary>建立renderer並預先算好像素→格子的對應表。</summary>
     /// <param name="grid">要顯示的網格。</param>
     public SimulationFieldRenderer(SimulationGrid grid)
     {
+        _grid = grid;
         _cellByPixel = BuildPixelToCellMap(grid);
     }
 
@@ -112,8 +121,10 @@ public sealed class SimulationFieldRenderer
     /// <summary>把指定欄位畫成 RGBA 位元組（Width × Height × 4，逐列由上到下、逐行由左到右）。</summary>
     /// <param name="state">目前的模擬狀態。</param>
     /// <param name="field">要畫哪個欄位。</param>
-    public byte[] Render(SimulationState state, SimulationField field)
+    /// <param name="hydrology">水系（<see cref="SimulationField.RiversAndLakes"/> 要用；其他欄位用不到）。</param>
+    public byte[] Render(SimulationState state, SimulationField field, Hydrology? hydrology = null)
     {
+        if (field == SimulationField.RiversAndLakes) return RenderRivers(state, hydrology);
         var pixels = new byte[Width * Height * 4];
         var baseField = field == SimulationField.ElevationWithPlateBoundaries
             ? SimulationField.Elevation
@@ -140,6 +151,51 @@ public sealed class SimulationFieldRenderer
             DrawPlateBoundaries(state, pixels);
         }
 
+        return pixels;
+    }
+
+    /// <summary>河流與湖的圖層，見 <see cref="SimulationField.RiversAndLakes"/>。</summary>
+    private byte[] RenderRivers(SimulationState state, Hydrology? hydrology)
+    {
+        var pixels = new byte[Width * Height * 4];
+        var discharge = hydrology?.Discharge;
+        var lakeOf = hydrology?.LakeOf;
+        var minDischarge = hydrology is null ? 0f : Rivers.MinDischarge(_grid, state);
+        Parallel.For(0, Height, y =>
+        {
+            for (var x = 0; x < Width; x++)
+            {
+                var pixelIndex = y * Width + x;
+                var cell = _cellByPixel[pixelIndex];
+                (byte R, byte G, byte B) color;
+                if (lakeOf is not null && lakeOf[cell] >= 0)
+                {
+                    color = (0x4f, 0xd8, 0xf0);
+                }
+                else if (state.WaterDepth[cell] > 0f)
+                {
+                    color = (0x0b, 0x1d, 0x3a);
+                }
+                else
+                {
+                    var size = discharge is null ? 0f : Rivers.Size(discharge[cell], minDischarge);
+                    if (discharge is not null && Rivers.IsRiver(discharge[cell], minDischarge))
+                    {
+                        color = Ramp(size, 0f, 1f, (0x7f, 0xb8, 0xff), (0x10, 0x4a, 0xd8));
+                    }
+                    else
+                    {
+                        var elevation = state.SurfaceElevationAt(cell) - state.SeaLevelMeters;
+                        color = Ramp(elevation, 0f, 4000f, (0x5a, 0x66, 0x52), (0xb8, 0xb8, 0xb0));
+                    }
+                }
+                var offset = pixelIndex * 4;
+                pixels[offset] = color.R;
+                pixels[offset + 1] = color.G;
+                pixels[offset + 2] = color.B;
+                pixels[offset + 3] = 255;
+            }
+        });
         return pixels;
     }
 

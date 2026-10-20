@@ -75,7 +75,7 @@ public class PlanetMaterializationService
             var cleanup = SmallIslandCleanup.Apply(grid, engine.State);
 
             Update(s => s with { Phase = "分類粗格" });
-            var cells = PlanetMaterializer.BuildCells(grid, engine.State);
+            var cells = PlanetMaterializer.BuildCells(grid, engine.State, engine.Hydrology);
             var sampler = new SimulatedTerrainSampler(grid, cells);
             var generator = new GoldbergPlanetGenerator(GoldbergPlanetGenerator.SubdivisionFrequency, sampler);
 

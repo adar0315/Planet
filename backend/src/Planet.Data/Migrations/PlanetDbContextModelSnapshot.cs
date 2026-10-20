@@ -66,6 +66,12 @@ namespace Planet.Data.Migrations
                     b.Property<float>("Precipitation")
                         .HasColumnType("real");
 
+                    b.Property<int>("RiverDownstreamCellId")
+                        .HasColumnType("int");
+
+                    b.Property<float>("RiverSize")
+                        .HasColumnType("real");
+
                     b.Property<float>("SedimentThicknessMeters")
                         .HasColumnType("real");
 

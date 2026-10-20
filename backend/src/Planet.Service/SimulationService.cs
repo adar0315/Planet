@@ -59,11 +59,42 @@ public record SimulationDashboardDto(
     int TimingSteps,
     string StateHash);
 
+/// <summary>存檔是怎麼來的。以字串序列化（前端與說明檔都看名稱，不看數字）。</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<SnapshotKind>))]
+public enum SnapshotKind
+{
+    /// <summary>使用者手動存的（含分岔時另存的新名字）。</summary>
+    Manual,
+
+    /// <summary>跑的時候每 <see cref="SimulationService.CheckpointIntervalYears"/> 自動存的檢查點，只留最近幾個。</summary>
+    Checkpoint,
+
+    /// <summary>停止條件成立時自動存的。</summary>
+    StopCondition,
+}
+
 /// <summary>一個存檔的概況。</summary>
 /// <param name="Name">存檔名稱（不含副檔名）。</param>
 /// <param name="SizeBytes">檔案大小（位元組）。</param>
 /// <param name="SavedAtUtc">存檔時間（UTC）。</param>
-public record SnapshotInfo(string Name, long SizeBytes, DateTime SavedAtUtc);
+/// <param name="Kind">存檔怎麼來的（舊版沒有說明檔的存檔是 null）。</param>
+/// <param name="StepCount">存檔時的步數（舊版存檔是 null）。</param>
+/// <param name="ElapsedYears">存檔時的年代（年，舊版存檔是 null）。</param>
+/// <param name="Compatible">這個版本讀不讀得回來（舊格式、v1 的存檔是 false，列出來但不能載入或放大）。</param>
+public record SnapshotInfo(
+    string Name,
+    long SizeBytes,
+    DateTime SavedAtUtc,
+    SnapshotKind? Kind = null,
+    long? StepCount = null,
+    double? ElapsedYears = null,
+    bool Compatible = true);
+
+/// <summary>存檔旁邊的說明檔（<c>名稱.json</c>）：列表不必把幾十 MB 的存檔讀進來就知道步數與年代。</summary>
+/// <param name="Kind">存檔怎麼來的。</param>
+/// <param name="StepCount">步數。</param>
+/// <param name="ElapsedYears">年代（年）。</param>
+internal record SnapshotSidecar(SnapshotKind Kind, long StepCount, double ElapsedYears);
 
 /// <summary>
 /// 地質演化模擬的持有者（Singleton）。狀態常駐記憶體，**每步不寫資料庫**——
@@ -75,9 +106,31 @@ public record SnapshotInfo(string Name, long SizeBytes, DateTime SavedAtUtc);
 ///
 /// **所有取用引擎的操作都在同一把鎖裡**：<see cref="SimulationEngine"/> 本身不是執行緒安全的
 /// （內部有大量重複使用的暫存緩衝），而這是 Singleton，同時會有推進與繪製兩種請求打進來。
+///
+/// **只跑 v2 的大陸劇本**（板塊座標系＋使用者草圖的大陸配置，2026-10-20 使用者決定，見 v2 規劃 P9）。
+/// v1（標記法、隨機板塊）的程式與測試保留，但服務不再建 v1 的引擎；v1 的舊存檔列出來會標示不相容。
 /// </summary>
 public class SimulationService
 {
+    /// <summary>大陸劇本的種子（草圖配置的雜訊、地函熱柱都由它決定；校準都是在 42 上做的）。</summary>
+    public const int ScenarioSeed = 42;
+
+    /// <summary>每隔多少年自動存一個檢查點（「從某一步分岔」用，2026-10-20 使用者選定）。</summary>
+    public const double CheckpointIntervalYears = 5_000_000;
+
+    /// <summary>檢查點最多留幾個（每個約 32 MB），超過就刪最舊的。</summary>
+    public const int MaxCheckpoints = 10;
+
+    /// <summary>這一輪的標記（重設、載入時換新），檢查點的名字帶著它：分岔之後的檢查點不會蓋掉原本那條時間線的。</summary>
+    private string _runTag = NewRunTag();
+
+    private static string NewRunTag() => DateTime.UtcNow.ToString("MMddHHmmss");
+
+    /// <summary>建立 v2 劇本的引擎。</summary>
+    /// <param name="grid">網格。</param>
+    private static SimulationEngine CreateEngine(SimulationGrid grid) =>
+        new(grid, ScenarioSeed, crustTransport: CrustTransport.PlateFrame, continentLayout: ContinentLayoutParameters.Default);
+
     private readonly PlanetMetadataService _metadataService;
     private readonly Lock _lock = new();
 
@@ -166,21 +219,41 @@ public class SimulationService
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(steps);
 
         var (_, engine, _) = await EnsureInitializedAsync(ct);
-        bool triggered;
-        long stepCount;
-        lock (_lock)
+        var triggered = false;
+        long stepCount = 0;
+        var remaining = steps;
+
+        // 在每個檢查點的邊界分段跑：一次推進好幾百步（播放每次最多 200 步＝10 Myr、手動可以到 2,000 步）時，
+        // 只在請求結束才判斷的話中間跨過的邊界全部漏掉（P9 第一次試：從 5 Myr 一口氣跑到停止條件，只存到 41 Myr 那一個）
+        while (remaining > 0 && !triggered)
         {
-            // 即時觀看：陸地配置一成立就停（v2 規劃的停止條件），不要一路跑過去
-            engine.StepUntilStopCondition(steps);
-            triggered = engine.StopConditionTriggered;
-            stepCount = engine.State.StepCount;
+            bool checkpoint;
+            double elapsed;
+            lock (_lock)
+            {
+                var before = engine.State.ElapsedYears;
+                var boundary = (Math.Floor(before / CheckpointIntervalYears) + 1) * CheckpointIntervalYears;
+                var toBoundary = (int)Math.Ceiling((boundary - before) / engine.YearsPerStep);
+                // 即時觀看：陸地配置一成立就停（v2 規劃的停止條件），不要一路跑過去
+                remaining -= engine.StepUntilStopCondition(Math.Clamp(toBoundary, 1, remaining));
+                triggered = engine.StopConditionTriggered;
+                stepCount = engine.State.StepCount;
+                elapsed = engine.State.ElapsedYears;
+                checkpoint = Math.Floor(elapsed / CheckpointIntervalYears) > Math.Floor(before / CheckpointIntervalYears);
+            }
+
+            if (checkpoint)
+            {
+                await SaveAsync($"cp-{_runTag}-{elapsed / 1e6:000}myr", ct, SnapshotKind.Checkpoint);
+                PruneCheckpoints();
+            }
         }
 
         if (!triggered) return await GetStatusAsync(ct);
 
         // 自動存檔：那個配置可能只維持一陣子（板塊構造是循環的），錯過了要再等一整個旋迴
         var saveName = $"auto-stop-step{stepCount}";
-        await SaveAsync(saveName, ct);
+        await SaveAsync(saveName, ct, SnapshotKind.StopCondition);
         return (await GetStatusAsync(ct)) with { StoppedByCondition = true, AutoSaveName = saveName };
     }
 
@@ -192,7 +265,7 @@ public class SimulationService
         var (_, engine, renderer) = await EnsureInitializedAsync(ct);
         lock (_lock)
         {
-            return renderer.Render(engine.State, field);
+            return renderer.Render(engine.State, field, engine.Hydrology);
         }
     }
 
@@ -257,11 +330,12 @@ public class SimulationService
         return Path.Combine(SnapshotDirectory, name + ".planet");
     }
 
-    /// <summary>把目前的模擬狀態存成檔案。</summary>
+    /// <summary>把目前的模擬狀態存成檔案（旁邊寫一份說明檔，見 <see cref="SnapshotSidecar"/>）。</summary>
     /// <param name="name">存檔名稱（英數、底線、連字號）。</param>
     /// <param name="ct">取消權杖。</param>
+    /// <param name="kind">存檔怎麼來的。</param>
     /// <returns>存檔的位元組數。</returns>
-    public async Task<long> SaveAsync(string name, CancellationToken ct = default)
+    public async Task<long> SaveAsync(string name, CancellationToken ct = default, SnapshotKind kind = SnapshotKind.Manual)
     {
         var path = SnapshotPath(name);
         var (_, engine, _) = await EnsureInitializedAsync(ct);
@@ -279,6 +353,8 @@ public class SimulationService
             }
 
             File.Move(temporary, path, overwrite: true);
+            File.WriteAllText(SidecarPath(path), System.Text.Json.JsonSerializer.Serialize(
+                new SnapshotSidecar(kind, engine.State.StepCount, engine.State.ElapsedYears)));
         }
 
         return new FileInfo(path).Length;
@@ -301,7 +377,7 @@ public class SimulationService
 
         // 網格建好之後不會再變（鄰接表、取樣用的桶都是唯讀或執行緒安全的），可以跟線上的模擬共用
         var (grid, _, _) = await EnsureInitializedAsync(ct);
-        var engine = new SimulationEngine(grid);
+        var engine = CreateEngine(grid);
         await using var stream = File.OpenRead(path);
         SimulationSnapshot.Restore(engine, stream);
         return (grid, engine);
@@ -325,6 +401,7 @@ public class SimulationService
         {
             using var stream = File.OpenRead(path);
             SimulationSnapshot.Restore(engine, stream);
+            _runTag = NewRunTag();
         }
 
         return await GetStatusAsync(ct);
@@ -339,17 +416,80 @@ public class SimulationService
         return Directory.EnumerateFiles(SnapshotDirectory, "*.planet")
             .Select(p => new FileInfo(p))
             .OrderByDescending(f => f.LastWriteTimeUtc)
-            .Select(f => new SnapshotInfo(
-                Path.GetFileNameWithoutExtension(f.Name), f.Length, f.LastWriteTimeUtc))
+            .Select(Describe)
             .ToList();
     }
 
-    /// <summary>把模擬重設回起始狀態（平坦、裸露、全部覆蓋海水）。網格與對應表會沿用，不重建。</summary>
+    private static SnapshotInfo Describe(FileInfo file)
+    {
+        bool compatible;
+        try
+        {
+            using var stream = file.OpenRead();
+            compatible = SimulationSnapshot.IsCurrentFormat(stream);
+        }
+        catch (IOException)
+        {
+            compatible = false; // 正在寫入（另一個請求在存檔）
+        }
+
+        SnapshotSidecar? sidecar = null;
+        var sidecarPath = SidecarPath(file.FullName);
+        if (File.Exists(sidecarPath))
+        {
+            try
+            {
+                sidecar = System.Text.Json.JsonSerializer.Deserialize<SnapshotSidecar>(File.ReadAllText(sidecarPath));
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // 說明檔壞了就當成沒有，存檔本身還是列得出來
+            }
+        }
+
+        return new SnapshotInfo(
+            Path.GetFileNameWithoutExtension(file.Name), file.Length, file.LastWriteTimeUtc,
+            sidecar?.Kind, sidecar?.StepCount, sidecar?.ElapsedYears, compatible);
+    }
+
+    private static string SidecarPath(string snapshotPath) => Path.ChangeExtension(snapshotPath, ".json");
+
+    /// <summary>刪除一個存檔（連同說明檔）。</summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
+    public void DeleteSnapshot(string name)
+    {
+        var path = SnapshotPath(name);
+        if (!File.Exists(path)) throw new FileNotFoundException($"找不到存檔「{name}」。", path);
+        lock (_lock)
+        {
+            File.Delete(path);
+            File.Delete(SidecarPath(path));
+        }
+    }
+
+    /// <summary>檢查點超過 <see cref="MaxCheckpoints"/> 個就刪最舊的（只看說明檔標成檢查點的，手動存檔不動）。</summary>
+    private void PruneCheckpoints()
+    {
+        var stale = ListSnapshots()
+            .Where(s => s.Kind == SnapshotKind.Checkpoint)
+            .OrderByDescending(s => s.SavedAtUtc)
+            .Skip(MaxCheckpoints)
+            .ToList();
+        foreach (var snapshot in stale) DeleteSnapshot(snapshot.Name);
+    }
+
+    /// <summary>
+    /// 把模擬重設回大陸劇本的起點。網格與貼圖對應表沿用，**引擎整個重建**：
+    /// <see cref="SimulationEngine.Reset"/> 不會把每個子模型都歸零（例如氣候的緯度帶溫度從上一次的解出發），
+    /// 重設之後跑出來的星球跟剛啟動時的不一樣（P9 實測：同樣第 819 步觸發，存檔內容卻不同）。重建約幾秒鐘。
+    /// </summary>
     public void Reset()
     {
         lock (_lock)
         {
-            _engine?.Reset(); // 還沒初始化過的話，下次取用時本來就會是起始狀態
+            if (_grid is not null) _engine = CreateEngine(_grid); // 還沒初始化過的話，下次取用時本來就會是起始狀態
+            _runTag = NewRunTag();
         }
     }
 
@@ -375,7 +515,7 @@ public class SimulationService
                 if (_grid is null)
                 {
                     var grid = SimulationGrid.Build(radius);
-                    _engine = new SimulationEngine(grid);
+                    _engine = CreateEngine(grid);
                     _renderer = new SimulationFieldRenderer(grid);
                     _grid = grid; // 最後才指派：其他執行緒是靠這個欄位判斷有沒有初始化完成
                 }

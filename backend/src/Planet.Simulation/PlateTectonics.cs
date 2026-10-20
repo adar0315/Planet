@@ -1217,6 +1217,9 @@ public sealed class PlateTectonics
         if (_frames is not null)
         {
             _frames.WriteTo(writer);
+            // 劇本自己的狀態：B 碰到 C 的時間（決定之後 B 怎麼推），沒存的話讀檔續跑 B 的速度馬上不一樣
+            writer.Write(_scenario?.BContactMyr is not null);
+            writer.Write(_scenario?.BContactMyr ?? 0.0);
             return;
         }
 
@@ -1261,6 +1264,9 @@ public sealed class PlateTectonics
         if (_frames is not null)
         {
             _frames.ReadFrom(reader);
+            var hasContact = reader.ReadBoolean();
+            var contactMyr = reader.ReadDouble();
+            if (_scenario is not null) _scenario.BContactMyr = hasContact ? contactMyr : null;
             return;
         }
 

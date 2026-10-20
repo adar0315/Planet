@@ -87,7 +87,7 @@ public sealed class ContinentScenario
     public double EndMyr { get; }
 
     /// <summary>B 第一次撞上 C 的時間（百萬年），還沒撞上是 null。之後改用推的速度。</summary>
-    public double? BContactMyr { get; private set; }
+    public double? BContactMyr { get; internal set; }
 
     /// <summary>每塊陸地（依陸塊編號）的板塊。</summary>
     public IReadOnlyList<int> PlateOfLandMass => _plate;

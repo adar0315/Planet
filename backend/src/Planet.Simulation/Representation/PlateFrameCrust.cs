@@ -1459,6 +1459,9 @@ internal sealed class PlateFrameCrust
             }
         }
         writer.Write(_nextOrigin);
+        // 上一步有大陸碰撞的板塊對：下一步一開始劇本與焊接就要讀（P9：沒存的話讀檔續跑第一步就分歧）
+        writer.Write(_collidingPairs.Count);
+        foreach (var (a, b) in _collidingPairs.OrderBy(pair => pair)) { writer.Write(a); writer.Write(b); }
         writer.Write(_elapsedMyr);
         foreach (var d in _dormantUntilMyr) writer.Write(d);
     }
@@ -1494,6 +1497,9 @@ internal sealed class PlateFrameCrust
             }
         }
         _nextOrigin = reader.ReadInt32();
+        _collidingPairs.Clear();
+        var pairs = reader.ReadInt32();
+        for (var i = 0; i < pairs; i++) _collidingPairs.Add((reader.ReadInt32(), reader.ReadInt32()));
         _elapsedMyr = reader.ReadDouble();
         for (var p = 0; p < plateCount; p++) _dormantUntilMyr[p] = reader.ReadDouble();
         _stamp = 0;

@@ -189,6 +189,8 @@ export type SimulationFieldName =
   | 'PlateId'
   | 'BoundaryType'
   | 'VolcanicActivity'
+  | 'IceThickness'
+  | 'RiversAndLakes'
 
 export interface SimulationStatus {
   frequency: number
@@ -270,4 +272,93 @@ export async function fetchSimulationTexture(field: SimulationFieldName): Promis
     throw new Error(`取得模擬貼圖失敗: ${response.status}`)
   }
   return response.arrayBuffer()
+}
+
+/** 存檔怎麼來的（後端 SnapshotKind）。舊版沒有說明檔的存檔是 null。 */
+export type SnapshotKind = 'Manual' | 'Checkpoint' | 'StopCondition'
+
+export interface SnapshotInfo {
+  name: string
+  sizeBytes: number
+  savedAtUtc: string
+  kind: SnapshotKind | null
+  stepCount: number | null
+  elapsedYears: number | null
+  /** 這個版本讀不讀得回來。false 的（舊格式、v1 的存檔）列出來但不能載入或放大。 */
+  compatible: boolean
+}
+
+/** 後端回 ProblemDetails 時把 detail 拿出來當錯誤訊息，沒有就用預設說明。 */
+async function problem(response: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await response.json()
+    if (body && typeof body.detail === 'string') return new Error(body.detail)
+    if (body && typeof body.message === 'string') return new Error(body.message)
+  } catch {
+    // 不是 JSON，用預設說明
+  }
+  return new Error(`${fallback}: ${response.status}`)
+}
+
+/** 列出所有存檔（最新的在前）。 */
+export async function fetchSimulationSaves(): Promise<SnapshotInfo[]> {
+  const response = await fetch(new URL('/api/simulation/saves', API_BASE_URL))
+  if (!response.ok) throw await problem(response, '取得存檔清單失敗')
+  return response.json()
+}
+
+/** 把目前的模擬存成指定名稱（英數、底線、連字號；同名會覆蓋）。 */
+export async function saveSimulation(name: string): Promise<void> {
+  const url = new URL('/api/simulation/save', API_BASE_URL)
+  url.searchParams.set('name', name)
+  const response = await fetch(url, { method: 'POST' })
+  if (!response.ok) throw await problem(response, '存檔失敗')
+}
+
+/** 載入存檔，覆蓋目前的模擬。 */
+export async function loadSimulation(name: string): Promise<SimulationStatus> {
+  const url = new URL('/api/simulation/load', API_BASE_URL)
+  url.searchParams.set('name', name)
+  const response = await fetch(url, { method: 'POST' })
+  if (!response.ok) throw await problem(response, '載入存檔失敗')
+  return response.json()
+}
+
+/** 刪除存檔。不可復原，呼叫前 UI 要自己確認。 */
+export async function deleteSimulationSave(name: string): Promise<void> {
+  const response = await fetch(new URL(`/api/simulation/saves/${encodeURIComponent(name)}`, API_BASE_URL), {
+    method: 'DELETE',
+  })
+  if (!response.ok) throw await problem(response, '刪除存檔失敗')
+}
+
+/** 放大作業的狀態（後端 MaterializationStatus）。 */
+export interface MaterializationStatus {
+  isRunning: boolean
+  snapshotName: string | null
+  phase: string | null
+  tilesWritten: number
+  totalTiles: number
+  sunkIslandCells: number
+  elapsedSeconds: number
+  error: string | null
+}
+
+/**
+ * 把存檔清碎島、放大成走動模式的 2,000 萬地塊（**覆蓋目前的星球**，約 10 分鐘）。管理端點，要管理金鑰。
+ * 立刻回傳，用 fetchMaterializationStatus 查進度。
+ */
+export async function startMaterialization(snapshot: string, adminKey: string): Promise<void> {
+  const url = new URL('/api/admin/materialize', API_BASE_URL)
+  url.searchParams.set('snapshot', snapshot)
+  const response = await adminFetch(url.pathname + url.search, adminKey, { method: 'POST' })
+  if (response.status === 409) throw new Error('已經有星球生成或放大作業正在進行中，請等它完成後再試一次。')
+  if (!response.ok) throw await problem(response, '開始放大失敗')
+}
+
+/** 目前（或最近一次）放大作業的狀態。 */
+export async function fetchMaterializationStatus(adminKey: string): Promise<MaterializationStatus> {
+  const response = await adminFetch('/api/admin/materialize', adminKey)
+  if (!response.ok) throw await problem(response, '取得放大進度失敗')
+  return response.json()
 }

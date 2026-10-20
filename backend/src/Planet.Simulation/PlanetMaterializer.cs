@@ -54,10 +54,12 @@ public static class PlanetMaterializer
     /// </summary>
     /// <param name="grid">模擬網格。</param>
     /// <param name="state">模擬狀態。</param>
-    public static PlanetCell[] BuildCells(SimulationGrid grid, SimulationState state)
+    /// <param name="hydrology">水系（v2 才有）：給了就把河記進每一格（見 <see cref="PlanetCell.RiverDownstreamCellId"/>）。</param>
+    public static PlanetCell[] BuildCells(SimulationGrid grid, SimulationState state, Hydrology? hydrology = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(state);
+        var minDischarge = hydrology is null ? 0f : Rivers.MinDischarge(grid, state);
 
         var isOcean = MainOceanMask(grid, state);
         var wetness = LandPrecipitationRank(state);
@@ -95,6 +97,13 @@ public static class PlanetMaterializer
                 Boundary = (int)state.Boundary[c],
                 VolcanicActivity = state.VolcanicActivity[c],
             };
+
+            // 河：陸地、流量過門檻、有下游（碎島清除之後變成水的格子不算）
+            if (hydrology is not null && water <= 0f && Rivers.IsRiver(hydrology.Discharge[c], minDischarge) && hydrology.FlowParent[c] >= 0)
+            {
+                cells[c].RiverDownstreamCellId = hydrology.FlowParent[c];
+                cells[c].RiverSize = Rivers.Size(hydrology.Discharge[c], minDischarge);
+            }
         }
 
         return cells;

@@ -87,6 +87,33 @@ public class PlateFrameTransportTests
     }
 
     [Fact]
+    public void Snapshot_ContinentScenario_ResumeIsBitIdentical()
+    {
+        // 大陸劇本有自己的狀態（B 碰到 C 的時間）、板塊座標系有上一步的碰撞板塊對，都要進存檔——
+        // P9 第一次接上服務時都沒存，讀檔續跑第一步就分歧，從檢查點分岔的星球跟原本那條時間線不一樣。
+        // 第 400 步（20 Myr）存檔，續跑到劇本結束（40 Myr、強制焊接）之後
+        var grid = Grid();
+        SimulationEngine Scenario() => new(grid, 42, crustTransport: CrustTransport.PlateFrame, continentLayout: ContinentLayoutParameters.Default);
+        var uninterrupted = Scenario();
+        uninterrupted.Step(400);
+
+        using var stream = new MemoryStream();
+        SimulationSnapshot.Write(uninterrupted, stream);
+        stream.Position = 0;
+        var resumed = Scenario();
+        SimulationSnapshot.Restore(resumed, stream);
+
+        for (var step = 1; step <= 420; step++)
+        {
+            uninterrupted.Step(1);
+            resumed.Step(1);
+            var diverged = StateHash.PerField(uninterrupted).Zip(StateHash.PerField(resumed))
+                .Where(pair => pair.First.Hash != pair.Second.Hash).Select(pair => pair.First.Field).ToArray();
+            Assert.True(diverged.Length == 0, $"讀檔後第 {step} 步開始分歧，欄位：{string.Join("、", diverged)}");
+        }
+    }
+
+    [Fact]
     public void Snapshot_RefusesTheOtherTransport()
     {
         var grid = Grid();

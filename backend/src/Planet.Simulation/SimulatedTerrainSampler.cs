@@ -59,8 +59,59 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
         var level = (int)Math.Round(elevation / MetersPerElevationLevel);
         level = cell.WaterDepthMeters > 0f ? Math.Min(level, -1) : Math.Max(level, 0);
 
+        if (cell.WaterDepthMeters <= 0f && cell.Terrain != TerrainType.Glacier && RiverSizeAt(nearest, x, y, z) is { } size)
+        {
+            return new TerrainSample(TerrainType.Freshwater, RiverDepthCategory(size), level, nearest);
+        }
+
         return new TerrainSample(cell.Terrain, cell.HeightCategory, level, nearest);
     }
+
+    /// <summary>
+    /// 河道的半寬（公尺）：最小的河也要有這麼寬，地塊（約 1.5 公里一個）才連得成一條線、不會斷成虛線。
+    /// </summary>
+    private const double MinRiverHalfWidthMeters = 800;
+
+    /// <summary>最大的河（<see cref="PlanetCell.RiverSize"/> = 1）的半寬再多這麼多（公尺）。</summary>
+    private const double ExtraRiverHalfWidthMeters = 1_500;
+
+    /// <summary>
+    /// 這一點落在哪條河上（v2 規劃 P9）：最近的粗格與它的鄰居裡，凡是河的，看這一點離「那格中心 → 下游格中心」的線段多遠，
+    /// 在河的半寬以內就是河。回傳最大那條河的大小；不在任何河上是 null。
+    /// 河段的兩端都在格子中心，上游流進來的河段停在這一格的中心、這一格的河段從中心接著往下游，所以只看自己與鄰居就接得起來。
+    /// </summary>
+    private float? RiverSizeAt(int nearest, double x, double y, double z)
+    {
+        Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
+        var count = _grid.GetNeighbors(nearest, neighbors);
+        float? best = null;
+        for (var i = -1; i < count; i++)
+        {
+            var k = i < 0 ? nearest : neighbors[i];
+            var cell = _cells[k];
+            var down = cell.RiverDownstreamCellId;
+            if (down < 0) continue;
+            var halfWidth = (MinRiverHalfWidthMeters + cell.RiverSize * ExtraRiverHalfWidthMeters) / _grid.PlanetRadiusMeters;
+            if (DistanceToSegment(k, down, x, y, z) > halfWidth) continue;
+            if (best is null || cell.RiverSize > best) best = cell.RiverSize;
+        }
+        return best;
+    }
+
+    /// <summary>點到兩格中心連線的距離（單位球上的弦長，格距只有十幾公里，跟弧長差不到萬分之一）。</summary>
+    private double DistanceToSegment(int from, int to, double x, double y, double z)
+    {
+        var u = _grid.UnitVector;
+        double ax = u[from * 3], ay = u[from * 3 + 1], az = u[from * 3 + 2];
+        double dx = u[to * 3] - ax, dy = u[to * 3 + 1] - ay, dz = u[to * 3 + 2] - az;
+        var length2 = dx * dx + dy * dy + dz * dz;
+        var t = length2 > 0 ? Math.Clamp(((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / length2, 0, 1) : 0;
+        double qx = ax + t * dx - x, qy = ay + t * dy - y, qz = az + t * dz - z;
+        return Math.Sqrt(qx * qx + qy * qy + qz * qz);
+    }
+
+    /// <summary>河的水深分級（<see cref="TerrainType.Freshwater"/> 的 HeightCategory）：最小的河腰深，最大的河高過十人深。</summary>
+    private static int RiverDepthCategory(float size) => 2 + (int)Math.Round(size * 4);
 
     /// <summary>
     /// 在「最近的粗格＋它離這點最近的兩個鄰居」組成的三角形上做重心內插。

@@ -73,4 +73,13 @@ public class PlanetCell
 
     /// <summary>火山活動強度。</summary>
     public float VolcanicActivity { get; set; }
+
+    /// <summary>
+    /// 這一格是河的話，河往哪一格流（粗格編號）；不是河是 −1。放大到地塊時，落在「這格中心 → 下游格中心」那條線上的地塊
+    /// 畫成淡水（見 <c>SimulatedTerrainSampler</c>），河才是一條細細的線、不是 15 公里寬的一整格（v2 規劃 P9）。
+    /// </summary>
+    public int RiverDownstreamCellId { get; set; } = -1;
+
+    /// <summary>河的相對大小（0~1，見 <c>Rivers.Size</c>）；不是河是 0。決定河寬與水深。</summary>
+    public float RiverSize { get; set; }
 }

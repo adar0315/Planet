@@ -175,6 +175,34 @@ public class SimulationController : ControllerBase
         return Ok(_simulationService.ListSnapshots());
     }
 
+    /// <summary>
+    /// 刪除一個存檔（連同它的說明檔）。不可復原。
+    /// </summary>
+    /// <param name="name">存檔名稱。</param>
+    /// <response code="204">刪掉了。</response>
+    /// <response code="400">名稱不合規。</response>
+    /// <response code="404">找不到這個存檔。</response>
+    [HttpDelete("saves/{name}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public IActionResult DeleteSave(string name)
+    {
+        try
+        {
+            _simulationService.DeleteSnapshot(name);
+            return NoContent();
+        }
+        catch (FileNotFoundException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status404NotFound);
+        }
+        catch (ArgumentException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
     /// <summary>海洋的連通性：內海有沒有被陸地封死、水域裡有幾條獨立環路、最窄的水道多寬。</summary>
     /// <param name="ct">取消權杖。</param>
     /// <returns>連通性報告。</returns>

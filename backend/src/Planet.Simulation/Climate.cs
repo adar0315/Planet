@@ -114,6 +114,9 @@ public sealed class Climate
     /// </summary>
     private readonly float[] _outflowWeight;
 
+    /// <summary>每格地表風的大小（帶狀風的向量長度，最大約 1.1），見 <see cref="WindSpeedScaledAdvection"/>。</summary>
+    private readonly float[] _windSpeed;
+
     /// <summary>
     /// 垂直運動：正值＝上升（成雲致雨），負值＝下沉（增溫變乾）。
     ///
@@ -147,6 +150,7 @@ public sealed class Climate
     {
         _grid = grid;
         _outflowWeight = new float[grid.CellCount * SimulationGrid.MaxNeighborsPerCell];
+        _windSpeed = new float[grid.CellCount];
         _inflowWeight = new float[grid.CellCount * SimulationGrid.MaxNeighborsPerCell];
         _retainedFraction = new float[grid.CellCount];
         _verticalMotion = new float[grid.CellCount];
@@ -189,12 +193,12 @@ public sealed class Climate
                 for (var t = 0; t < SimulationGrid.MaxNeighborsPerCell; t++)
                 {
                     if (_grid.Neighbors[neighborBase + t] != cell) continue;
-                    _inflowWeight[baseIndex + s] = _outflowWeight[neighborBase + t] * AdvectionFraction;
+                    _inflowWeight[baseIndex + s] = _outflowWeight[neighborBase + t] * AdvectionAt(neighbor);
                     break;
                 }
             }
 
-            _retainedFraction[cell] = 1f - sentAway * AdvectionFraction;
+            _retainedFraction[cell] = 1f - sentAway * AdvectionAt(cell);
         });
     }
 
@@ -519,6 +523,34 @@ public sealed class Climate
     public bool OrographyAboveWater { get; set; }
 
     /// <summary>
+    /// 水氣每次迭代送出的比例依風速打折（v2 P9，2026-10-20；標記法是固定 <see cref="AdvectionFraction"/>）。
+    ///
+    /// 原本不管風多弱都送出 90%：赤道附近的風很弱、但兩個半球的水氣照樣全速往赤道擠，全部塞進赤道那一排格子，
+    /// 那一排的降水是兩旁的 25 倍（種子 42 劇本 41 Myr：緯度 0~0.5 度 26、兩旁約 1），久了刻出一條沿赤道的筆直河谷。
+    /// 風速低於 <see cref="WeakWindSpeed"/> 的格子送得少，水氣在輻合帶附近分散降下（赤道、南北緯 30 與 60 度附近才受影響）。
+    /// </summary>
+    public bool WindSpeedScaledAdvection
+    {
+        get => _windSpeedScaled;
+        set
+        {
+            if (_windSpeedScaled == value) return;
+            _windSpeedScaled = value;
+            BuildInflowWeights();
+        }
+    }
+
+    private bool _windSpeedScaled;
+
+    /// <summary>風速低於這個（帶狀風向量長度，信風與西風最強處約 1.1）就依比例少送，見 <see cref="WindSpeedScaledAdvection"/>。</summary>
+    private const float WeakWindSpeed = 0.5f;
+
+    /// <summary>這一格每次迭代送出多少比例的水氣。</summary>
+    private float AdvectionAt(int cell) => _windSpeedScaled
+        ? AdvectionFraction * MathF.Min(1f, _windSpeed[cell] / WeakWindSpeed)
+        : AdvectionFraction;
+
+    /// <summary>
     /// 全球溫度偏移（攝氏，v2 P8；標記法是 0）：整顆星球一起暖或冷，像溫室氣體多一點或少一點。
     /// 大陸的位置固定（兩塊大陸都延伸到北緯 70~75 度），冰蓋要壓到陸地的 10% 以下只能靠整體暖一點，見規劃文件 P8 結果。
     /// </summary>
@@ -607,6 +639,7 @@ public sealed class Climate
             var windY = eastward * eastY + northward * northY;
             var windZ = northward * northZ;
             var windLength = Math.Sqrt(windX * windX + windY * windY + windZ * windZ);
+            _windSpeed[cell] = (float)windLength;
             if (windLength < 1e-9) return; // 輻合輻散帶，地表風接近靜止，權重留 0
 
             // 出流權重＝各鄰居方向與風向的對齊程度（只取正的），最後正規化成總和1。

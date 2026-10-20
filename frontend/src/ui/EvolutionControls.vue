@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
 import { SIMULATION_FIELDS, useSimulationStore } from '@/stores/simulation'
+import SimulationSavesPanel from './SimulationSavesPanel.vue'
 
 const simulation = useSimulationStore()
 
@@ -110,8 +111,10 @@ const isPanelOpen = ref(true)
         <dd>{{ simulation.status.continents.isMet ? '✓ 成立' : '尚未成立' }}</dd>
       </dl>
       <p class="hint">
-        停止條件：陸地佔表面 ≥20%；兩塊各 ≥20%、合計 ≥75%（佔陸地），大島（1~10%）≥ 2 個，兩塊的海岸破碎度各 ≤4（1 ＝ 圓盤）
+        停止條件：陸地佔表面 ≥20%；兩塊各 ≥20%、合計 ≥75%（佔陸地），大島（0.8~10%）≥ 2 個，兩塊的海岸破碎度各 ≤4（1 ＝ 圓盤）
       </p>
+
+      <SimulationSavesPanel />
     </div>
 
     <p v-if="simulation.stopNotice" class="notice">{{ simulation.stopNotice }}</p>
@@ -199,6 +202,8 @@ button.collapse {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
   max-width: 320px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
 }
 
 .field-row {

@@ -52,7 +52,7 @@ public static class SimulationSnapshot
     /// 格式版本。**欄位有任何增減都要加一**，並在 <see cref="Restore"/> 拒絕舊版——
     /// 二進位格式讀錯不會拋例外，只會得到亂掉的星球，那比讀不到更難查。
     /// </summary>
-    private const int Version = 8; // 8：板塊座標系的地殼點帶沉積物、依連通性注水的水系（外營力用上一步的）；7：構造起伏（褶皺）；2：加上標記、板塊重新分配的累積狀態、熱柱亂數（續跑位元相同）；3：停止條件的計時與邊緣觸發狀態；4：地殼搬運方式（標記法／板塊座標系）；5：板塊座標系的地殼點帶來源編號、拿掉歸屬修正；6：板塊座標系的經過時間與焊接後的休眠計時
+    private const int Version = 9; // 9：大陸劇本的狀態（B 碰到 C 的時間）與上一步的碰撞板塊對；8：板塊座標系的地殼點帶沉積物、依連通性注水的水系（外營力用上一步的）；7：構造起伏（褶皺）；2：加上標記、板塊重新分配的累積狀態、熱柱亂數（續跑位元相同）；3：停止條件的計時與邊緣觸發狀態；4：地殼搬運方式（標記法／板塊座標系）；5：板塊座標系的地殼點帶來源編號、拿掉歸屬修正；6：板塊座標系的經過時間與焊接後的休眠計時
 
     /// <summary>把引擎目前的狀態寫進串流。</summary>
     /// <param name="engine">模擬引擎。</param>
@@ -86,6 +86,25 @@ public static class SimulationSnapshot
 
         engine.WriteSnapshotScalars(writer);
         writer.Flush();
+    }
+
+    /// <summary>
+    /// 只讀檔頭，看這個存檔是不是這個版本讀得懂的格式（存檔列表標示「不相容」用，不必整個讀進來）。
+    /// </summary>
+    /// <param name="stream">來源串流，讀完位置會往前移。</param>
+    /// <returns>辨識碼與版本都對就是 true。</returns>
+    public static bool IsCurrentFormat(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        try
+        {
+            return reader.ReadUInt64() == Magic && reader.ReadInt32() == Version;
+        }
+        catch (EndOfStreamException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
