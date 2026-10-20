@@ -162,6 +162,7 @@ public sealed class SimulationEngine
             _climate.OceanHeatTransport = true;
             _climate.OrographyAboveWater = true; // v2 P7：地形抬升從水面算起
             _climate.BaselineRainReferenceKm = 200; // v2 P7：基礎降水是每 200 公里 6%，不是每格
+            _climate.GlobalTemperatureOffsetC = 4f; // v2 P8：全球暖 4°C，冰蓋才壓得到陸地的 10% 以下（2026-10-20 使用者選定）
             // 海岸破碎度不算大陸內部的水（湖），見 ContinentCriteria.InlandWaterIsCoast
             // 大島的下限 1% → 0.8%（2026-10-20 使用者決定）：P7 的侵蝕把劇本的第二座大島削到陸地的 0.84~0.89%
             StopCriteria = ContinentCriteria.Default with { InlandWaterIsCoast = false, MinBigIslandShare = 0.008 };

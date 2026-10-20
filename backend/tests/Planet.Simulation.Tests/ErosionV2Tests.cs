@@ -81,6 +81,20 @@ public class ErosionV2Tests
     }
 
     [Fact]
+    public void GlobalTemperatureOffset_WarmsEveryCellByTheOffset()
+    {
+        // v2 P8：全球溫度偏移（冰蓋校準用），每一格都暖同樣的度數
+        var state = OneContinent();
+        var plain = new Climate(Grid24) { OceanHeatTransport = true };
+        plain.UpdateTemperatureOnly(state);
+        var before = (float[])state.Temperature.Clone();
+        var warm = new Climate(Grid24) { OceanHeatTransport = true, GlobalTemperatureOffsetC = 4f };
+        warm.UpdateTemperatureOnly(state);
+        for (var c = 0; c < state.CellCount; c++)
+            Assert.Equal(before[c] + 4f, state.Temperature[c], 3);
+    }
+
+    [Fact]
     public void Engine_PlateFrameOnly_TurnsOnV2Erosion()
     {
         var v2 = new SimulationEngine(Grid24, 42, crustTransport: CrustTransport.PlateFrame);

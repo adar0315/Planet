@@ -407,6 +407,7 @@ public sealed class Climate
                     : AtmosphericTransportShare + (1 - AtmosphericTransportShare) * Math.Exp(-_coastHops[cell] * spacingKm / MaritimeReachKm);
                 baseC = (float)(radiative + (zonal - radiative) * share);
             }
+            baseC += GlobalTemperatureOffsetC;
 
             // 高度一定要**相對海平面**算，不能用絕對高度（2026-09-06 踩過）：
             // 這個模型的海平面是由守恆的水量反解出來的，會一路漲到 +3,000 公尺以上，
@@ -421,9 +422,9 @@ public sealed class Climate
             // 大陸度：陸地把「相對全球平均」的偏差放大（海洋熱容量大，會把溫度拉回平均）
             if (state.WaterDepth[cell] <= 0f)
             {
-                var globalMean = OceanHeatTransport
+                var globalMean = (OceanHeatTransport
                     ? RadiativeEquatorC - RadiativePoleDropC / 3f
-                    : EquatorTemperatureC - PoleTemperatureDropC / 3f;
+                    : EquatorTemperatureC - PoleTemperatureDropC / 3f) + GlobalTemperatureOffsetC;
                 temperature += (temperature - globalMean) * ContinentalityFactor;
             }
 
@@ -516,6 +517,12 @@ public sealed class Climate
     /// 陸地降水只有全球平均的 0~1%。之前量到的「陸地 11%」是海平面下降露出來的大陸棚、還留著當海時的降水。
     /// </summary>
     public bool OrographyAboveWater { get; set; }
+
+    /// <summary>
+    /// 全球溫度偏移（攝氏，v2 P8；標記法是 0）：整顆星球一起暖或冷，像溫室氣體多一點或少一點。
+    /// 大陸的位置固定（兩塊大陸都延伸到北緯 70~75 度），冰蓋要壓到陸地的 10% 以下只能靠整體暖一點，見規劃文件 P8 結果。
+    /// </summary>
+    public float GlobalTemperatureOffsetC { get; set; }
 
     /// <summary>
     /// 不是 0 時（v2 P7），基礎降水的 <see cref="BaselineRainFraction"/> 是「每走這麼多公里」降下的比例，

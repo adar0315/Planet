@@ -149,6 +149,9 @@ internal sealed class PlateFrameCrust
     /// <summary>上一步增生到留下那一方的地殼（公里·格）。</summary>
     internal double LastAccretedCrustKm { get; private set; }
 
+    /// <summary>診斷用（P8，累計、不歸零）：各種增厚來源加起來的地殼（公里×點）：[0] 大陸碰撞、[1] 撞不會被消耗的板塊、[2] 安地斯型造山、[3] 隱沒時增生、[4] 增積楔。</summary>
+    internal double[] UpliftSourcesKm { get; } = new double[5];
+
     /// <summary>這一步在隱沒帶刮進增積楔的沉積物（換成地殼的公里數，所有點加總），見 <see cref="ScrapeSediment"/>。</summary>
     internal double LastScrapedSedimentKm { get; private set; }
 
@@ -1189,6 +1192,7 @@ internal sealed class PlateFrameCrust
             {
                 LastShortenings++;
                 _collisionBudget[_resolveCell] += goneThickness;
+                UpliftSourcesKm[1] += goneThickness;
                 _collisionUpper[_resolveCell] = gone;
                 _collisionFromWall[_resolveCell] = true;
             }
@@ -1247,6 +1251,7 @@ internal sealed class PlateFrameCrust
                 _collidingPairs.Add(winner < loser ? (winner, loser) : (loser, winner));
                 // 大陸碰撞的增厚不疊在前緣這一格，先記下來、這一步的歸屬決定之後攤到整條碰撞帶（見 DistributeCollisionThickening）
                 _collisionBudget[_resolveCell] += loserThickness;
+                UpliftSourcesKm[0] += loserThickness;
                 _collisionUpper[_resolveCell] = _plateSizes[winner] >= _plateSizes[loser] ? winner : loser;
                 gain = 0f;
             }
@@ -1254,6 +1259,7 @@ internal sealed class PlateFrameCrust
         else
         {
             gain = loserThickness * AccretedFractionOfSubductedCrust;
+            UpliftSourcesKm[3] += gain;
             LastAccretedCrustKm += gain;
             LastSubductions++;
             if (winnerContinental) LastContinentOverrides++;
@@ -1262,6 +1268,7 @@ internal sealed class PlateFrameCrust
             if (AndeanSubductingPlate is { } andean && andean(loser) && !loserContinental)
             {
                 _collisionBudget[_resolveCell] += AndeanReferenceCrustKm * AndeanShorteningFraction;
+                UpliftSourcesKm[2] += AndeanReferenceCrustKm * AndeanShorteningFraction;
                 _collisionUpper[_resolveCell] = winner;
                 _collisionFromWall[_resolveCell] = true;
             }
@@ -1311,6 +1318,7 @@ internal sealed class PlateFrameCrust
         var after = MathF.Min(before + addKm, Isostasy.MaxCrustThicknessKm);
         _thickness[to][toBody] = after;
         LastScrapedSedimentKm += addKm;
+        UpliftSourcesKm[4] += addKm;
         LastSedimentOverflowKm += addKm - (after - before);
     }
 

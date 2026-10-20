@@ -221,6 +221,9 @@ public sealed class PlateTectonics
     /// <summary>診斷用（板塊座標系）：上一步被蓋過而消耗掉的點數。</summary>
     public int LastFrameConsumedPoints => _frames?.LastConsumedPoints ?? 0;
 
+    /// <summary>診斷用：板塊座標系各種增厚來源的累計（見 PlateFrameCrust.UpliftSourcesKm），標記法是 null。</summary>
+    internal double[]? FrameUpliftSourcesKm => _frames?.UpliftSourcesKm;
+
     /// <summary>診斷用（板塊座標系）：上一步被消耗掉的**大陸**地殼點數（P4 加碰撞規則之前大陸也會被吃掉）。</summary>
     public int LastFrameConsumedContinentalPoints => _frames?.LastConsumedContinentalPoints ?? 0;
 

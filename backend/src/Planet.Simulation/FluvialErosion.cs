@@ -23,6 +23,8 @@ public sealed class FluvialErosion
     ///
     /// 校準（2026-10-20，使用者選定）：種子 42 劇本 40 Myr 時陸地平均高出海面 0.93 公里、最高峰 8.9 公里、陸地佔表面 31.6%、
     /// 剝蝕率約 190 公尺／百萬年（物質厚度）。3,000 時陸地 1.10 公里；10,000 時最高峰 10.4 公里、第二大陸的破碎度 4.3 超過上限。
+    /// P8（2026-10-20）改了起始大陸地殼（較薄、往內陸慢慢加厚）之後維持 6,000：低地是侵蝕削出來的，K 調低剝蝕率會降、
+    /// 但低地變少、陸地變高變冷（1,000 時 0~0.5 km 只剩 16%、冰 19.9%）；使用者選以高度分布為主。停止條件觸發時陸地平均 0.65 公里。
     internal double StreamPowerCoefficient { get; set; } = 6000.0;
 
     /// <summary>流量的指數（stream power law 的 m）。</summary>
@@ -106,6 +108,12 @@ public sealed class FluvialErosion
 
     /// <summary>診斷用：這一步各種備援路徑堆下去的量（公尺×格）：[0] 第二輪墊到海面、[1] 平均鋪、[2] 沒有去處就地堆。</summary>
     internal double[] FallbackDeposits { get; } = new double[3];
+
+    /// <summary>診斷用（P8，累計、不歸零）：刨掉的基岩地殼（公里×格）。</summary>
+    internal double CrustErodedKm { get; private set; }
+
+    /// <summary>診斷用（P8，累計、不歸零）：堆進海裡的沉積物（立方公里），也就是陸地的淨輸出。</summary>
+    internal double SeaDepositedKm3 { get; private set; }
 
     /// <summary>診斷用：這一步最大的一筆就地堆（路徑 1 ＝ 主迴圈沒有流向、2 ＝ 往下游送到底）、格子與量。</summary>
     internal (int Path, int Cell, double Amount) LargestDump { get; private set; }
@@ -275,6 +283,7 @@ public sealed class FluvialErosion
         LastErodedVolumeKm3 = eroded / 1000.0 * cellKm2;
         LastDepositedVolumeKm3 = deposited / 1000.0 * cellKm2;
         LastLakeDepositKm3 = lake / 1000.0 * cellKm2;
+        SeaDepositedKm3 += (deposited - lake) / 1000.0 * cellKm2;
         LastReliefErodedKm3 = relief / 1000.0 * cellKm2;
     }
 
@@ -417,7 +426,7 @@ public sealed class FluvialErosion
     /// 拿掉相當於地表降低 <paramref name="surfaceLoweringMeters"/> 公尺的物質：先沉積物（換算均衡反彈）、再凸起的褶皺（1:1，褶皺沒有均衡補償），
     /// 最後基岩（換算均衡反彈，見 <see cref="Erosion"/>）。回傳拿掉的物質厚度（公尺，之後是下游的沉積物）與其中褶皺的那一份。
     /// </summary>
-    private static (double Removed, double FromRelief) RemoveMaterial(SimulationState state, int cell, double surfaceLoweringMeters)
+    private (double Removed, double FromRelief) RemoveMaterial(SimulationState state, int cell, double surfaceLoweringMeters)
     {
         var remaining = surfaceLoweringMeters;
         var removed = 0.0;
@@ -448,6 +457,7 @@ public sealed class FluvialErosion
         var takeKm = Math.Min(crustKm - Isostasy.MinCrustThicknessKm, crustRemovedMeters / 1000.0);
         if (takeKm <= 0) return (removed, fromRelief);
         state.CrustThickness[cell] = (float)(crustKm - takeKm);
+        CrustErodedKm += takeKm;
         return (removed + takeKm * 1000.0, fromRelief);
     }
 

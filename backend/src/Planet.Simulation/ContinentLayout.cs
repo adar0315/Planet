@@ -613,23 +613,28 @@ public static class ContinentLayout
     private const double RidgeHalfSpreadingKmPerMyr = 15;
 
     /// <summary>
-    /// 海岸的大陸地殼厚度（公里），高度約 +300 m。原本取 30（約 −70 m）：海平面在演化中上升幾百公尺，
+    /// 海岸的大陸地殼厚度（公里）。原本取 30（約 −70 m）：海平面在演化中上升幾百公尺，
     /// 水線剛好切過那片幾乎平的沿海帶，海岸被切得很碎（方向 2 第一次跑，1 億年時破碎度 5.9）。
+    /// P8（2026-10-20）32 → 31，跟內陸、加厚距離、雜訊一起校準陸地的高度分布，見 <see cref="InteriorCrustKm"/>。
     /// </summary>
-    private const double CoastCrustKm = 32;
+    private const double CoastCrustKm = 31;
 
     /// <summary>
     /// 內陸的大陸地殼厚度（公里）。地球的大陸平均約 35~40。
     /// 原本取 38：內陸是一片高原，起步時陸地平均高出海面約 1.3 km（地球約 0.84 km），氣溫依高度遞減、水氣在海岸就被抬升降光，
     /// 陸地又冷又乾（P6 診斷，2026-10-19）。改成 35，內陸低約 550 m。
+    ///
+    /// P8（2026-10-20，使用者選定）35 → 34、加厚距離 400 → 1,200 公里、雜訊 ±2.5 → ±4：原本內陸是一片厚度一致的高原，
+    /// 停止條件觸發時 34% 的陸地擠在 1~1.5 km、0~0.5 km 只有 29%（地球約 47%）；壓低整片只是讓平台整片往下搬
+    /// （內陸 33 時 54% 擠在 0.5~1 km）。加厚得慢、起伏大，0~0.5 km 才到 48%。
     /// </summary>
-    private const double InteriorCrustKm = 35;
+    private const double InteriorCrustKm = 34;
 
     /// <summary>從海岸到內陸厚度的距離（公里）。</summary>
-    private const double InteriorRampKm = 400;
+    private const double InteriorRampKm = 1200;
 
     /// <summary>大陸厚度雜訊的振幅（公里）。</summary>
-    private const double CrustNoiseKm = 2.5;
+    private const double CrustNoiseKm = 4;
 
     /// <summary>起始大陸地殼的年齡（百萬年）。只用在診斷與顯示，大陸的高度不看年齡。</summary>
     private const float ContinentalAgeMyr = 1_000f;
