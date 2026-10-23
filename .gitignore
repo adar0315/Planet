@@ -16,6 +16,9 @@ backend/**/appsettings.*.local.json
 backend/**/secrets.json
 *.pfx
 
+# graphify 知識圖輸出（本機產生，可隨時重建）
+graphify-out/
+
 # Editor
 .vs/
 *.suo
