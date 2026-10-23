@@ -349,6 +349,9 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
   驗證每一個方向，改動前先跑它。
 - 動作名稱一律是**相對面向**的（`moveForward`/`strafeLeft`/…），不是字母、也不是地理方位。
   `keydown` 裡**不要寫死字母**，一律查 `keyBindings.actionFor(key)`——寫死的症狀是「改了設定但沒反應」。
+- **飛行**（2026-10-23，[docs/flight-and-god-view-plan.md](docs/flight-and-god-view-plan.md)）跟走路共用同一套水平移動與跨格偵測，
+  所以最高速 × `MAX_FRAME_DT_SEC` 必須小於一格（`flightMotion.spec.ts` 守著）。高度是**畫面上**的公尺數（含 8 倍誇張），
+  存成絕對半徑而不是離地高度；地面在水上是水面（`tileFloorRadius`），不是海床。
 - 移動與轉向是**按住**生效的，所以 `keyup` 與 `window` 的 `blur` 都要處理：按著 W 切到別的視窗再放開，
   `keyup` 永遠收不到，角色會一直走下去。`keyup` 刻意不檢查輸入欄位與 `isCapturing`——
   放開的那一刻焦點可能剛好移到輸入框上，擋掉它角色就停不下來。

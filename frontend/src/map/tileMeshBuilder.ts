@@ -195,6 +195,19 @@ export function tileSurfaceRadius(tile: TileDto, options: TileMeshOptions): numb
 }
 
 /**
+ * 飛行時的「地面」半徑（場景單位）：陸地是格子頂面，水下的格子是水面而不是水底。
+ * 飛機的最低高度從這裡算——從海床算的話，在海上可以一路潛到幾公里深的海溝裡。
+ */
+export function tileFloorRadius(tile: TileDto, options: TileMeshOptions): number {
+  const level = Math.max(tile.elevationLevel, tile.seaLevel)
+  const meters = level * METERS_PER_ELEVATION_LEVEL
+  return (
+    options.renderRadius +
+    (meters / options.planetRadiusMeters) * options.renderRadius * ELEVATION_EXAGGERATION
+  )
+}
+
+/**
  * 沿Tile邊界畫一圈亮色外框，用來標示玩家目前可以移動過去的合法鄰居格。
  * `neighbours` 一定要跟建地形mesh時傳的是同一份，否則外框會跟腳下的格子對不齊。
  */

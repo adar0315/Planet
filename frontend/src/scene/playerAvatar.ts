@@ -13,8 +13,16 @@ export interface PlayerAvatar {
    * @param focus 腳下地表的場景座標。
    * @param forward 面向（單位切向量）。
    * @param lengthScene 這一幀的角色長度（場景單位）。
+   * @param flying 飛行中換成三角翼外型，並畫一條垂到地面的線。
+   * @param ground 正下方地面的場景座標（只在飛行時用）。
    */
-  update(focus: THREE.Vector3, forward: THREE.Vector3, lengthScene: number): void
+  update(
+    focus: THREE.Vector3,
+    forward: THREE.Vector3,
+    lengthScene: number,
+    flying: boolean,
+    ground: THREE.Vector3,
+  ): void
   dispose(): void
 }
 
@@ -30,17 +38,39 @@ export function createPlayerAvatar(): PlayerAvatar {
   const radius = 0.3
 
   // 圓錐預設尖端朝 +Y。轉成尖端朝 −Z，搭配下面「z 軸＝後方」的基底，尖端就會指向前方。
-  const geometry = new THREE.ConeGeometry(radius, 1, 16)
-  geometry.rotateX(-Math.PI / 2)
+  const walkGeometry = new THREE.ConeGeometry(radius, 1, 16)
+  walkGeometry.rotateX(-Math.PI / 2)
+
+  // 飛行：三角錐壓扁成三角翼。底面三個頂點轉完後一個朝上、兩個朝左右，
+  // 把上下壓扁就只剩左右兩個翼尖，從上方看是一個指向前方的三角形。
+  const flyGeometry = new THREE.ConeGeometry(0.45, 1, 3)
+  flyGeometry.rotateX(-Math.PI / 2)
+  flyGeometry.scale(1, 0.15, 1)
+
   const material = new THREE.MeshStandardMaterial({
     color: 0xffcc33,
     emissive: 0x553300, // 夜晚也要看得到
     roughness: 0.6,
   })
-  const mesh = new THREE.Mesh(geometry, material)
+  const body = new THREE.Mesh(walkGeometry, material)
+  body.matrixAutoUpdate = false
+
+  // 飛行時垂到地面的線，讓人看得出飛多高。直接用世界座標，所以不掛在 body 底下
+  const lineGeometry = new THREE.BufferGeometry()
+  const linePositions = new Float32Array(6)
+  lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3))
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color: 0xffcc33,
+    transparent: true,
+    opacity: 0.6,
+  })
+  const line = new THREE.Line(lineGeometry, lineMaterial)
+  line.frustumCulled = false // 端點每幀都在變，包圍球不會跟著更新
+  line.visible = false
+
   const object = new THREE.Group()
-  object.add(mesh)
-  object.matrixAutoUpdate = false
+  object.add(body)
+  object.add(line)
 
   const normal = new THREE.Vector3()
   const right = new THREE.Vector3()
@@ -48,27 +78,46 @@ export function createPlayerAvatar(): PlayerAvatar {
   const lifted = new THREE.Vector3()
   const scratchScale = new THREE.Vector3()
 
-  function update(focus: THREE.Vector3, forward: THREE.Vector3, lengthScene: number) {
+  function update(
+    focus: THREE.Vector3,
+    forward: THREE.Vector3,
+    lengthScene: number,
+    flying: boolean,
+    ground: THREE.Vector3,
+  ) {
     normal.copy(focus).normalize()
     right.crossVectors(forward, normal).normalize()
     back.copy(forward).negate()
 
     // 右手座標基底：x＝右、y＝上（地表法線）、z＝後。
     // right × normal = −forward = back，所以這組基底是右手的，不會鏡像。
-    lifted.copy(focus).addScaledVector(normal, radius * lengthScene)
-    object.matrix
+    // 走路時往上抬半個身體，才不會一半埋在地裡；飛行時就在飛機的位置
+    body.geometry = flying ? flyGeometry : walkGeometry
+    lifted.copy(focus)
+    if (!flying) lifted.addScaledVector(normal, radius * lengthScene)
+    body.matrix
       .makeBasis(right, normal, back)
       .scale(scratchScale.setScalar(lengthScene))
       .setPosition(lifted)
-    object.matrixWorldNeedsUpdate = true
+    body.matrixWorldNeedsUpdate = true
+
+    line.visible = flying
+    if (flying) {
+      focus.toArray(linePositions, 0)
+      ground.toArray(linePositions, 3)
+      lineGeometry.attributes.position!.needsUpdate = true
+    }
   }
 
   return {
     object,
     update,
     dispose() {
-      geometry.dispose()
+      walkGeometry.dispose()
+      flyGeometry.dispose()
       material.dispose()
+      lineGeometry.dispose()
+      lineMaterial.dispose()
     },
   }
 }

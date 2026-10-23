@@ -23,6 +23,19 @@ export const VIEW_MODE_LABELS: Record<ViewMode, string> = {
   evolution: '地質演化',
 }
 
+/** HUD 顯示的飛行狀態（見 gameState.flight）。 */
+export interface FlightHudState {
+  isFlying: boolean
+  /** 按了降落、正在自動下降。 */
+  isLanding: boolean
+  /** 速度檔，FLIGHT_TIERS 的索引。 */
+  tierIndex: number
+  /** 水平速度（公尺／秒），量化到 10。 */
+  speedMps: number
+  /** 離地高度（畫面上的公尺數，見 map/flightMotion.ts），量化到 10。 */
+  altitudeMeters: number
+}
+
 const GAME_START_UTC = new Date(Date.UTC(2050, 0, 1, 8, 0, 0))
 
 /** 八方位的中文名稱，給 HUD 顯示用。索引＝round(角度/45) mod 8。 */
@@ -133,6 +146,18 @@ export const useGameStateStore = defineStore('gameState', () => {
    */
   const resetToDefaultViewSignal = ref(0)
 
+  /**
+   * 飛行狀態，給 HUD 顯示用的副本——真正的狀態在 playerController，它每幀寫回這裡
+   * （速度與高度量化過、變了才寫，避免 HUD 每幀重繪）。不存檔：重新整理一律回到地面。
+   */
+  const flight = ref<FlightHudState>({
+    isFlying: false,
+    isLanding: false,
+    tierIndex: 0,
+    speedMps: 0,
+    altitudeMeters: 0,
+  })
+
   /** 目前的視角。三套視角各自獨立的Three.js場景，不共用render loop，切換時App.vue會整個換掉顯示的元件。不持久化，重新整理一律回到walk。 */
   const viewMode = ref<ViewMode>('walk')
 
@@ -201,6 +226,7 @@ export const useGameStateStore = defineStore('gameState', () => {
     cameraDistanceMeters,
     cameraHeightMeters,
     cameraZoomPercent,
+    flight,
     resetViewSignal,
     resetToDefaultViewSignal,
     viewMode,

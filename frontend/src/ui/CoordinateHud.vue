@@ -5,6 +5,7 @@ import { useKeyBindingsStore, displayKey } from '@/stores/keyBindings'
 import KeyBindingPanel from './KeyBindingPanel.vue'
 import { useTerrainStyleStore } from '@/stores/terrainStyles'
 import { ELEVATION_EXAGGERATION, METERS_PER_ELEVATION_LEVEL } from '@/map/tileMeshBuilder'
+import { FLIGHT_TIERS, SPEED_OF_SOUND_MPS } from '@/map/flightMotion'
 
 const gameState = useGameStateStore()
 const keyBindings = useKeyBindingsStore()
@@ -13,7 +14,7 @@ void terrainStyleStore.load()
 
 const modeLabel: Record<string, string> = {
   observe: '時間靜止（自由觀看）',
-  stepped: '移動模式（每跨一格+1小時）',
+  stepped: '移動模式（走路每跨一格+1小時，飛行依速度換算）',
   realtime: '即時模式（每3秒+1小時）',
 }
 
@@ -56,7 +57,27 @@ const keys = computed(() => ({
   turnLeft: displayKey(keyBindings.keyFor('turnLeft')),
   turnRight: displayKey(keyBindings.keyFor('turnRight')),
   wait: displayKey(keyBindings.keyFor('wait')),
+  toggleFlight: displayKey(keyBindings.keyFor('toggleFlight')),
+  ascend: displayKey(keyBindings.keyFor('ascend')),
+  descend: displayKey(keyBindings.keyFor('descend')),
+  tiers: [
+    displayKey(keyBindings.keyFor('flightTier1')),
+    displayKey(keyBindings.keyFor('flightTier2')),
+    displayKey(keyBindings.keyFor('flightTier3')),
+  ].join('/'),
 }))
+
+/** 飛行區塊：檔位、速度（含馬赫數）、離地高度。 */
+const flightLabel = computed(() => {
+  const f = gameState.flight
+  const tier = FLIGHT_TIERS[f.tierIndex]?.label ?? '—'
+  const mach = (f.speedMps / SPEED_OF_SOUND_MPS).toFixed(1)
+  return {
+    status: f.isLanding ? '降落中' : `${tier}檔`,
+    speed: `${f.speedMps.toLocaleString('zh-TW')} m/s（馬赫 ${mach}）`,
+    altitude: formatLength(f.altitudeMeters),
+  }
+})
 </script>
 
 <template>
@@ -69,6 +90,9 @@ const keys = computed(() => ({
     </div>
     <div>時間：{{ formattedTime }}</div>
     <div>模式：{{ modeLabel[gameState.mode] }}</div>
+    <div v-if="gameState.flight.isFlying" class="flight">
+      飛行：{{ flightLabel.status }}、{{ flightLabel.speed }}、離地 {{ flightLabel.altitude }}
+    </div>
     <div>面向：{{ facingLabel }}（{{ gameState.facingDeg.toFixed(1) }}°）</div>
     <div>視角：{{ gameState.cameraTiltDeg.toFixed(1) }}°（0°=正上方俯視）</div>
     <div>鏡頭：距離 {{ formattedCameraDistance }}、高度 {{ formattedCameraHeight }}</div>
@@ -80,6 +104,10 @@ const keys = computed(() => ({
     <div class="hint">
       {{ keys.forward }}{{ keys.back }} 前進後退、{{ keys.left }}{{ keys.right }} 橫移、{{ keys.turnLeft
       }}{{ keys.turnRight }} 轉向、Shift 跑步、{{ keys.wait }} 原地等待
+    </div>
+    <div class="hint">
+      {{ keys.toggleFlight }} 起飛／降落、{{ keys.ascend }}{{ keys.descend }} 上升下降、{{ keys.tiers }}
+      飛行速度檔
     </div>
     <div class="hint">滑鼠：滾輪縮放、左鍵拖曳環顧、右鍵拖曳轉身</div>
     <div class="buttons">
@@ -109,6 +137,10 @@ const keys = computed(() => ({
   border-radius: 4px;
   pointer-events: none;
   line-height: 1.6;
+}
+
+.flight {
+  color: #9fd8ff;
 }
 
 .hint {

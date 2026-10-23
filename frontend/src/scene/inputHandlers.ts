@@ -65,8 +65,25 @@ export function createInputHandlers(
       return
     }
 
-    if (action === 'wait' && !event.repeat) {
-      if (gameState.mode === 'stepped') gameState.advanceTime(1)
+    // 以下是按一下做一次的動作：長按時的自動重複要忽略，否則按住 T 會一直起飛、降落來回切換
+    if (event.repeat) return
+
+    switch (action) {
+      case 'wait':
+        if (gameState.mode === 'stepped') gameState.advanceTime(1)
+        break
+      case 'toggleFlight':
+        controller.toggleFlight()
+        break
+      case 'flightTier1':
+        controller.setFlightTier(0)
+        break
+      case 'flightTier2':
+        controller.setFlightTier(1)
+        break
+      case 'flightTier3':
+        controller.setFlightTier(2)
+        break
     }
   }
 

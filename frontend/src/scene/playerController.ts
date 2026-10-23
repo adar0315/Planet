@@ -10,7 +10,16 @@ import {
   nearestIndex,
   turnInPlace,
 } from '@/map/surfaceMotion'
-import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
+import {
+  FLIGHT_TIERS,
+  MAX_FLIGHT_ALTITUDE_METERS,
+  MIN_FLIGHT_ALTITUDE_METERS,
+  TAKEOFF_ALTITUDE_METERS,
+  flightAccelerationMps2,
+  steppedHoursPerCrossing,
+  verticalSpeedAt,
+} from '@/map/flightMotion'
+import { tileFloorRadius, tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { useGameStateStore } from '@/stores/gameState'
 import type { BindableAction } from '@/stores/keyBindings'
 import type { TileDto } from '@/types/tile'
@@ -42,6 +51,15 @@ import {
  * （`MovementHub.MoveTo` 驗證的是「目標是不是鄰居」，連續移動仍然是一次跨一格，所以不必改）、
  * 移動模式下推進 1 小時、必要時補載 patch。
  *
+ * ## 飛行（2026-10-23，docs/flight-and-god-view-plan.md）
+ *
+ * 飛行只是多了一個高度軸，水平移動與跨格偵測跟走路是同一套：一樣沿大圓、一樣一次跨一格、
+ * 一樣每跨一格送一次 `MoveTo`。最高速 3 km/s × 每幀上限 0.1 秒＝300 公尺，仍然小於一格。
+ *
+ * 高度存成**絕對半徑**（`aircraftRadius`，場景單位），不是「離地多高」：
+ * 平飛時越過山脈，飛機維持同一個高度、山從底下經過；只有地面高過「最低離地高度」時才把飛機往上推。
+ * 存成離地高度的話，飛機會貼著每一格的高低起伏上下跳。
+ *
  * ## 目前還沒有的（規劃的 M3 / M4）
  *
  * - 地形規則：爬坡上限、水、沿牆滑動——現在哪裡都能走
@@ -54,6 +72,14 @@ export interface PlayerController {
   readonly forward: THREE.Vector3
   /** 這一幀有沒有在移動（給鏡頭決定要不要把環顧偏移回正）。 */
   readonly isMoving: boolean
+  /** 正下方地面的場景座標（飛行時角色往下畫的那條線的終點；走路時等於 focusPoint）。 */
+  readonly groundPoint: THREE.Vector3
+  /** 是否在飛行中（含降落中）。 */
+  readonly isFlying: boolean
+  /** 地面按：起飛。空中按：開始降落（再按一次取消降落）。 */
+  toggleFlight(): void
+  /** 選速度檔（FLIGHT_TIERS 的索引）。只在飛行中有效。 */
+  setFlightTier(index: number): void
   /** 把玩家放到某一格的中心（初次載入、伺服器拒絕時退回）。面向沿用 gameState.facingDeg。 */
   placeAtTile(tile: TileDto): void
   /** 某個動作的按鍵被按下／放開。只處理按住生效的動作（見 keyBindings.HELD_ACTIONS）。 */
@@ -87,6 +113,8 @@ export function createPlayerController(
   const position = new THREE.Vector3(1, 0, 0) // 單位向量
   const forward = new THREE.Vector3(0, 1, 0)
   const focusPoint = new THREE.Vector3()
+  const groundPoint = new THREE.Vector3()
+  const sceneToMeters = planetRadiusMeters / meshOptions.renderRadius
 
   // 本地座標的速度（公尺／秒）：沿面向、沿右方
   let forwardSpeed = 0
@@ -96,6 +124,17 @@ export function createPlayerController(
   const held = new Set<BindableAction>()
   let running = false
   let isMoving = false
+
+  // 飛行
+  let flying = false
+  let landing = false
+  /** 剛起飛、還沒爬到起飛高度：自動爬升，玩家按了升降鍵就交還控制。 */
+  let autoClimbing = false
+  let tierIndex = 0
+  /** 飛機的絕對半徑（場景單位）。見檔頭「飛行」。 */
+  let aircraftRadius = meshOptions.renderRadius
+  /** 飛行時的地面半徑（水面或格子頂面），跟 displayedRadius 一樣往目標平滑靠近。 */
+  let floorRadius = meshOptions.renderRadius
 
   /** 顯示用的地表半徑（場景單位），往目前格的頂面平滑靠近——跨到不同高度的格子時才不會瞬移。 */
   let displayedRadius = meshOptions.renderRadius
@@ -132,7 +171,93 @@ export function createPlayerController(
   }
 
   function updateFocusPoint() {
-    focusPoint.copy(position).multiplyScalar(displayedRadius)
+    if (flying) {
+      focusPoint.copy(position).multiplyScalar(aircraftRadius)
+      groundPoint.copy(position).multiplyScalar(floorRadius)
+    } else {
+      focusPoint.copy(position).multiplyScalar(displayedRadius)
+      groundPoint.copy(focusPoint)
+    }
+  }
+
+  function toggleFlight() {
+    const tile = gameState.currentTile
+    if (!tile) return
+    if (!flying) {
+      flying = true
+      landing = false
+      autoClimbing = true
+      floorRadius = tileFloorRadius(tile, meshOptions)
+      // 從水底起飛時直接浮到水面（飛行的地面是水面，見 tileFloorRadius）
+      aircraftRadius = Math.max(displayedRadius, floorRadius)
+      return
+    }
+    landing = !landing
+    autoClimbing = false
+  }
+
+  function land() {
+    flying = false
+    landing = false
+    autoClimbing = false
+    // 從飛機的高度平滑落到格子頂面（在海上會沉到水底——走路還沒有水的規則，見 M3）
+    displayedRadius = aircraftRadius
+    // 落地後不能維持 3 km/s 在地上滑行
+    forwardSpeed = THREE.MathUtils.clamp(forwardSpeed, -RUN_SPEED_MPS, RUN_SPEED_MPS)
+    rightSpeed = THREE.MathUtils.clamp(rightSpeed, -RUN_SPEED_MPS, RUN_SPEED_MPS)
+  }
+
+  /** 每幀的高度更新。只在飛行中呼叫。 */
+  function updateAltitude(tile: TileDto | null, dt: number) {
+    if (tile) {
+      const target = tileFloorRadius(tile, meshOptions)
+      floorRadius += (target - floorRadius) * (1 - Math.exp(-20 * dt))
+    }
+
+    let altitude = (aircraftRadius - floorRadius) * sceneToMeters
+    const climbInput = axis('ascend', 'descend')
+    if (climbInput !== 0) autoClimbing = false
+    if (climbInput > 0) landing = false // 降落中按上升＝取消降落
+
+    let vertical = climbInput
+    if (landing) vertical = -1
+    else if (autoClimbing) {
+      if (altitude >= TAKEOFF_ALTITUDE_METERS) autoClimbing = false
+      else vertical = 1
+    }
+
+    altitude += vertical * verticalSpeedAt(altitude) * dt
+    if (autoClimbing) altitude = Math.min(altitude, TAKEOFF_ALTITUDE_METERS)
+    // 降落與起飛爬升期間可以低於最低高度；平飛時地面一高過最低高度就把飛機往上推
+    const floor = landing || autoClimbing ? 0 : MIN_FLIGHT_ALTITUDE_METERS
+    altitude = THREE.MathUtils.clamp(altitude, floor, MAX_FLIGHT_ALTITUDE_METERS)
+    aircraftRadius = floorRadius + altitude / sceneToMeters
+
+    if (landing && altitude <= 0) land()
+  }
+
+  /** 寫回 HUD 的副本。量化過、變了才換新物件，避免 HUD 每幀重繪。 */
+  function publishFlightState() {
+    const speed = Math.round(Math.hypot(forwardSpeed, rightSpeed) / 10) * 10
+    const altitude = flying
+      ? Math.round(((aircraftRadius - floorRadius) * sceneToMeters) / 10) * 10
+      : 0
+    const current = gameState.flight
+    if (
+      current.isFlying !== flying ||
+      current.isLanding !== landing ||
+      current.tierIndex !== tierIndex ||
+      current.speedMps !== speed ||
+      current.altitudeMeters !== altitude
+    ) {
+      gameState.flight = {
+        isFlying: flying,
+        isLanding: landing,
+        tierIndex,
+        speedMps: speed,
+        altitudeMeters: altitude,
+      }
+    }
   }
 
   /**
@@ -163,7 +288,11 @@ export function createPlayerController(
 
   function onCrossed(from: TileDto, to: TileDto) {
     enterTile(to)
-    if (gameState.mode === 'stepped') gameState.advanceTime(1)
+    if (gameState.mode === 'stepped') {
+      gameState.advanceTime(
+        steppedHoursPerCrossing(flying, Math.hypot(forwardSpeed, rightSpeed), WALK_SPEED_MPS),
+      )
+    }
     void ensurePatchAroundPlayer()
     validateCrossingInBackground(from, to)
   }
@@ -248,15 +377,23 @@ export function createPlayerController(
       inForward /= inLength
       inRight /= inLength
     }
-    const top = running ? RUN_SPEED_MPS : WALK_SPEED_MPS
+    // 飛行時速度只由檔位決定，Shift 沒有作用
+    const top = flying
+      ? FLIGHT_TIERS[tierIndex]!.speedMps
+      : running
+        ? RUN_SPEED_MPS
+        : WALK_SPEED_MPS
     const targetForward = inForward * top * (inForward < 0 ? BACK_SPEED_FACTOR : 1)
     const targetRight = inRight * top * STRAFE_SPEED_FACTOR
 
-    // 3. 加減速：往目標速度靠近。方向跟目前速度相同就是加速，否則是減速
-    const rateFor = (current: number, target: number) =>
-      Math.abs(target) > Math.abs(current) && Math.sign(target) !== -Math.sign(current)
-        ? ACCELERATION_MPS2
-        : DECELERATION_MPS2
+    // 3. 加減速：往目標速度靠近。方向跟目前速度相同就是加速，否則是減速。
+    //    飛行的加速度跟速度成比例（見 flightAccelerationMps2），走路是固定值
+    const rateFor = (current: number, target: number) => {
+      const accelerating =
+        Math.abs(target) > Math.abs(current) && Math.sign(target) !== -Math.sign(current)
+      if (flying) return flightAccelerationMps2(top, current, !accelerating)
+      return accelerating ? ACCELERATION_MPS2 : DECELERATION_MPS2
+    }
     forwardSpeed = approach(forwardSpeed, targetForward, rateFor(forwardSpeed, targetForward) * dt)
     rightSpeed = approach(rightSpeed, targetRight, rateFor(rightSpeed, targetRight) * dt)
 
@@ -275,13 +412,16 @@ export function createPlayerController(
       }
     }
 
-    // 5. 站立高度往目前格的頂面平滑靠近（約 0.15 秒收斂）
+    // 5. 高度。走路：站立高度往目前格的頂面平滑靠近（約 0.15 秒收斂）。飛行：升降與地形下限
     const tile = gameState.currentTile
-    if (tile) {
+    if (flying) {
+      updateAltitude(tile, dt)
+    } else if (tile) {
       const targetRadius = tileSurfaceRadius(tile, meshOptions)
       displayedRadius += (targetRadius - displayedRadius) * (1 - Math.exp(-20 * dt))
     }
     updateFocusPoint()
+    publishFlightState()
 
     // 6. 面向寫回 gameState（給 HUD 與存檔）。量化到 0.5°：這是每幀都跑的程式碼，
     //    每次寫入都會讓讀它的元件重繪
@@ -294,6 +434,15 @@ export function createPlayerController(
     forward,
     get isMoving() {
       return isMoving
+    },
+    groundPoint,
+    get isFlying() {
+      return flying
+    },
+    toggleFlight,
+    setFlightTier(index) {
+      if (!flying || index < 0 || index >= FLIGHT_TIERS.length) return
+      tierIndex = index
     },
     placeAtTile,
     setHeld(action, isHeld) {

@@ -235,6 +235,8 @@ onMounted(async () => {
         controller.focusPoint,
         controller.forward,
         cameraRig.distance * AVATAR_SIZE_PER_CAMERA_DISTANCE,
+        controller.isFlying,
+        controller.groundPoint,
       )
     }
 

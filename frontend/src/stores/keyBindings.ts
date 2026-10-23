@@ -20,6 +20,12 @@ export type BindableAction =
   | 'turnLeft'
   | 'turnRight'
   | 'wait'
+  | 'toggleFlight'
+  | 'ascend'
+  | 'descend'
+  | 'flightTier1'
+  | 'flightTier2'
+  | 'flightTier3'
 
 /** 面板上的顯示順序與名稱。 */
 export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
@@ -30,6 +36,12 @@ export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
   { action: 'turnLeft', label: '左轉' },
   { action: 'turnRight', label: '右轉' },
   { action: 'wait', label: '原地等待' },
+  { action: 'toggleFlight', label: '起飛／降落' },
+  { action: 'ascend', label: '上升' },
+  { action: 'descend', label: '下降' },
+  { action: 'flightTier1', label: '飛行：巡航' },
+  { action: 'flightTier2', label: '飛行：噴射' },
+  { action: 'flightTier3', label: '飛行：高超音速' },
 ]
 
 /**
@@ -39,7 +51,16 @@ export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
  *   A(左移) S(後退) D(右移)
  *   Z(原地等待)
  *
+ * 飛行（2026-10-23，docs/flight-and-god-view-plan.md）：
+ *
+ *   T(起飛／降落)  R(上升)  F(下降)  1/2/3(速度檔)
+ *
+ * 升降用 R/F 而不是空白鍵／Ctrl：isBindableKey 只接受單一可見字元，空白鍵與修飾鍵都綁不了。
+ *
  * 轉向也可以按住滑鼠右鍵拖曳（見 cameraRig.ts）。
+ *
+ * 新增動作時舊的自訂配置不用遷移：loadPersisted 從這份預設值出發再套用存檔，
+ * 存檔裡沒有的動作自然拿到預設鍵；若玩家早就把某個動作綁到 T/R/F，衝突會依互換規則解掉。
  */
 export const DEFAULT_BINDINGS: Readonly<Record<BindableAction, string>> = Object.freeze({
   moveForward: 'w',
@@ -49,6 +70,12 @@ export const DEFAULT_BINDINGS: Readonly<Record<BindableAction, string>> = Object
   turnLeft: 'q',
   turnRight: 'e',
   wait: 'z',
+  toggleFlight: 't',
+  ascend: 'r',
+  descend: 'f',
+  flightTier1: '1',
+  flightTier2: '2',
+  flightTier3: '3',
 })
 
 /** 這些動作是「按住期間持續生效」的，需要 keyup 才知道何時停。wait 是按一下就做一次。 */
@@ -59,6 +86,8 @@ export const HELD_ACTIONS: ReadonlySet<BindableAction> = new Set<BindableAction>
   'strafeRight',
   'turnLeft',
   'turnRight',
+  'ascend',
+  'descend',
 ])
 
 /**
