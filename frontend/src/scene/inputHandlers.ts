@@ -1,5 +1,6 @@
 import { HELD_ACTIONS, useKeyBindingsStore } from '@/stores/keyBindings'
 import { useGameStateStore } from '@/stores/gameState'
+import type { GodView } from './godView'
 import type { PlayerController } from './playerController'
 
 export interface InputHandlers {
@@ -22,6 +23,8 @@ export function createInputHandlers(
   gameState: ReturnType<typeof useGameStateStore>,
   keyBindings: ReturnType<typeof useKeyBindingsStore>,
   controller: PlayerController,
+  godView: GodView,
+  toggleGodView: () => void,
 ): InputHandlers {
   /** 在輸入欄位裡打字時不要當成移動指令（這是掛在 window 上的全域監聽，CLAUDE.md 記載過的坑）。 */
   function isTypingTarget(event: KeyboardEvent): boolean {
@@ -60,13 +63,22 @@ export function createInputHandlers(
     if (!action) return
 
     if (HELD_ACTIONS.has(action)) {
-      // 長按時作業系統會以約 30 次/秒重複送 keydown，重複設成「按住」沒有副作用
-      controller.setHeld(action, true)
+      // 長按時作業系統會以約 30 次/秒重複送 keydown，重複設成「按住」沒有副作用。
+      // 上帝視角時移動鍵改成移動鏡頭，角色不動
+      if (godView.active) godView.setHeld(action, true)
+      else controller.setHeld(action, true)
       return
     }
 
     // 以下是按一下做一次的動作：長按時的自動重複要忽略，否則按住 T 會一直起飛、降落來回切換
     if (event.repeat) return
+
+    if (action === 'toggleGodView') {
+      toggleGodView()
+      return
+    }
+    // 上帝視角期間時間不動、角色不動：等待、起飛、換檔都不理
+    if (godView.active) return
 
     switch (action) {
       case 'wait':
@@ -96,12 +108,17 @@ export function createInputHandlers(
     // 放開時**不檢查** isCapturing 與輸入欄位：按下時若已經在走，放開的那一刻焦點可能剛好
     // 移到輸入框或設定面板上，擋掉 keyup 會讓角色一直走下去。放開一個沒按住的鍵沒有副作用。
     const action = keyBindings.actionFor(event.key.toLowerCase())
-    if (action && HELD_ACTIONS.has(action)) controller.setHeld(action, false)
+    // 兩邊都放開：按下時跟放開時可能剛好跨過進出上帝視角
+    if (action && HELD_ACTIONS.has(action)) {
+      controller.setHeld(action, false)
+      godView.setHeld(action, false)
+    }
   }
 
   function blurHandler() {
     // 按著 W 切到別的視窗再放開，keyup 送到別的視窗去了，這裡永遠收不到。
     controller.releaseAll()
+    godView.releaseAll()
   }
 
   return { keydownHandler, keyupHandler, blurHandler }

@@ -89,3 +89,20 @@ export const MIN_DISTANCE_EDGE_MULTIPLE = 4
  * 但這種每格純色的畫面在2x以上肉眼已經看不出差別，純粹是白燒GPU。
  */
 export const MAX_PIXEL_RATIO = 2
+
+/**
+ * 上帝視角（docs/flight-and-god-view-plan.md）。高度就是鏡頭距離，見 godView.ts。
+ *
+ * 最高 5,000 公里：星球半徑約 1,852 公里，從那裡看整顆星球的視角半徑約 16°，60° 的視野裝得下。
+ * 鏡頭的 far 是 10,000 場景單位（約 37 萬公里），遠大於這個距離。
+ *
+ * 最低距離沿用走路時的縮放下限（約 4 公里），不是規劃寫的 500 公尺：鏡頭的 near 是 0.1 場景單位
+ * （約 3.7 公里），比 near 還近的話，注視點底下的地面會被整個裁掉（見 MIN_DISTANCE_EDGE_MULTIPLE）。
+ */
+export const GOD_VIEW_MAX_DISTANCE_METERS = 5_000_000
+
+/** 鏡頭距離高於這個值就不再跟著補載地塊，只看星球貼圖：高空看不出單一格子，高速時補載也跟不上。 */
+export const GOD_VIEW_PATCH_CEILING_METERS = 300_000
+
+/** 水平速度＝每秒移動目前的鏡頭距離，但不低於這個值（公尺／秒）。 */
+export const GOD_VIEW_MIN_SPEED_MPS = 500

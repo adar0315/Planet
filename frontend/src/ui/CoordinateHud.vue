@@ -58,6 +58,7 @@ const keys = computed(() => ({
   turnRight: displayKey(keyBindings.keyFor('turnRight')),
   wait: displayKey(keyBindings.keyFor('wait')),
   toggleFlight: displayKey(keyBindings.keyFor('toggleFlight')),
+  godView: displayKey(keyBindings.keyFor('toggleGodView')),
   ascend: displayKey(keyBindings.keyFor('ascend')),
   descend: displayKey(keyBindings.keyFor('descend')),
   tiers: [
@@ -90,6 +91,10 @@ const flightLabel = computed(() => {
     </div>
     <div>時間：{{ formattedTime }}</div>
     <div>模式：{{ modeLabel[gameState.mode] }}</div>
+    <div v-if="gameState.isGodView" class="god-view">
+      上帝視角（時間暫停、角色留在原地）：{{ keys.forward }}{{ keys.left }}{{ keys.back }}{{ keys.right }}
+      移動、{{ keys.ascend }}{{ keys.descend }}／滾輪升降、{{ keys.godView }} 回到角色
+    </div>
     <div v-if="gameState.flight.isFlying" class="flight">
       飛行：{{ flightLabel.status }}、{{ flightLabel.speed }}、離地 {{ flightLabel.altitude }}
     </div>
@@ -107,7 +112,7 @@ const flightLabel = computed(() => {
     </div>
     <div class="hint">
       {{ keys.toggleFlight }} 起飛／降落、{{ keys.ascend }}{{ keys.descend }} 上升下降、{{ keys.tiers }}
-      飛行速度檔
+      飛行速度檔、{{ keys.godView }} 上帝視角
     </div>
     <div class="hint">滑鼠：滾輪縮放、左鍵拖曳環顧、右鍵拖曳轉身</div>
     <div class="buttons">
@@ -118,6 +123,15 @@ const flightLabel = computed(() => {
         @click="gameState.requestResetToDefaultView()"
       >
         Home
+      </button>
+      <button
+        type="button"
+        class="home-button"
+        :class="{ active: gameState.isGodView }"
+        :title="`鏡頭脫離角色自由移動，時間暫停（也可以按 ${keys.godView}）`"
+        @click="gameState.requestToggleGodView()"
+      >
+        {{ gameState.isGodView ? '回到角色' : '上帝視角' }}
       </button>
       <KeyBindingPanel />
     </div>
@@ -137,6 +151,15 @@ const flightLabel = computed(() => {
   border-radius: 4px;
   pointer-events: none;
   line-height: 1.6;
+}
+
+.god-view {
+  color: #ffd27f;
+}
+
+.home-button.active {
+  border-color: #ffd27f;
+  color: #ffd27f;
 }
 
 .flight {

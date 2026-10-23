@@ -70,6 +70,8 @@ export interface PlayerController {
   readonly focusPoint: THREE.Vector3
   /** 面向（單位切向量，與位置垂直）。 */
   readonly forward: THREE.Vector3
+  /** 玩家在球面上的位置（單位向量）。上帝視角從這裡出發。 */
+  readonly position: THREE.Vector3
   /** 這一幀有沒有在移動（給鏡頭決定要不要把環顧偏移回正）。 */
   readonly isMoving: boolean
   /** 正下方地面的場景座標（飛行時角色往下畫的那條線的終點；走路時等於 focusPoint）。 */
@@ -92,6 +94,13 @@ export interface PlayerController {
   turnBy(deltaDeg: number): void
   /** 轉成面向正北（指北針點擊）。 */
   faceNorth(): void
+  /** 立刻停下：放開所有按鍵、速度歸零。進入上帝視角時呼叫——之後不再 tick，殘留的速度會在回來時多滑一段。 */
+  halt(): void
+  /**
+   * patch 被別人換掉之後（上帝視角離開時），把所在格換成新 patch 裡的同一格並重畫外框。
+   * 新 patch 裡找不到這一格就不動。
+   */
+  reattachToPatch(): void
   /** 每幀呼叫。 */
   tick(dtSec: number): void
 }
@@ -332,6 +341,13 @@ export function createPlayerController(
     return true
   }
 
+  function reattachToPatch() {
+    const freshPatch = patchManager.patch
+    const nowTile = gameState.currentTile
+    const index = nowTile ? freshPatch?.indexByTileId.get(nowTile.tileId) : undefined
+    if (index !== undefined) enterTile(freshPatch!.tiles[index]!)
+  }
+
   async function ensurePatchAroundPlayer() {
     const patch = patchManager.patch
     const tile = gameState.currentTile
@@ -343,10 +359,7 @@ export function createPlayerController(
       await patchManager.loadPatch(tile.latitude, tile.longitude)
       // 換完 patch 後，所在格要改用新 patch 裡的物件（同一個 tileId，但帶的是新的鄰接資料）。
       // 注意要用「當下」的所在格——補載期間玩家可能已經又走了好幾格。
-      const freshPatch = patchManager.patch
-      const nowTile = gameState.currentTile
-      const index = nowTile ? freshPatch?.indexByTileId.get(nowTile.tileId) : undefined
-      if (index !== undefined) enterTile(freshPatch!.tiles[index]!)
+      reattachToPatch()
     } catch {
       /* 補載失敗就維持用舊 patch，下一次跨格會再試 */
     } finally {
@@ -432,6 +445,15 @@ export function createPlayerController(
   return {
     focusPoint,
     forward,
+    position,
+    halt() {
+      held.clear()
+      running = false
+      forwardSpeed = 0
+      rightSpeed = 0
+      isMoving = false
+    },
+    reattachToPatch,
     get isMoving() {
       return isMoving
     },

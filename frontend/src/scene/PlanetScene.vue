@@ -16,6 +16,7 @@ import { createPlayerController } from './playerController'
 import { createPlayerAvatar } from './playerAvatar'
 import { createHudStatsUpdater } from './hudStats'
 import { createInputHandlers } from './inputHandlers'
+import { createGodView } from './godView'
 import {
   AVATAR_SIZE_PER_CAMERA_DISTANCE,
   DEFAULT_CAMERA_DISTANCE_METERS,
@@ -38,6 +39,7 @@ import {
  *   - playerAvatar.ts     角色模型（目前是指向前方的圓錐）
  *   - hudStats.ts         每幀算給HUD看的鏡頭數字（指北針角度/傾斜/距離/高度/縮放%）
  *   - inputHandlers.ts    鍵盤按住／放開，翻譯成 playerController 的呼叫
+ *   - godView.ts          上帝視角：鏡頭脫離角色自由移動，時間不動
  *
  * 這裡刻意保留這個順序性的組裝流程、不再拆更細——子系統之間有些初始化順序是真的有依賴
  * （例如 cameraRig 的縮放範圍必須在 patchManager 載入初始patch「之後」、玩家第一次
@@ -61,6 +63,7 @@ let blurHandler: (() => void) | null = null
 let stopResetViewWatch: (() => void) | null = null
 let stopResetDefaultViewWatch: (() => void) | null = null
 let stopRecolorWatch: (() => void) | null = null
+let stopGodViewWatch: (() => void) | null = null
 // 由 onMounted 建立（需要用到那裡的區域變數），onUnmounted 呼叫。
 let disposeScene: (() => void) | null = null
 
@@ -140,21 +143,53 @@ onMounted(async () => {
       moveWarning.value = message
     },
   )
-  turnByDrag = (deltaDeg) => controller.turnBy(deltaDeg)
+
+  const godView = createGodView(
+    controller,
+    patchManager,
+    cameraRig,
+    () => gameState.currentTile,
+    planet.radiusMeters,
+    meshOptions,
+  )
+  turnByDrag = (deltaDeg) =>
+    godView.active ? godView.turnBy(deltaDeg) : controller.turnBy(deltaDeg)
+
+  let playerPlaced = false
+  // 離開上帝視角要等地塊載回角色身邊，這段期間不接受再次切換——
+  // 否則新一趟的補載可能跟離開時的補載搶著換 patch
+  let godViewExiting = false
+  function toggleGodView() {
+    if (!playerPlaced || godViewExiting) return
+    if (!godView.active) {
+      godView.enter()
+      gameState.isGodView = true
+      return
+    }
+    gameState.isGodView = false
+    godViewExiting = true
+    void godView.exit().finally(() => {
+      godViewExiting = false
+    })
+  }
 
   const avatar = createPlayerAvatar()
   avatar.object.visible = false // 玩家被放到某一格之前不顯示
   scene.add(avatar.object)
 
-  const inputHandlers = createInputHandlers(gameState, keyBindings, controller)
+  const inputHandlers = createInputHandlers(
+    gameState,
+    keyBindings,
+    controller,
+    godView,
+    toggleGodView,
+  )
   keydownHandler = inputHandlers.keydownHandler
   keyupHandler = inputHandlers.keyupHandler
   blurHandler = inputHandlers.blurHandler
   window.addEventListener('keydown', keydownHandler)
   window.addEventListener('keyup', keyupHandler)
   window.addEventListener('blur', blurHandler)
-
-  let playerPlaced = false
 
   try {
     // 有存檔（localStorage）就從上次的位置繼續，沒有才從(0,0)開始。
@@ -228,13 +263,21 @@ onMounted(async () => {
     lastFrameAt = now
 
     // 玩家先動，鏡頭與角色再跟上——順序反過來的話鏡頭永遠落後一幀，移動時畫面會抖。
+    // 上帝視角時角色不 tick（留在原地、不送驗證、不推進時間），鏡頭改跟上帝視角的注視點。
     if (playerPlaced) {
-      controller.tick(dt)
-      cameraRig.update(controller.focusPoint, controller.forward, controller.isMoving, dt)
+      if (godView.active) {
+        godView.tick(dt)
+        cameraRig.update(godView.focusPoint, godView.forward, godView.isMoving, dt)
+      } else {
+        controller.tick(dt)
+        cameraRig.update(controller.focusPoint, controller.forward, controller.isMoving, dt)
+      }
+      // 角色大小依「鏡頭到角色」的距離：平常就是鏡頭距離；上帝視角時鏡頭不在角色身上，
+      // 用鏡頭距離的話拉到 5,000 公里高空，角色會變成幾百公里長
       avatar.update(
         controller.focusPoint,
         controller.forward,
-        cameraRig.distance * AVATAR_SIZE_PER_CAMERA_DISTANCE,
+        camera.position.distanceTo(controller.focusPoint) * AVATAR_SIZE_PER_CAMERA_DISTANCE,
         controller.isFlying,
         controller.groundPoint,
       )
@@ -266,7 +309,8 @@ onMounted(async () => {
   stopResetViewWatch = watch(
     () => gameState.resetViewSignal,
     () => {
-      controller.faceNorth()
+      if (godView.active) godView.faceNorth()
+      else controller.faceNorth()
       cameraRig.resetView()
     },
   )
@@ -276,6 +320,8 @@ onMounted(async () => {
     () => cameraRig.resetToDefaultView(),
   )
 
+  stopGodViewWatch = watch(() => gameState.godViewToggleSignal, toggleGodView)
+
   stopRecolorWatch = watch(
     () => gameState.gameTime,
     () => patchManager.markColorsDirty(),
@@ -284,6 +330,8 @@ onMounted(async () => {
   // 場景資源的釋放邏輯必須在這裡建立：scene/cameraRig/patchManager/planetBase 等都是 onMounted
   // 閉包裡的區域變數，onUnmounted 根本拿不到（原本就是因為這樣才漏掉沒釋放）。
   disposeScene = () => {
+    // 上帝視角是這個場景的狀態，切到別的視角就結束；store 會留著，不清掉的話回來時 HUD 還顯示「時間暫停」
+    gameState.isGodView = false
     patchManager.dispose()
     planetBase.dispose()
     cameraRig.dispose()
@@ -317,7 +365,10 @@ watch(
       realtimeTimer = null
     }
     if (mode === 'realtime') {
-      realtimeTimer = setInterval(() => gameState.advanceTime(1), REALTIME_TICK_MS)
+      // 上帝視角期間時間不動
+      realtimeTimer = setInterval(() => {
+        if (!gameState.isGodView) gameState.advanceTime(1)
+      }, REALTIME_TICK_MS)
     }
   },
   { immediate: true },
@@ -333,6 +384,7 @@ onUnmounted(() => {
   stopResetViewWatch?.()
   stopResetDefaultViewWatch?.()
   stopRecolorWatch?.()
+  stopGodViewWatch?.()
   disposeScene?.()
   disposeScene = null
   void stopMovementConnection()

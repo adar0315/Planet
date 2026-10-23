@@ -158,6 +158,15 @@ export const useGameStateStore = defineStore('gameState', () => {
     altitudeMeters: 0,
   })
 
+  /**
+   * 上帝視角：鏡頭脫離角色自由移動，期間**任何時間模式都不推進時間**（docs/flight-and-god-view-plan.md）。
+   * 由 PlanetScene 進出時寫入，HUD 與時間推進的地方讀它。不存檔：重新整理一律回到角色身上。
+   */
+  const isGodView = ref(false)
+
+  /** 每次+1代表使用者要求切換上帝視角（HUD 按鈕用；鍵盤直接在 inputHandlers 處理）。 */
+  const godViewToggleSignal = ref(0)
+
   /** 目前的視角。三套視角各自獨立的Three.js場景，不共用render loop，切換時App.vue會整個換掉顯示的元件。不持久化，重新整理一律回到walk。 */
   const viewMode = ref<ViewMode>('walk')
 
@@ -206,6 +215,10 @@ export const useGameStateStore = defineStore('gameState', () => {
     mode.value = next
   }
 
+  function requestToggleGodView() {
+    godViewToggleSignal.value++
+  }
+
   function requestResetView() {
     resetViewSignal.value++
   }
@@ -227,6 +240,9 @@ export const useGameStateStore = defineStore('gameState', () => {
     cameraHeightMeters,
     cameraZoomPercent,
     flight,
+    isGodView,
+    godViewToggleSignal,
+    requestToggleGodView,
     resetViewSignal,
     resetToDefaultViewSignal,
     viewMode,

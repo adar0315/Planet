@@ -26,6 +26,7 @@ export type BindableAction =
   | 'flightTier1'
   | 'flightTier2'
   | 'flightTier3'
+  | 'toggleGodView'
 
 /** 面板上的顯示順序與名稱。 */
 export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
@@ -42,6 +43,7 @@ export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
   { action: 'flightTier1', label: '飛行：巡航' },
   { action: 'flightTier2', label: '飛行：噴射' },
   { action: 'flightTier3', label: '飛行：高超音速' },
+  { action: 'toggleGodView', label: '上帝視角' },
 ]
 
 /**
@@ -54,6 +56,7 @@ export const ACTION_LABELS: { action: BindableAction; label: string }[] = [
  * 飛行（2026-10-23，docs/flight-and-god-view-plan.md）：
  *
  *   T(起飛／降落)  R(上升)  F(下降)  1/2/3(速度檔)
+ *   G(上帝視角：升降同樣用 R/F)
  *
  * 升降用 R/F 而不是空白鍵／Ctrl：isBindableKey 只接受單一可見字元，空白鍵與修飾鍵都綁不了。
  *
@@ -76,6 +79,7 @@ export const DEFAULT_BINDINGS: Readonly<Record<BindableAction, string>> = Object
   flightTier1: '1',
   flightTier2: '2',
   flightTier3: '3',
+  toggleGodView: 'g',
 })
 
 /** 這些動作是「按住期間持續生效」的，需要 keyup 才知道何時停。wait 是按一下就做一次。 */
