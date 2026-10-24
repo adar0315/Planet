@@ -15,6 +15,9 @@ namespace Planet.Shared;
 /// <param name="HeightCategory">地表覆蓋物高度/深度細分等級，實際意義依 Terrain 而定。</param>
 /// <param name="ElevationLevel">地形海拔等級，範圍 -500~+500，每級5公尺。</param>
 /// <param name="SeaLevel">該位置的海平面等級（跟 ElevationLevel 同單位）。</param>
+/// <param name="SourceCellId">從哪一個模擬粗格放大來的（查四季的積雪、結冰）；程序化地形是 null。</param>
+/// <param name="RiverWidthMeters">這一格範圍裡最大那條河的平均河寬（公尺），沒有河是 0、序列化時省略。</param>
+/// <param name="RiverCellId">那條河從哪一個粗格流出來（查當月的流量），沒有河是 null。</param>
 /// <param name="NeighborIds">
 /// 這個地塊的鄰居 TileId：六角形固定6個、五角形固定5個，順序對應
 /// <c>ITileNeighborResolver.GetNeighborCoordinates</c> 的輸出。
@@ -37,5 +40,11 @@ public record TileDto(
     int ElevationLevel,
     int SeaLevel,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    long?[]? NeighborIds = null
+    long?[]? NeighborIds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? SourceCellId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    float RiverWidthMeters = 0f,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? RiverCellId = null
 );

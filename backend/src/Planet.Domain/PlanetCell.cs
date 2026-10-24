@@ -35,6 +35,13 @@ public class PlanetCell
     /// <summary>水深（公尺），0 代表陸地。</summary>
     public float WaterDepthMeters { get; set; }
 
+    /// <summary>
+    /// 水面高度（公尺，相對海平面）：海是 0，湖是湖面高度；陸地是 0（沒有意義）。
+    /// 高原上的湖，湖面可以遠高於海平面——只存水深的話，放大時拿不到湖面，
+    /// 以前因此把高地湖的地塊一律壓成 −5 公尺的坑（水文地貌規劃 H0）。
+    /// </summary>
+    public float WaterSurfaceMeters { get; set; }
+
     /// <summary>這片水是不是連通主要大洋（false 是湖或內海）。陸地為 false。</summary>
     public bool IsOcean { get; set; }
 
@@ -82,4 +89,57 @@ public class PlanetCell
 
     /// <summary>河的相對大小（0~1，見 <c>Rivers.Size</c>）；不是河是 0。決定河寬與水深。</summary>
     public float RiverSize { get; set; }
+
+    // ---- 水文地貌（水文地貌規劃 H6）：放大與近看細分畫地貌用 ----
+
+    /// <summary>地表露出的岩石（同模擬的 <c>ExposedRock</c>：0 鬆散沉積物、1 沉積岩、2 火山岩、3 混雜岩、4 結晶基盤、5 洋殼玄武岩）。</summary>
+    public int ExposedRock { get; set; }
+
+    /// <summary>河流下切速率（公尺／百萬年）：河谷多深、是 V 形還是平底。</summary>
+    public float IncisionRate { get; set; }
+
+    /// <summary>河流堆積速率（公尺／百萬年）：沖積扇與沖積平原。</summary>
+    public float AggradationRate { get; set; }
+
+    /// <summary>冰川刨蝕速率（公尺／百萬年）：U 形谷。</summary>
+    public float GlacialIncisionRate { get; set; }
+
+    /// <summary>河口三角洲的供砂量（記在河口那一格海上）：三角洲多大。</summary>
+    public float DeltaSupply { get; set; }
+
+    /// <summary>風蝕速率（公尺／百萬年）：沙漠、戈壁。</summary>
+    public float DeflationRate { get; set; }
+
+    /// <summary>黃土堆積速率（公尺／百萬年）。</summary>
+    public float LoessRate { get; set; }
+
+    /// <summary>海岸受浪的程度（0~1）：附近的海有多少比浪基面深。陸地上不靠海是 0。</summary>
+    public float WaveExposure { get; set; }
+
+    /// <summary>平均河寬（公尺）；不是畫出來的河是 0。門檻是集水 1,000 平方公里（見模擬的 <c>Rivers.MinDrawnDrainageAreaSquareKm</c>）。</summary>
+    public float RiverWidthMeters { get; set; }
+
+    /// <summary>水情（同模擬的 <c>FlowRegime</c>：0 不是河、1 常流河、2 季節河、3 間歇河）。</summary>
+    public int FlowRegime { get; set; }
+
+    /// <summary>河水裡來自地下水基流的比例（0~1）。</summary>
+    public float BaseflowShare { get; set; }
+
+    /// <summary>河水裡來自融雪與冰川的比例（0~1）。</summary>
+    public float MeltShare { get; set; }
+
+    /// <summary>12 個月的氣溫（攝氏，float 小端序 × 12）。月 m 的中點是一年中第 (m+0.5)·365/12 天。</summary>
+    public byte[] MonthlyTemperature { get; set; } = [];
+
+    /// <summary>12 個月的降水（相對尺度，各月平均＝<see cref="Precipitation"/>；float × 12）。</summary>
+    public byte[] MonthlyPrecipitation { get; set; } = [];
+
+    /// <summary>12 個月的流量相對全年平均的比例（float × 12）。當月河寬＝<see cref="RiverWidthMeters"/> × √比例。</summary>
+    public byte[] MonthlyDischargeRatio { get; set; } = [];
+
+    /// <summary>哪幾個月地面被雪蓋住（第 m 位元＝第 m 個月，0 是 1 月）。</summary>
+    public int SnowMonths { get; set; }
+
+    /// <summary>哪幾個月結冰（河、湖、海冰；第 m 位元＝第 m 個月）。</summary>
+    public int FrozenMonths { get; set; }
 }

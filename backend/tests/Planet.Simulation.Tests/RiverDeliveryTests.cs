@@ -33,6 +33,10 @@ public class RiverDeliveryTests
         var to = neighbors[0];
         cells[from].RiverDownstreamCellId = to;
         cells[from].RiverSize = 0.5f;
+        cells[from].RiverWidthMeters = 2_000f;
+        // 陡的河段不彎（平原上的曲流會偏離兩格中心的連線好幾公里，弦上那一點就不一定在河裡）
+        cells[from].SurfaceElevationMeters = 1_000f;
+        cells[to].SurfaceElevationMeters = 100f;
         var sampler = new SimulatedTerrainSampler(Grid24, cells);
 
         var u = Grid24.UnitVector;

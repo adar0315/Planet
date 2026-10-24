@@ -34,5 +34,8 @@ public static class TileMapping
         tile.HeightCategory,
         tile.ElevationLevel,
         tile.SeaLevel,
-        neighborIds);
+        neighborIds,
+        tile.SourceCellId,
+        tile.RiverWidthMeters,
+        tile.RiverCellId);
 }

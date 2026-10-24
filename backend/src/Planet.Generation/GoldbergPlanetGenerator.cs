@@ -165,8 +165,10 @@ public class GoldbergPlanetGenerator : IPlanetGenerator
                         Terrain = terrain.Terrain,
                         HeightCategory = terrain.HeightCategory,
                         ElevationLevel = terrain.ElevationLevel,
-                        SeaLevel = PlanetSeaLevelLevel,
+                        SeaLevel = terrain.WaterLevel ?? PlanetSeaLevelLevel,
                         SourceCellId = terrain.SourceCellId,
+                        RiverWidthMeters = terrain.RiverWidthMeters,
+                        RiverCellId = terrain.RiverCellId,
                     };
                 }
             }

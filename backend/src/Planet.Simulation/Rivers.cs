@@ -33,11 +33,40 @@ public static class Rivers
     /// <summary>算成河的最小流量（<see cref="Hydrology.Discharge"/> 的單位）。</summary>
     /// <param name="grid">網格。</param>
     /// <param name="state">模擬狀態。</param>
-    public static float MinDischarge(SimulationGrid grid, SimulationState state)
+    public static float MinDischarge(SimulationGrid grid, SimulationState state) => MinDischarge(grid, state, MinDrainageAreaSquareKm);
+
+    /// <summary>集水面積至少 <paramref name="drainageAreaSquareKm"/> 的流量（<see cref="Hydrology.Discharge"/> 的單位）。</summary>
+    /// <param name="grid">網格。</param>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="drainageAreaSquareKm">集水面積（平方公里）。</param>
+    public static float MinDischarge(SimulationGrid grid, SimulationState state, double drainageAreaSquareKm)
     {
         ArgumentNullException.ThrowIfNull(grid);
-        var cells = MinDrainageAreaSquareKm / (grid.AverageCellAreaSquareMeters / 1e6);
+        var cells = drainageAreaSquareKm / (grid.AverageCellAreaSquareMeters / 1e6);
         return (float)(cells * MeanLandRunoff(state));
+    }
+
+    /// <summary>
+    /// 放大到走動模式時畫出來的河：集水面積至少這麼大（平方公里，水文地貌規劃 H4）。
+    /// 近看細分成 250 公尺的小六角之後，一千平方公里的小河也看得到；地質演化的圖層仍用 <see cref="MinDrainageAreaSquareKm"/>。
+    /// </summary>
+    public const double MinDrawnDrainageAreaSquareKm = 1_000;
+
+    /// <summary>最小的河（剛好到 <see cref="MinDrawnDrainageAreaSquareKm"/>）的河寬（公尺）。</summary>
+    public const double MinChannelWidthMeters = 20;
+
+    /// <summary>河寬上限（公尺）：亞馬遜下游約 2~5 公里，取 2.5 公里。</summary>
+    public const double MaxChannelWidthMeters = 2_500;
+
+    /// <summary>
+    /// 河寬（公尺）：水力幾何的經驗式，河寬約與流量的平方根成正比。流量是門檻的 6,000 倍（集水 600 萬平方公里）時約 1.5 公里。
+    /// </summary>
+    /// <param name="discharge">流量。</param>
+    /// <param name="minDrawnDischarge">畫出來的門檻（集水 <see cref="MinDrawnDrainageAreaSquareKm"/>）。</param>
+    public static double ChannelWidthMeters(float discharge, float minDrawnDischarge)
+    {
+        if (minDrawnDischarge <= 0f || discharge < minDrawnDischarge) return 0;
+        return Math.Min(MaxChannelWidthMeters, MinChannelWidthMeters * Math.Sqrt(discharge / minDrawnDischarge));
     }
 
     /// <summary>
@@ -45,7 +74,7 @@ public static class Rivers
     /// 用來決定圖層的顏色深淺、走動模式的河寬與水深。
     /// </summary>
     /// <param name="discharge">流量。</param>
-    /// <param name="minDischarge">門檻（<see cref="MinDischarge"/>）。</param>
+    /// <param name="minDischarge">門檻（<see cref="MinDischarge(SimulationGrid, SimulationState)"/>）。</param>
     public static float Size(float discharge, float minDischarge)
     {
         if (minDischarge <= 0f || discharge < minDischarge) return 0f;
@@ -57,7 +86,7 @@ public static class Rivers
     /// 否則 0 ≥ 0，整片陸地都變成河。
     /// </summary>
     /// <param name="discharge">流量。</param>
-    /// <param name="minDischarge">門檻（<see cref="MinDischarge"/>）。</param>
+    /// <param name="minDischarge">門檻（<see cref="MinDischarge(SimulationGrid, SimulationState)"/>）。</param>
     public static bool IsRiver(float discharge, float minDischarge) => minDischarge > 0f && discharge >= minDischarge;
 
     /// <summary>流量是門檻的這麼多倍就算最大的河（亞馬遜的集水面積約是 1 萬平方公里的 600 倍）。</summary>

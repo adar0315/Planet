@@ -92,17 +92,25 @@ public class SimulatedTerrainSamplerTests
     }
 
     [Fact]
-    public void Sample_AtCellCenter_ReturnsThatCell()
+    public void Sample_AtCellCenter_ReturnsThatCellOrANeighbour()
     {
+        // 取樣位置會被雜訊扭一下（粗格的分界才不是六角形，水文地貌規劃 H6），最多 0.35 格距：
+        // 格心取樣到的是這一格或它的鄰居，而且不在海岸附近的話海陸照這一格
         var (grid, _, cells) = World.Value;
         var sampler = new SimulatedTerrainSampler(grid, cells);
+        Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
 
         for (var c = 0; c < grid.CellCount; c += 37)
         {
             var (lat, lon) = (grid.Latitude[c], grid.Longitude[c]);
             var sample = sampler.Sample(lat, lon);
-            Assert.Equal(c, sample.SourceCellId);
-            Assert.Equal(cells[c].Terrain, sample.Terrain);
+            var count = grid.GetNeighbors(c, neighbors);
+            var around = neighbors[..count].ToArray().Append(c).ToArray();
+            Assert.Contains(sample.SourceCellId!.Value, around);
+            var coastal = around.Any(k => cells[k].WaterDepthMeters > 0f) && around.Any(k => cells[k].WaterDepthMeters <= 0f);
+            if (coastal) continue;
+            if (cells[c].WaterDepthMeters > 0f) Assert.Equal(cells[c].Terrain, sample.Terrain);
+            else Assert.NotEqual(TerrainType.Seawater, sample.Terrain);
         }
     }
 
@@ -123,7 +131,7 @@ public class SimulatedTerrainSamplerTests
 
             var sample = sampler.Sample(lat, lon);
             var source = cells[sample.SourceCellId!.Value];
-            if (source.WaterDepthMeters > 0f) Assert.True(sample.ElevationLevel < 0, $"水格取樣出 {sample.ElevationLevel} 級");
+            if (source.WaterDepthMeters > 0f) Assert.True(sample.ElevationLevel < (sample.WaterLevel ?? 0), $"水格取樣出 {sample.ElevationLevel} 級，水面 {sample.WaterLevel}");
             else Assert.True(sample.ElevationLevel >= 0, $"陸地格取樣出 {sample.ElevationLevel} 級");
 
             // 內插不能超出「來源格＋鄰居」的高度範圍（再加上海陸夾限造成的一級誤差）
@@ -131,10 +139,51 @@ public class SimulatedTerrainSamplerTests
             var around = new List<float> { source.SurfaceElevationMeters };
             for (var k = 0; k < count; k++) around.Add(cells[neighbors[k]].SurfaceElevationMeters);
             var meters = sample.ElevationLevel * SimulatedTerrainSampler.MetersPerElevationLevel;
-            var low = Math.Min(around.Min(), source.WaterDepthMeters > 0f ? -5f : 0f) - 5;
-            var high = Math.Max(around.Max(), source.WaterDepthMeters > 0f ? -5f : 0f) + 5;
+            // 再加上細部起伏（附近起伏的一成＋6 公尺，見 SimulatedTerrainSampler）
+            var detail = 0.1 * (around.Max() - around.Min()) + 6;
+            var low = Math.Min(around.Min(), source.WaterDepthMeters > 0f ? -5f : 0f) - 5 - detail;
+            var high = Math.Max(around.Max(), source.WaterDepthMeters > 0f ? -5f : 0f) + 5 + detail;
             Assert.InRange(meters, low, high);
         }
+    }
+
+    /// <summary>
+    /// 高原上的湖：水底低於湖面、但兩者都遠高於海平面。2026-10-24 以前水格一律被壓到 −1 級，
+    /// 高地湖放大後變成一片 −5 公尺的坑（水文地貌規劃 H0）。
+    /// </summary>
+    [Fact]
+    public void Sample_HighlandLake_KeepsItsSurfaceAboveSeaLevel()
+    {
+        var (grid, engine, _) = World.Value;
+        var cells = PlanetMaterializer.BuildCells(grid, engine.State); // 新的一份，不動共用的
+        var lake = Array.FindIndex(cells, c => c.WaterDepthMeters <= 0f);
+        cells[lake].WaterDepthMeters = 50f;
+        cells[lake].SurfaceElevationMeters = 950f;
+        cells[lake].WaterSurfaceMeters = 1_000f;
+        cells[lake].Terrain = TerrainType.Freshwater;
+
+        var sample = new SimulatedTerrainSampler(grid, cells).Sample(grid.Latitude[lake], grid.Longitude[lake]);
+
+        Assert.Equal(200, sample.WaterLevel);
+        Assert.InRange(sample.ElevationLevel, 1, 199);
+    }
+
+    /// <summary>
+    /// 冰蓋上的高度只能算一次冰厚：<see cref="SimulationState.SurfaceElevationAt"/> 已經含冰，
+    /// 2026-10-24 以前放大時又加一次，冰蓋憑空高出一倍冰厚（水文地貌規劃 H0）。
+    /// </summary>
+    [Fact]
+    public void BuildCells_IceIsCountedOnce()
+    {
+        var grid = SimulationGrid.Build(TestPlanet.RadiusMeters, 24);
+        var engine = new SimulationEngine(grid, 42);
+        var state = engine.State;
+        var land = Enumerable.Range(0, state.CellCount).First(c => state.WaterDepth[c] <= 0f);
+        state.IceThickness[land] = 800f;
+
+        var cells = PlanetMaterializer.BuildCells(grid, state);
+
+        Assert.Equal(state.SurfaceElevationAt(land) - state.SeaLevelMeters, cells[land].SurfaceElevationMeters, 3);
     }
 
     [Fact]
@@ -171,7 +220,8 @@ public class SimulatedTerrainSamplerTests
         Assert.All(tiles, t =>
         {
             Assert.NotNull(t.SourceCellId);
-            Assert.Equal(cells[t.SourceCellId!.Value].Terrain, t.Terrain);
+            // 地形類型可以被河、海岸、裸岩改掉（H6）；冰河照粗格
+            if (cells[t.SourceCellId!.Value].Terrain == TerrainType.Glacier) Assert.Equal(TerrainType.Glacier, t.Terrain);
         });
     }
 

@@ -74,9 +74,13 @@ public class PlanetMaterializationService
             Update(s => s with { Phase = "清除碎島" });
             var cleanup = SmallIslandCleanup.Apply(grid, engine.State);
 
+            // 12 個月的氣候與水文（水文地貌規劃 H6）：河寬、水情、每月的積雪結冰都存進粗格。碎島清除之後才算，跟寫進去的海陸一致
+            Update(s => s with { Phase = "解四季" });
+            var seasons = engine.Hydrology is null ? ((SeasonalClimate, SeasonalHydrologyResult)?)null : engine.SolveSeasons(12);
+
             Update(s => s with { Phase = "分類粗格" });
-            var cells = PlanetMaterializer.BuildCells(grid, engine.State, engine.Hydrology);
-            var sampler = new SimulatedTerrainSampler(grid, cells);
+            var cells = PlanetMaterializer.BuildCells(grid, engine.State, engine.Hydrology, seasons);
+            var sampler = new SimulatedTerrainSampler(grid, cells) { TileRadiusMeters = GoldbergPlanetGenerator.TargetHexagonEdgeLengthMeters };
             var generator = new GoldbergPlanetGenerator(GoldbergPlanetGenerator.SubdivisionFrequency, sampler);
 
             Update(s => s with { Phase = "寫入地塊", TotalTiles = generator.TotalTileCount, SunkIslandCells = cleanup.SunkCells });

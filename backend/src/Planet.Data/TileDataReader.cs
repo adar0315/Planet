@@ -16,6 +16,7 @@ internal sealed class TileDataReader : IDataReader
         nameof(Tile.Row), nameof(Tile.Col), nameof(Tile.Latitude),
         nameof(Tile.Longitude), nameof(Tile.Terrain), nameof(Tile.HeightCategory),
         nameof(Tile.ElevationLevel), nameof(Tile.SeaLevel), nameof(Tile.SourceCellId),
+        nameof(Tile.RiverWidthMeters), nameof(Tile.RiverCellId),
     ];
 
     private readonly IEnumerator<Tile> _enumerator;
@@ -77,6 +78,8 @@ internal sealed class TileDataReader : IDataReader
             nameof(Tile.ElevationLevel) => tile.ElevationLevel,
             nameof(Tile.SeaLevel) => tile.SeaLevel,
             nameof(Tile.SourceCellId) => tile.SourceCellId is { } source ? source : DBNull.Value,
+            nameof(Tile.RiverWidthMeters) => tile.RiverWidthMeters,
+            nameof(Tile.RiverCellId) => tile.RiverCellId is { } river ? river : DBNull.Value,
             _ => throw new IndexOutOfRangeException(),
         };
     }

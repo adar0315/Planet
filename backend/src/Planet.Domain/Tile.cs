@@ -44,8 +44,8 @@ public class Tile
     public int ElevationLevel { get; set; }
 
     /// <summary>
-    /// 該Tile位置的海平面等級（跟ElevationLevel同單位）。目前全部Tile統一為0（星球沒有做潮汐／大地
-    /// 水準面起伏），但存成每格獨立欄位，之後如果要做「海平面上升」「局部潮汐」之類的機制，不需要改schema。
+    /// 該Tile位置的水面等級（跟ElevationLevel同單位，兩者都相對全球海平面）。海與陸地是0；
+    /// 從模擬放大來的湖是湖面——高原上的湖，湖面可以遠高於海平面（水文地貌規劃 H0）。
     /// 判斷「是否淹沒在水下」用 ElevationLevel &lt; SeaLevel。
     /// </summary>
     public int SeaLevel { get; set; }
@@ -55,4 +55,13 @@ public class Tile
     /// 程序化生成的星球沒有來源，是 null。完整的地質狀態經由這個欄位查 <see cref="PlanetCell"/>。
     /// </summary>
     public int? SourceCellId { get; set; }
+
+    /// <summary>
+    /// 這一格範圍裡最大那條河的平均河寬（公尺）；沒有河是 0（水文地貌規劃 H6）。
+    /// 河比一格窄的時候地塊本身仍是陸地，拉遠時靠這個欄位把整格畫成河水的藍色、近看再細分出河道。
+    /// </summary>
+    public float RiverWidthMeters { get; set; }
+
+    /// <summary>那條河是從哪一個粗格流出來的（查 <see cref="PlanetCell.MonthlyDischargeRatio"/> 換算當月河寬）；沒有河是 null。</summary>
+    public int? RiverCellId { get; set; }
 }

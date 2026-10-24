@@ -27,6 +27,12 @@ namespace Planet.Data.Migrations
                     b.Property<int>("CellId")
                         .HasColumnType("int");
 
+                    b.Property<float>("AggradationRate")
+                        .HasColumnType("real");
+
+                    b.Property<float>("BaseflowShare")
+                        .HasColumnType("real");
+
                     b.Property<int>("Boundary")
                         .HasColumnType("int");
 
@@ -42,10 +48,31 @@ namespace Planet.Data.Migrations
                     b.Property<int>("CrustType")
                         .HasColumnType("int");
 
+                    b.Property<float>("DeflationRate")
+                        .HasColumnType("real");
+
+                    b.Property<float>("DeltaSupply")
+                        .HasColumnType("real");
+
+                    b.Property<int>("ExposedRock")
+                        .HasColumnType("int");
+
+                    b.Property<int>("FlowRegime")
+                        .HasColumnType("int");
+
+                    b.Property<int>("FrozenMonths")
+                        .HasColumnType("int");
+
+                    b.Property<float>("GlacialIncisionRate")
+                        .HasColumnType("real");
+
                     b.Property<int>("HeightCategory")
                         .HasColumnType("int");
 
                     b.Property<float>("IceThicknessMeters")
+                        .HasColumnType("real");
+
+                    b.Property<float>("IncisionRate")
                         .HasColumnType("real");
 
                     b.Property<bool>("IsOcean")
@@ -54,8 +81,26 @@ namespace Planet.Data.Migrations
                     b.Property<double>("Latitude")
                         .HasColumnType("float");
 
+                    b.Property<float>("LoessRate")
+                        .HasColumnType("real");
+
                     b.Property<double>("Longitude")
                         .HasColumnType("float");
+
+                    b.Property<float>("MeltShare")
+                        .HasColumnType("real");
+
+                    b.Property<byte[]>("MonthlyDischargeRatio")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<byte[]>("MonthlyPrecipitation")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<byte[]>("MonthlyTemperature")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
 
                     b.Property<float>("OrganicThicknessMeters")
                         .HasColumnType("real");
@@ -72,8 +117,14 @@ namespace Planet.Data.Migrations
                     b.Property<float>("RiverSize")
                         .HasColumnType("real");
 
+                    b.Property<float>("RiverWidthMeters")
+                        .HasColumnType("real");
+
                     b.Property<float>("SedimentThicknessMeters")
                         .HasColumnType("real");
+
+                    b.Property<int>("SnowMonths")
+                        .HasColumnType("int");
 
                     b.Property<float>("SurfaceElevationMeters")
                         .HasColumnType("real");
@@ -88,6 +139,12 @@ namespace Planet.Data.Migrations
                         .HasColumnType("real");
 
                     b.Property<float>("WaterDepthMeters")
+                        .HasColumnType("real");
+
+                    b.Property<float>("WaterSurfaceMeters")
+                        .HasColumnType("real");
+
+                    b.Property<float>("WaveExposure")
                         .HasColumnType("real");
 
                     b.HasKey("CellId");
@@ -382,6 +439,12 @@ namespace Planet.Data.Migrations
 
                     b.Property<double>("Longitude")
                         .HasColumnType("float");
+
+                    b.Property<int?>("RiverCellId")
+                        .HasColumnType("int");
+
+                    b.Property<float>("RiverWidthMeters")
+                        .HasColumnType("real");
 
                     b.Property<int>("Row")
                         .HasColumnType("int");

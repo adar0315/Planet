@@ -55,11 +55,19 @@ public static class PlanetMaterializer
     /// <param name="grid">模擬網格。</param>
     /// <param name="state">模擬狀態。</param>
     /// <param name="hydrology">水系（v2 才有）：給了就把河記進每一格（見 <see cref="PlanetCell.RiverDownstreamCellId"/>）。</param>
-    public static PlanetCell[] BuildCells(SimulationGrid grid, SimulationState state, Hydrology? hydrology = null)
+    /// <param name="seasonal">
+    /// 12 個月的氣候與水文（水文地貌規劃 H6，見 <c>SimulationEngine.SolveSeasons</c>）：給了就記下每月的氣溫、降水、流量、
+    /// 積雪與結冰，以及河的水情。河寬用四季的平均流量（有沙漠的河道損失）。
+    /// </param>
+    public static PlanetCell[] BuildCells(
+        SimulationGrid grid, SimulationState state, Hydrology? hydrology = null,
+        (SeasonalClimate Climate, SeasonalHydrologyResult Hydrology)? seasonal = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(state);
-        var minDischarge = hydrology is null ? 0f : Rivers.MinDischarge(grid, state);
+        // 畫出來的河：集水 1,000 平方公里（H4）；河的相對大小照舊以這個門檻起算
+        var minDischarge = hydrology is null ? 0f : Rivers.MinDischarge(grid, state, Rivers.MinDrawnDrainageAreaSquareKm);
+        var waveExposure = WaveExposure(grid, state);
 
         var isOcean = MainOceanMask(grid, state);
         var wetness = LandPrecipitationRank(state);
@@ -69,9 +77,10 @@ public static class PlanetMaterializer
         {
             var water = state.WaterDepth[c];
             var ice = state.IceThickness[c];
-            var surface = state.SurfaceElevationAt(c) - state.SeaLevelMeters;
-            // 陸地的走動面是冰面（冰蓋上面走）；水域的高度是海床
-            var elevation = water > 0f ? surface : surface + ice;
+            // 陸地的走動面是冰面（冰蓋上面走）；水域的高度是水底。
+            // SurfaceElevationAt 已經含冰厚，不可以再加一次（水文地貌規劃 H0 修掉的重複計算）
+            var elevation = state.SurfaceElevationAt(c) - state.SeaLevelMeters;
+            var waterSurface = water > 0f ? state.WaterSurfaceAt(c) - state.SeaLevelMeters : 0f;
             var (terrain, category) = Classify(state, c, elevation, isOcean[c], wetness[c]);
 
             cells[c] = new PlanetCell
@@ -83,6 +92,7 @@ public static class PlanetMaterializer
                 HeightCategory = category,
                 SurfaceElevationMeters = elevation,
                 WaterDepthMeters = water,
+                WaterSurfaceMeters = waterSurface,
                 IsOcean = isOcean[c],
                 IceThicknessMeters = ice,
                 SedimentThicknessMeters = state.SedimentThickness[c],
@@ -96,17 +106,126 @@ public static class PlanetMaterializer
                 PlateId = state.PlateId[c],
                 Boundary = (int)state.Boundary[c],
                 VolcanicActivity = state.VolcanicActivity[c],
+                ExposedRock = (int)Lithology.ExposedAt(state, c),
+                IncisionRate = state.IncisionRate[c],
+                AggradationRate = state.AggradationRate[c],
+                GlacialIncisionRate = state.GlacialIncisionRate[c],
+                DeltaSupply = state.DeltaSupply[c],
+                DeflationRate = state.DeflationRate[c],
+                LoessRate = state.LoessRate[c],
+                WaveExposure = waveExposure[c],
             };
+
+            if (seasonal is { } season)
+            {
+                var months = season.Climate.Seasons;
+                var temperature = new float[months];
+                var precipitation = new float[months];
+                var ratio = new float[months];
+                var mean = season.Hydrology.MeanDischarge[c];
+                for (var m = 0; m < months; m++)
+                {
+                    temperature[m] = season.Climate.Temperature[m][c];
+                    precipitation[m] = season.Climate.Precipitation[m][c];
+                    ratio[m] = mean > 0f ? season.Hydrology.Discharge[m][c] / mean : 1f;
+                    if (season.Hydrology.SnowCovered[m][c]) cells[c].SnowMonths |= 1 << m;
+                    if (season.Hydrology.Frozen[m][c]) cells[c].FrozenMonths |= 1 << m;
+                }
+                cells[c].MonthlyTemperature = ToBytes(temperature);
+                cells[c].MonthlyPrecipitation = ToBytes(precipitation);
+                cells[c].MonthlyDischargeRatio = ToBytes(ratio);
+            }
 
             // 河：陸地、流量過門檻、有下游（碎島清除之後變成水的格子不算）
             if (hydrology is not null && water <= 0f && Rivers.IsRiver(hydrology.Discharge[c], minDischarge) && hydrology.FlowParent[c] >= 0)
             {
                 cells[c].RiverDownstreamCellId = hydrology.FlowParent[c];
                 cells[c].RiverSize = Rivers.Size(hydrology.Discharge[c], minDischarge);
+                // 河寬用四季平均（有沙漠的河道損失：外來河流進沙漠會越來越窄）；沒有四季就用年平均
+                var flow = seasonal?.Hydrology.MeanDischarge[c] ?? hydrology.Discharge[c];
+                cells[c].RiverWidthMeters = (float)Math.Max(Rivers.MinChannelWidthMeters * 0.5, Rivers.ChannelWidthMeters(flow, minDischarge));
+                if (seasonal is { } s2)
+                {
+                    cells[c].FlowRegime = (int)s2.Hydrology.Regime[c];
+                    cells[c].BaseflowShare = s2.Hydrology.BaseflowShare[c];
+                    cells[c].MeltShare = s2.Hydrology.MeltShare[c];
+                }
             }
         }
 
         return cells;
+    }
+
+    private static byte[] ToBytes(float[] values)
+    {
+        var bytes = new byte[values.Length * sizeof(float)];
+        Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    /// <summary>把 <see cref="PlanetCell.MonthlyTemperature"/> 這類欄位還原成 float 陣列（空的回傳空陣列）。</summary>
+    /// <param name="bytes">欄位的內容。</param>
+    public static float[] FromBytes(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        var values = new float[bytes.Length / sizeof(float)];
+        Buffer.BlockCopy(bytes, 0, values, 0, values.Length * sizeof(float));
+        return values;
+    }
+
+    /// <summary>海岸受浪的範圍（公尺）：看這麼遠以內的海有多少比浪基面深。</summary>
+    private const double WaveExposureRadiusMeters = 100_000;
+
+    /// <summary>浪基面（公尺），同 <see cref="FluvialErosion"/>。</summary>
+    private const float WaveBaseMeters = 200f;
+
+    /// <summary>
+    /// 每一格靠海的陸地受浪的程度（0~1）：<see cref="WaveExposureRadiusMeters"/> 內的海格裡，比浪基面深的比例。
+    /// 寬的大陸棚、海灣把浪的能量消耗掉；面對開闊深海的海岸浪大，硬岩削成海崖、軟的沉積物堆不住。
+    /// </summary>
+    private static float[] WaveExposure(SimulationGrid grid, SimulationState state)
+    {
+        var n = state.CellCount;
+        var exposure = new float[n];
+        var hops = Math.Max(1, (int)Math.Round(WaveExposureRadiusMeters / grid.AverageCellSpacingMeters));
+        Parallel.For(0, n, () => (Stamp: new int[n], Id: 0, Queue: new List<int>()), (c, _, local) =>
+        {
+            if (state.WaterDepth[c] > 0f) return local;
+            Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
+            var count = grid.GetNeighbors(c, neighbors);
+            var coastal = false;
+            for (var k = 0; k < count && !coastal; k++) coastal = state.WaterDepth[neighbors[k]] > 0f;
+            if (!coastal) return local;
+
+            local.Id++;
+            var queue = local.Queue;
+            queue.Clear();
+            queue.Add(c);
+            local.Stamp[c] = local.Id;
+            int sea = 0, deep = 0, ringStart = 0;
+            for (var ring = 0; ring < hops && ringStart < queue.Count; ring++)
+            {
+                var ringEnd = queue.Count;
+                for (var i = ringStart; i < ringEnd; i++)
+                {
+                    var nbCount = grid.GetNeighbors(queue[i], neighbors);
+                    for (var k = 0; k < nbCount; k++)
+                    {
+                        var nb = neighbors[k];
+                        if (local.Stamp[nb] == local.Id) continue;
+                        local.Stamp[nb] = local.Id;
+                        queue.Add(nb);
+                        if (state.WaterDepth[nb] <= 0f) continue;
+                        sea++;
+                        if (state.WaterDepth[nb] > WaveBaseMeters) deep++;
+                    }
+                }
+                ringStart = ringEnd;
+            }
+            exposure[c] = sea > 0 ? deep / (float)sea : 0f;
+            return local;
+        }, _ => { });
+        return exposure;
     }
 
     private static (TerrainType Terrain, int HeightCategory) Classify(
