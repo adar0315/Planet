@@ -32,6 +32,16 @@ public static class StateHash
         h = Mix(h, s.Boundary);
         h = Mix(h, s.VolcanicActivity);
         h = Mix(h, s.OceanicOnly);
+        h = Mix(h, s.StructuralRelief);
+        h = Mix(h, s.CoverThickness);
+        h = Mix(h, s.CoverRock);
+        h = Mix(h, s.IncisionRate);
+        h = Mix(h, s.AggradationRate);
+        h = Mix(h, s.GlacialIncisionRate);
+        h = Mix(h, s.DeltaSupply);
+        h = Mix(h, s.FloodFactor);
+        h = Mix(h, s.DeflationRate);
+        h = Mix(h, s.LoessRate);
         h = Mix(h, [s.SeaLevelMeters]);
         h = Mix(h, PlateFields(engine));
         h = Mix(h, engine.Plates.PlateIdByCell);
@@ -56,6 +66,16 @@ public static class StateHash
             ("地殼厚度", Mix(Offset, s.CrustThickness)),
             ("邊界", Mix(Offset, s.Boundary)),
             ("火山活動", Mix(Offset, s.VolcanicActivity)),
+            ("構造起伏", Mix(Offset, s.StructuralRelief)),
+            ("蓋層厚度", Mix(Offset, s.CoverThickness)),
+            ("蓋層岩性", Mix(Offset, s.CoverRock)),
+            ("下切速率", Mix(Offset, s.IncisionRate)),
+            ("堆積速率", Mix(Offset, s.AggradationRate)),
+            ("冰蝕速率", Mix(Offset, s.GlacialIncisionRate)),
+            ("三角洲供砂", Mix(Offset, s.DeltaSupply)),
+            ("洪峰係數", Mix(Offset, s.FloodFactor)),
+            ("風蝕", Mix(Offset, s.DeflationRate)),
+            ("黃土", Mix(Offset, s.LoessRate)),
             ("海平面", Mix(Offset, [s.SeaLevelMeters])),
             ("板塊", Mix(Offset, PlateFields(engine))),
             ("板塊歸屬", Mix(Offset, engine.Plates.PlateIdByCell)),

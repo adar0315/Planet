@@ -68,6 +68,18 @@ public enum SimulationField
     /// 要有依連通性注水的水系（v2）才畫得出河；沒有的話只有湖與海。
     /// </summary>
     RiversAndLakes = 15,
+
+    /// <summary>
+    /// 地表露出的岩石（水文地貌規劃 H1）：結晶基盤（粉紅）、沉積岩（土黃）、火山岩（暗紅）、混雜岩（紫）、
+    /// 鬆散沉積物（淡米色）。海是暗藍底，海床的岩石不畫——要看的是陸地上的軟硬分布。
+    /// </summary>
+    Lithology = 16,
+
+    /// <summary>
+    /// 侵蝕與堆積（水文地貌規劃 H2）：陸地上紅褐＝河流下切（越亮越快）、黃＝河流堆積（沖積扇、沖積平原）、
+    /// 青＝冰川刨蝕、淡黃白＝風蝕（沙漠、戈壁）、粉褐＝黃土；海上綠＝三角洲的供砂。都是約 100 萬年的移動平均。
+    /// </summary>
+    Landforms = 17,
 }
 
 /// <summary>
@@ -280,11 +292,51 @@ public sealed class SimulationFieldRenderer
         SimulationField.Runoff => state.WaterDepth[cell] > 0f
             ? ((byte)0x0d, (byte)0x12, (byte)0x22)
             : SqrtRamp(state.Moisture[cell], 10f, (0x3a, 0x2e, 0x1e), (0x4f, 0xd0, 0xff)),
+        SimulationField.Lithology => LithologyColor(state, cell),
+        SimulationField.Landforms => LandformColor(state, cell),
         SimulationField.VolcanicActivity => state.VolcanicActivity[cell] <= 0f
             ? ((byte)0x14, (byte)0x14, (byte)0x18)
             : Ramp(state.VolcanicActivity[cell], 0f, 8f, (0x5a, 0x12, 0x08), (0xff, 0xe8, 0x8a)),
         _ => (0xff, 0x00, 0xff),
     };
+
+    private static (byte R, byte G, byte B) LandformColor(SimulationState state, int cell)
+    {
+        if (state.WaterDepth[cell] > 0f)
+        {
+            return state.DeltaSupply[cell] > 0f
+                ? SqrtRamp(state.DeltaSupply[cell], 2_000f, (0x10, 0x30, 0x20), (0x60, 0xff, 0x80))
+                : ((byte)0x0c, (byte)0x14, (byte)0x24);
+        }
+        if (state.LoessRate[cell] > 1f && state.LoessRate[cell] > state.AggradationRate[cell])
+            return SqrtRamp(state.LoessRate[cell], 100f, (0x50, 0x38, 0x30), (0xe8, 0xa8, 0x80));
+        if (state.DeflationRate[cell] > 1f)
+            return SqrtRamp(state.DeflationRate[cell], 50f, (0x60, 0x58, 0x40), (0xff, 0xf4, 0xc0));
+        var aggradation = state.AggradationRate[cell];
+        var glacial = state.GlacialIncisionRate[cell];
+        var incision = state.IncisionRate[cell];
+        if (aggradation >= incision && aggradation >= glacial && aggradation > 1f)
+            return SqrtRamp(aggradation, 400f, (0x40, 0x38, 0x18), (0xff, 0xe0, 0x40));
+        if (glacial > incision && glacial > 1f)
+            return SqrtRamp(glacial, 400f, (0x18, 0x38, 0x40), (0x80, 0xf0, 0xff));
+        return incision > 1f
+            ? SqrtRamp(incision, 400f, (0x30, 0x22, 0x1c), (0xff, 0x70, 0x40))
+            : ((byte)0x2a, (byte)0x2a, (byte)0x2a);
+    }
+
+    private static (byte R, byte G, byte B) LithologyColor(SimulationState state, int cell)
+    {
+        if (state.WaterDepth[cell] > 0f) return (0x10, 0x1c, 0x30);
+        return Simulation.Lithology.ExposedAt(state, cell) switch
+        {
+            ExposedRock.LooseSediment => (0xe8, 0xdc, 0xb8),
+            ExposedRock.Sedimentary => (0xc8, 0x9a, 0x50),
+            ExposedRock.Volcanic => (0x8a, 0x2a, 0x22),
+            ExposedRock.Melange => (0x7a, 0x50, 0x9a),
+            ExposedRock.Crystalline => (0xe0, 0x8a, 0x9a),
+            _ => (0x40, 0x48, 0x58), // 露出來的海洋玄武岩（被抬上岸的洋殼）
+        };
+    }
 
     /// <summary>
     /// 地形分層著色：水面下依深度由淺到深、陸地依高度由綠到褐到白。

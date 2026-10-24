@@ -16,6 +16,17 @@ namespace Planet.Simulation;
 ///    褶皺是疊在地表上的一層，刨 1 公尺就降 1 公尺；基岩要換算均衡反彈（見 <see cref="Erosion"/> 的類別說明）。
 /// 5. 流量用 <see cref="Hydrology.Discharge"/>（降水的相對單位 × 格），係數直接對著陸地高度校準
 ///    （2026-10-19 使用者選定：40 Myr 時陸地平均高出海面約 0.8~1 公里、最高峰 9 公里以內）。
+///
+/// 水文地貌規劃 H2（2026-10-24）加上的三件事：
+///
+/// 6. **岩性**：侵蝕乘上露出岩石的侵蝕係數（<see cref="Lithology.Erodibility"/>），硬岩留下山脊與峽谷、軟岩被削成盆地；
+///    再乘上洪峰係數（<see cref="SimulationState.FloodFactor"/>）。
+/// 7. **搬運容量**：載量超過 <see cref="TransportCoefficient"/>·Q·S 的部分在陸地上堆下來——山前坡度一緩就堆成沖積扇、
+///    緩坡的下游堆成沖積平原。以前搬運沒有上限，泥沙全部直送湖或海，陸地上不會有任何堆積地形。
+///    堆積把河床墊高、坡度變陡、容量跟著變大，所以會自己收斂成「剛好搬得動」的坡度（均衡河）。
+/// 8. **河口三角洲**：河口附近的淺海每步最多墊高 <see cref="MaxDeltaFillPerStepMeters"/>，可以墊出海面幾公尺，
+///    陸地慢慢往海裡長；其餘照舊沿大陸棚往外鋪。速率限制是必要的：大河一步的泥沙可以填平上百格大陸棚，
+///    不限速的話三角洲一步就往外長幾百公里。
 /// </summary>
 public sealed class FluvialErosion
 {
@@ -41,6 +52,46 @@ public sealed class FluvialErosion
 
     /// <summary>結冰的溫度門檻（攝氏），低於這個算冰川。</summary>
     private const float GlacialTemperatureC = -5f;
+
+    /// <summary>
+    /// 搬運容量係數：一步能帶走的物質（公尺×格）＝ 這個值 · Q · S · 洪峰係數 · Δt（百萬年）。
+    /// 載量 ≈ 集水區格數 × 平均剝蝕，Q ≈ 集水區格數 × 平均逕流，所以「搬得動 / 帶來的」≈ 係數·S·逕流 / 剝蝕：
+    /// 坡度低於 剝蝕÷(係數·逕流) 的河段就開始堆。地球的沖積平原坡度在 10⁻⁴~10⁻³，以剝蝕約 200 公尺／百萬年、
+    /// 逕流約 2 估，3×10⁵ 讓門檻落在 3×10⁻⁴ 附近（n=150 一格約 4 公尺的落差）。
+    /// 2026-10-24 第一次在 n=150 劇本上跑：3×10⁵ 時 41 Myr 陸地有 83% 以堆積為主、36% 露出鬆散沉積物（內陸高原整片在堆），
+    /// 提高 10 倍讓門檻落在 3×10⁻⁵（地球大河下游平原的坡度）。
+    /// </summary>
+    internal double TransportCoefficient { get; set; } = 3e6;
+
+    /// <summary>
+    /// 一步最多堆高多少公尺（陸上的河流堆積）。20 公尺／5 萬年 ＝ 0.4 公釐／年，地球沖積扇、前陸盆地的量級。
+    /// 不設上限的話，大河在第一個緩坡就把整條河的泥沙倒下來，堆出一座壩。
+    /// </summary>
+    private const double MaxAggradationPerStepMeters = 20.0;
+
+    /// <summary>河口附近多遠以內（公尺）算三角洲的範圍。地球的大三角洲（密西西比、尼羅河、恆河）約一兩百公里。</summary>
+    private const double DeltaRadiusMeters = 60_000.0;
+
+    /// <summary>
+    /// 三角洲範圍裡的海格一步最多墊高多少公尺。2 公尺／5 萬年：130 公尺深的大陸棚約 300 萬年墊出海面，
+    /// 三角洲每 300 萬年往外長一格（15 公里），40 Myr 長約 200 公里——大三角洲的量級。
+    /// </summary>
+    private const float MaxDeltaFillPerStepMeters = 2f;
+
+    /// <summary>三角洲最高墊到海平面以上幾公尺（三角洲平原）。</summary>
+    private const float DeltaTopMeters = 3f;
+
+    /// <summary>
+    /// 浪對三角洲的削減（水文地貌規劃 H5）：三角洲範圍裡面向深水（比浪基面深）的海格比例 × 這個值，就是墊高速率打的折扣。
+    /// 開闊海岸的河口被浪削成平直的沙岸（地球上浪控型三角洲，如塞內加爾河），封閉的淺海才長得出鳥足狀的大三角洲（密西西比）。
+    /// </summary>
+    private const double WaveDeltaDamping = 0.8;
+
+    /// <summary>比這更深的海不長三角洲（公尺）：活動大陸邊緣的河口直接面對深海，泥沙順著海底峽谷流走。</summary>
+    private const float DeltaMaxWaterDepthMeters = 300f;
+
+    /// <summary>診斷量（下切、堆積、冰蝕、三角洲）移動平均的時間常數（百萬年）。</summary>
+    private const double RateAveragingMyr = 1.0;
 
     /// <summary>浪基面：外面的海比這個淺（公尺）就不算受浪的邊，見 <see cref="SeaNeighborCount"/>。</summary>
     private const float WaveBaseDepthMeters = 200f;
@@ -90,6 +141,11 @@ public sealed class FluvialErosion
     private readonly List<int> _visited = [];
     private int _stamp;
     private readonly int _maxSeaHops;
+    private readonly int _deltaHops;
+    private readonly float[] _incision;
+    private readonly float[] _aggradation;
+    private readonly float[] _glacial;
+    private readonly float[] _deltaSupply;
 
     /// <summary>診斷用：最近一步每一格要求的地表降低量（公尺，夾上限之前）。</summary>
     internal float[] LastRequestedLowering { get; }
@@ -133,7 +189,18 @@ public sealed class FluvialErosion
         _visitStamp = new int[n];
         LastRequestedLowering = new float[n];
         _maxSeaHops = Math.Max(1, (int)Math.Round(MaxSeaTransportMeters / grid.AverageCellSpacingMeters));
+        _deltaHops = Math.Max(0, (int)Math.Round(DeltaRadiusMeters / grid.AverageCellSpacingMeters));
+        _incision = new float[n];
+        _aggradation = new float[n];
+        _glacial = new float[n];
+        _deltaSupply = new float[n];
     }
+
+    /// <summary>最近一步在陸上堆下的（立方公里，沖積扇與沖積平原）。</summary>
+    public double LastLandDepositKm3 { get; private set; }
+
+    /// <summary>最近一步堆進三角洲範圍的（立方公里）。</summary>
+    public double LastDeltaDepositKm3 { get; private set; }
 
     /// <summary>
     /// 推進一步：用上一步的水（海、湖、流向、流量）刨蝕並搬運。排在均衡注水之前（跟 <see cref="Erosion"/> 同一個慣例）。
@@ -151,6 +218,8 @@ public sealed class FluvialErosion
         var parent = hydrology.FlowParent;
         var order = hydrology.FlowOrder;
         var discharge = hydrology.Discharge;
+        // 只有真的河才長三角洲：每一格海岸陸地都「流進海」，不擋的話整條海岸線都在墊三角洲
+        var deltaRiver = Rivers.MinDischarge(_grid, state);
 
         Parallel.For(0, n, c =>
         {
@@ -162,10 +231,15 @@ public sealed class FluvialErosion
         Array.Clear(_lakeCellCount);
         Array.Clear(_lakeCapacity);
         Array.Clear(LastRequestedLowering);
+        Array.Clear(_incision);
+        Array.Clear(_aggradation);
+        Array.Clear(_glacial);
+        Array.Clear(_deltaSupply);
         LargestDump = default;
         for (var c = 0; c < n; c++) if (lakeOf[c] >= 0) _lakeCellCount[lakeOf[c]]++;
 
-        double eroded = 0, deposited = 0, lake = 0, relief = 0;
+        double eroded = 0, deposited = 0, lake = 0, relief = 0, land = 0;
+        _deltaDeposited = 0;
 
         // 泛洪順序反過來走就是上游先（每一格的流向 parent 都在它前面被泛洪到）
         for (var i = hydrology.FlowOrderCount - 1; i >= 0; i--)
@@ -174,19 +248,28 @@ public sealed class FluvialErosion
             if (IsSea(state, lakeOf, c) || lakeOf[c] >= 0) continue;
 
             var p = parent[c];
-            var lowering = BaseWeatheringMetersPerMyr * deltaMyr
-                + WaveErosionMetersPerMyr * SeaNeighborCount(state, lakeOf, c) * deltaMyr;
+            // 岩性：硬岩的風化、浪蝕、河蝕都慢（H2）
+            var erodibility = Lithology.Erodibility(Lithology.ExposedAt(state, c));
+            var flood = state.FloodFactor[c];
+            var lowering = erodibility * (BaseWeatheringMetersPerMyr
+                + WaveErosionMetersPerMyr * SeaNeighborCount(state, lakeOf, c)) * deltaMyr;
+            var drop = 0f;
             if (p >= 0)
             {
                 // 坡度以水面為基準：流進海或湖的那一格，落差算到水面
-                var drop = _surface[c] - _waterSurface[p];
+                drop = _surface[c] - _waterSurface[p];
                 if (drop > 0f)
                 {
-                    var stream = StreamPowerCoefficient
+                    var stream = StreamPowerCoefficient * erodibility * flood
                         * Math.Pow(Math.Max(discharge[c], 0f), DischargeExponent)
                         * drop / SlopeReferenceLengthMeters;
-                    if (state.Temperature[c] < GlacialTemperatureC) stream *= GlacialErosionMultiplier;
-                    lowering += Math.Min(stream * deltaMyr, drop * MaxStreamLoweringFractionOfDrop);
+                    var glacial = state.Temperature[c] < GlacialTemperatureC;
+                    if (glacial) stream *= GlacialErosionMultiplier;
+                    var streamLowering = Math.Min(stream * deltaMyr, drop * MaxStreamLoweringFractionOfDrop);
+                    lowering += streamLowering;
+                    var rate = (float)(streamLowering / deltaMyr);
+                    if (glacial) _glacial[c] = rate;
+                    else _incision[c] = rate;
                 }
             }
             LastRequestedLowering[c] = (float)lowering;
@@ -202,6 +285,25 @@ public sealed class FluvialErosion
                 relief += fromRelief;
             }
             if (_load[c] <= 0) continue;
+
+            // 搬運容量（H2）：搬不動的在這一格堆下來——沖積扇、沖積平原。流進海或湖的那一格不堆（交給三角洲與湖）
+            if (p >= 0 && !IsSea(state, lakeOf, p) && lakeOf[p] < 0)
+            {
+                var capacity = TransportCoefficient * flood * Math.Max(discharge[c], 0f)
+                    * Math.Max(drop, 0f) / SlopeReferenceLengthMeters * deltaMyr;
+                var excess = _load[c] - capacity;
+                if (excess > 0)
+                {
+                    var settle = Math.Min(excess, MaxAggradationPerStepMeters);
+                    state.SedimentThickness[c] += (float)settle;
+                    _surface[c] += (float)settle;
+                    _load[c] -= settle;
+                    deposited += settle;
+                    land += settle;
+                    _aggradation[c] = (float)(settle / deltaMyr);
+                    if (_load[c] <= 0) continue;
+                }
+            }
 
             // 自己就在存水盆地裡（湖邊的坡）：泥沙進湖
             var basin = basinOf[c];
@@ -221,7 +323,11 @@ public sealed class FluvialErosion
             }
             if (IsSea(state, lakeOf, p))
             {
-                deposited += DepositInSea(state, lakeOf, p, _load[c]);
+                // 河口：先墊三角洲（限速），剩下的沿大陸棚往外鋪
+                var toDelta = deltaRiver > 0f && discharge[c] >= deltaRiver ? BuildDelta(state, lakeOf, p, _load[c], deltaMyr) : 0.0;
+                deposited += toDelta;
+                _load[c] -= toDelta;
+                if (_load[c] > 0) deposited += DepositInSea(state, lakeOf, p, _load[c]);
                 _load[c] = 0;
                 continue;
             }
@@ -279,12 +385,141 @@ public sealed class FluvialErosion
             lake += add;
         }
 
+        if (SlumpEnabled) SlumpSteepSediment(state, lakeOf);
+
+        // 診斷量的移動平均（約 100 萬年）：放大時決定河谷、平原、三角洲的樣子
+        var alpha = (float)Math.Min(1.0, deltaMyr / RateAveragingMyr);
+        Parallel.For(0, n, c =>
+        {
+            state.IncisionRate[c] += (_incision[c] - state.IncisionRate[c]) * alpha;
+            state.AggradationRate[c] += (_aggradation[c] - state.AggradationRate[c]) * alpha;
+            state.GlacialIncisionRate[c] += (_glacial[c] - state.GlacialIncisionRate[c]) * alpha;
+            state.DeltaSupply[c] += (_deltaSupply[c] - state.DeltaSupply[c]) * alpha;
+        });
+
         var cellKm2 = _grid.AverageCellAreaSquareMeters / 1e6;
+        LastLandDepositKm3 = land / 1000.0 * cellKm2;
+        LastDeltaDepositKm3 = _deltaDeposited / 1000.0 * cellKm2;
         LastErodedVolumeKm3 = eroded / 1000.0 * cellKm2;
         LastDepositedVolumeKm3 = deposited / 1000.0 * cellKm2;
         LastLakeDepositKm3 = lake / 1000.0 * cellKm2;
         SeaDepositedKm3 += (deposited - lake) / 1000.0 * cellKm2;
         LastReliefErodedKm3 = relief / 1000.0 * cellKm2;
+    }
+
+    private double _deltaDeposited;
+
+    /// <summary>
+    /// 鬆散沉積物最陡能多陡（落差÷格距）。坡面上的鬆散物質會潛移、崩落，十幾公里的尺度上沉積面的坡度很少超過 1~3°。
+    /// </summary>
+    private const double MaxSedimentSlope = 0.05;
+
+    /// <summary>校準用：坡面崩落開不開。</summary>
+    internal bool SlumpEnabled { get; set; } = true;
+
+    /// <summary>最近一步崩落滑走的鬆散沉積物（立方公里）。</summary>
+    public double LastSlumpedKm3 { get; private set; }
+
+    /// <summary>
+    /// 坡面崩落（水文地貌規劃 H2 補的安全網）：鬆散沉積物比最低的鄰居高出 <see cref="MaxSedimentSlope"/>·格距以上，
+    /// 多出來的一半滑到那個鄰居（是海就照常進海），一步最多 <see cref="MaxAggradationPerStepMeters"/>。物質守恆，不算侵蝕也不算堆積。
+    ///
+    /// 模型原本沒有任何坡面作用，流水又只靠流量搬：沒有雨的沙漠裡，風或流水堆下的沉積物一旦堆成一座小山，
+    /// 就沒有任何作用搬得動它。2026-10-24 在 n=150 劇本上量到一格 15 公里厚的沉積、地表高出鄰居 6 公里。
+    /// </summary>
+    private void SlumpSteepSediment(SimulationState state, int[] lakeOf)
+    {
+        var maxDrop = MaxSedimentSlope * _grid.AverageCellSpacingMeters;
+        var moved = 0.0;
+        for (var c = 0; c < state.CellCount; c++)
+        {
+            var sediment = state.SedimentThickness[c];
+            if (sediment <= 0f || state.WaterDepth[c] > 0f) continue;
+            var lowest = -1;
+            var lowestSurface = float.MaxValue;
+            var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+            for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+            {
+                var nb = _grid.Neighbors[baseIndex + k];
+                if (nb == SimulationGrid.NoNeighbor) continue;
+                var level = state.WaterDepth[nb] > 0f ? _waterSurface[nb] : _surface[nb]; // 陸地用這一步更新過的地表
+                if (level < lowestSurface) { lowestSurface = level; lowest = nb; }
+            }
+            if (lowest < 0) continue;
+            var excess = _surface[c] - lowestSurface - maxDrop;
+            if (excess <= 0) continue;
+            // 一步最多滑走 MaxAggradationPerStepMeters（跟河流堆積同一個速率上限）：一次搬幾十公里的話，
+            // 板塊座標系回寫時混疊的地殼點會照抄那一格的沉積物，搬得越多複製得越多（2026-10-24 n=150 量到一格 225 公里）
+            var take = Math.Min(Math.Min(sediment, excess / 2), MaxAggradationPerStepMeters);
+            state.SedimentThickness[c] = (float)(sediment - take);
+            _surface[c] -= (float)take;
+            if (IsSea(state, lakeOf, lowest)) DepositInSea(state, lakeOf, lowest, take);
+            else
+            {
+                state.SedimentThickness[lowest] += (float)take;
+                _surface[lowest] += (float)take;
+            }
+            moved += take;
+        }
+        LastSlumpedKm3 = moved / 1000.0 * _grid.AverageCellAreaSquareMeters / 1e6;
+    }
+
+    /// <summary>
+    /// 河口三角洲：從河口一圈一圈往外（<see cref="DeltaRadiusMeters"/> 內），把夠淺的海格各墊高最多 <see cref="MaxDeltaFillPerStepMeters"/>，
+    /// 最高到海平面以上 <see cref="DeltaTopMeters"/>。回傳堆下去的量（不超過 <paramref name="amount"/>）。
+    /// 墊出海面的格子下一步就是陸地（三角洲平原），河口跟著往外移，三角洲一格一格往海裡長。
+    /// </summary>
+    private double BuildDelta(SimulationState state, int[] lakeOf, int mouth, double amount, double deltaMyr)
+    {
+        var top = state.SeaLevelMeters + DeltaTopMeters;
+        var deepest = state.SeaLevelMeters - DeltaMaxWaterDepthMeters;
+        var put = 0.0;
+        _stamp++;
+        _visited.Clear();
+        _visited.Add(mouth);
+        _visitStamp[mouth] = _stamp;
+        var ringStart = 0;
+        // 先把範圍圈出來：浪的大小要看整個範圍裡有多少深水
+        for (var ring = 0; ring < _deltaHops && ringStart < _visited.Count; ring++)
+        {
+            var ringEnd = _visited.Count;
+            for (var i = ringStart; i < ringEnd; i++)
+            {
+                var baseIndex = _visited[i] * SimulationGrid.MaxNeighborsPerCell;
+                for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+                {
+                    var nb = _grid.Neighbors[baseIndex + k];
+                    if (nb == SimulationGrid.NoNeighbor || _visitStamp[nb] == _stamp) continue;
+                    _visitStamp[nb] = _stamp;
+                    _visited.Add(nb);
+                }
+            }
+            ringStart = ringEnd;
+        }
+        var seaCells = 0;
+        var deepCells = 0;
+        foreach (var cell in _visited)
+        {
+            if (!IsSea(state, lakeOf, cell)) continue;
+            seaCells++;
+            if (state.WaterDepth[cell] > WaveBaseDepthMeters) deepCells++;
+        }
+        var exposure = seaCells > 0 ? deepCells / (double)seaCells : 0;
+        var maxFill = MaxDeltaFillPerStepMeters * (1 - WaveDeltaDamping * exposure);
+        // 由近到遠墊（_visited 是一圈一圈加進來的）；三角洲只往海裡長，不越過陸地
+        foreach (var cur in _visited)
+        {
+            if (put >= amount) break;
+            if (!IsSea(state, lakeOf, cur) || _surface[cur] < deepest) continue;
+            var add = Math.Min(Math.Min(maxFill, top - _surface[cur]), amount - put);
+            if (add <= 0) continue;
+            state.SedimentThickness[cur] += (float)add;
+            _surface[cur] += (float)add;
+            put += add;
+        }
+        _deltaSupply[mouth] += (float)(put / deltaMyr);
+        _deltaDeposited += put;
+        return put;
     }
 
     /// <summary>主洋的海（湖不算）。</summary>
@@ -449,6 +684,7 @@ public sealed class FluvialErosion
             state.StructuralRelief[cell] = (float)(relief - fromRelief);
             removed += fromRelief;
             remaining -= fromRelief;
+            Lithology.StripCover(state, cell, fromRelief); // 褶皺就是最上面那層岩石
         }
         if (remaining <= 0) return (removed, fromRelief);
 
@@ -458,6 +694,8 @@ public sealed class FluvialErosion
         if (takeKm <= 0) return (removed, fromRelief);
         state.CrustThickness[cell] = (float)(crustKm - takeKm);
         CrustErodedKm += takeKm;
+        // 蓋層刨穿了才露出基盤：被抬升、侵蝕得夠深的山脈核心自然會露出結晶岩（水文地貌規劃 H1）
+        Lithology.StripCover(state, cell, takeKm * 1000.0 * Isostasy.IsostaticSurfaceRatio(state.Crust[cell]));
         return (removed + takeKm * 1000.0, fromRelief);
     }
 

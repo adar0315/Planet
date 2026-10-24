@@ -1,4 +1,4 @@
-import type { TileDto } from '@/types/tile'
+import type { CellSeasonsDto, SubTileDto, TileDto } from '@/types/tile'
 import type { TerrainStyleDto } from '@/types/terrainStyle'
 import type { TerrainGenerationOptionsDto } from '@/types/terrainOptions'
 
@@ -18,6 +18,31 @@ export async function fetchTilesNear(
   if (!response.ok) {
     throw new Error(`取得地圖資料失敗: ${response.status}`)
   }
+  return response.json()
+}
+
+/**
+ * 近看細分（水文地貌規劃 H7）：這些地塊底下約 250 公尺一格的小六角，含鄰居與河道的資訊。
+ * 用 POST：一次上千個地塊編號放在網址上會超過長度限制。
+ */
+export async function fetchSubTiles(tileIds: readonly number[]): Promise<SubTileDto[]> {
+  const response = await fetch(new URL('/api/tiles/subtiles', API_BASE_URL), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tileIds }),
+  })
+  if (!response.ok) throw new Error(`取得細分地塊失敗: ${response.status}`)
+  return response.json()
+}
+
+/** 模擬粗格的四季（水文地貌規劃 H8）。程序化的星球回傳空陣列。 */
+export async function fetchCellSeasons(cellIds: readonly number[]): Promise<CellSeasonsDto[]> {
+  const response = await fetch(new URL('/api/tiles/cell-seasons', API_BASE_URL), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cellIds }),
+  })
+  if (!response.ok) throw new Error(`取得四季資料失敗: ${response.status}`)
   return response.json()
 }
 
@@ -191,6 +216,8 @@ export type SimulationFieldName =
   | 'VolcanicActivity'
   | 'IceThickness'
   | 'RiversAndLakes'
+  | 'Lithology'
+  | 'Landforms'
 
 export interface SimulationStatus {
   frequency: number

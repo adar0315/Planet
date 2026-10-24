@@ -66,6 +66,43 @@ public sealed class SimulationState
     public float[] StructuralRelief { get; }
 
     /// <summary>
+    /// 基岩頂部蓋層的厚度（公尺），種類見 <see cref="CoverRock"/>。0＝露出基盤（大陸是結晶岩、海洋是玄武岩）。
+    /// 是基岩頂部的標籤、已經算在地殼厚度裡，不影響高度（水文地貌規劃 H1，見 <see cref="Lithology"/>）。
+    /// 只有板塊座標系會寫它（跟著地殼點走），標記法永遠是 0。
+    /// </summary>
+    public float[] CoverThickness { get; }
+
+    /// <summary>蓋層的岩石種類（<see cref="CoverThickness"/> 是 0 時沒有意義）。</summary>
+    public CoverRock[] CoverRock { get; }
+
+    /// <summary>
+    /// 河流下切速率（公尺／百萬年，約 100 萬年的移動平均）。放大時決定河谷多深、是 V 形還是平底
+    /// （水文地貌規劃 H2）。掛在格子上、不跟地殼走：河谷是水系的位置，水系由地形每步重算。
+    /// </summary>
+    public float[] IncisionRate { get; }
+
+    /// <summary>河流堆積速率（公尺／百萬年，移動平均）：沖積扇、沖積平原在哪裡長。</summary>
+    public float[] AggradationRate { get; }
+
+    /// <summary>冰川刨蝕速率（公尺／百萬年，移動平均）：放大時刨過的谷是 U 形。</summary>
+    public float[] GlacialIncisionRate { get; }
+
+    /// <summary>河口三角洲的供砂量（公尺×格／百萬年，移動平均），記在河口那一格海上：三角洲有多大。</summary>
+    public float[] DeltaSupply { get; }
+
+    /// <summary>
+    /// 洪峰係數（1＝全年流量平穩）：季節差越大、洪峰越集中，侵蝕與搬運越強（水文地貌規劃 H3 每次重解氣候時更新）。
+    /// 跨步驟的狀態，要進存檔。
+    /// </summary>
+    public float[] FloodFactor { get; }
+
+    /// <summary>風蝕速率（公尺／百萬年，移動平均）：沙漠、戈壁（水文地貌規劃 H5）。</summary>
+    public float[] DeflationRate { get; }
+
+    /// <summary>黃土堆積速率（公尺／百萬年，移動平均）：風吹來的粉砂落在哪裡。</summary>
+    public float[] LoessRate { get; }
+
+    /// <summary>
     /// 冰蓋厚度（公尺）。只累積在**露出水面**的格子上——浮在海上的海冰不影響海平面
     /// （阿基米德原理），只有擱淺在陸地上的冰才會把水從海洋裡鎖走，見 <see cref="Cryosphere"/>。
     /// </summary>
@@ -200,6 +237,16 @@ public sealed class SimulationState
         Boundary = new BoundaryType[cellCount];
         VolcanicActivity = new float[cellCount];
         OceanicOnly = new bool[cellCount];
+        CoverThickness = new float[cellCount];
+        CoverRock = new CoverRock[cellCount];
+        IncisionRate = new float[cellCount];
+        AggradationRate = new float[cellCount];
+        GlacialIncisionRate = new float[cellCount];
+        DeltaSupply = new float[cellCount];
+        FloodFactor = new float[cellCount];
+        Array.Fill(FloodFactor, 1f);
+        DeflationRate = new float[cellCount];
+        LoessRate = new float[cellCount];
     }
 
     /// <summary>
@@ -253,6 +300,15 @@ public sealed class SimulationState
         SimulationSnapshot.WriteArray(writer, VolcanicActivity);
         SimulationSnapshot.WriteArray(writer, OceanicOnly);
         SimulationSnapshot.WriteArray(writer, StructuralRelief);
+        SimulationSnapshot.WriteArray(writer, CoverThickness);
+        SimulationSnapshot.WriteArray(writer, CoverRock);
+        SimulationSnapshot.WriteArray(writer, IncisionRate);
+        SimulationSnapshot.WriteArray(writer, AggradationRate);
+        SimulationSnapshot.WriteArray(writer, GlacialIncisionRate);
+        SimulationSnapshot.WriteArray(writer, DeltaSupply);
+        SimulationSnapshot.WriteArray(writer, FloodFactor);
+        SimulationSnapshot.WriteArray(writer, DeflationRate);
+        SimulationSnapshot.WriteArray(writer, LoessRate);
 
         writer.Write(SeaLevelMeters);
         writer.Write(ElapsedYears);
@@ -282,6 +338,15 @@ public sealed class SimulationState
         SimulationSnapshot.ReadArray(reader, VolcanicActivity);
         SimulationSnapshot.ReadArray(reader, OceanicOnly);
         SimulationSnapshot.ReadArray(reader, StructuralRelief);
+        SimulationSnapshot.ReadArray(reader, CoverThickness);
+        SimulationSnapshot.ReadArray(reader, CoverRock);
+        SimulationSnapshot.ReadArray(reader, IncisionRate);
+        SimulationSnapshot.ReadArray(reader, AggradationRate);
+        SimulationSnapshot.ReadArray(reader, GlacialIncisionRate);
+        SimulationSnapshot.ReadArray(reader, DeltaSupply);
+        SimulationSnapshot.ReadArray(reader, FloodFactor);
+        SimulationSnapshot.ReadArray(reader, DeflationRate);
+        SimulationSnapshot.ReadArray(reader, LoessRate);
 
         SeaLevelMeters = reader.ReadSingle();
         ElapsedYears = reader.ReadDouble();

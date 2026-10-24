@@ -176,6 +176,7 @@ public sealed class Climate
     /// </summary>
     private void BuildInflowWeights()
     {
+        Array.Clear(_inflowWeight);
         Parallel.For(0, _grid.CellCount, cell =>
         {
             var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
@@ -209,7 +210,15 @@ public sealed class Climate
     public void Solve(SimulationState state)
     {
         UpdateTemperature(state);
+        SolveMoistureTransport(state);
+    }
 
+    /// <summary>
+    /// 用 <paramref name="state"/> 目前的溫度與風場解水氣輸送，寫出降水與陸地含水量。
+    /// 年平均（<see cref="Solve"/>）與每個月（<see cref="SolveSeasons"/>）共用。
+    /// </summary>
+    private void SolveMoistureTransport(SimulationState state)
+    {
         Array.Clear(state.AtmosphericMoisture);
         Array.Clear(state.Precipitation);
         Array.Clear(_recycled);
@@ -244,6 +253,199 @@ public sealed class Climate
                 ? 0f // 水面下沒有「陸地逕流」可言
                 : state.Precipitation[cell] * RunoffFraction;
         });
+    }
+
+    /// <summary>年平均的地表風速（帶狀風的向量長度，最大約 1.1）。給風蝕用。</summary>
+    /// <param name="cell">格子。</param>
+    internal float WindSpeedAt(int cell) => _windSpeed[cell];
+
+    /// <summary>年平均的下風鄰居：出流權重最大的那一個（沒有風是 −1）。給風蝕搬塵土用。</summary>
+    /// <param name="cell">格子。</param>
+    internal int DownwindNeighbor(int cell)
+    {
+        var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+        var best = -1;
+        var bestWeight = 0f;
+        for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+        {
+            var weight = _outflowWeight[baseIndex + s];
+            if (weight <= bestWeight) continue;
+            bestWeight = weight;
+            best = _grid.Neighbors[baseIndex + s];
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// 某個緯度的盛行地表風（東向、北向分量，最大約 1.1）。相位讓信風在 15 度、西風在 45 度、極地東風在 75 度最強，
+    /// 0／30／60 度（赤道輻合帶、副熱帶高壓、極鋒）風速接近零。同一個 cos 項同時決定東西與南北，信風自然是東北風。
+    /// 氣候的風場與放大時的沙丘走向（<see cref="LandformSampler"/>）共用這一份。
+    /// </summary>
+    /// <param name="latitude">緯度（度）。</param>
+    public static (double Eastward, double Northward) PrevailingWind(double latitude)
+    {
+        var band = Math.Cos(Math.PI * (Math.Abs(latitude) - 15.0) / 30.0);
+        return (-band, -Math.Sign(latitude) * band * 0.5); // 負的東向＝東風（由東往西吹）；低緯往赤道、中緯往極區
+    }
+
+    /// <summary>地軸傾角（度）。跟前端 <c>frontend/src/map/sunPosition.ts</c> 同一個值——太陽在畫面上的位置與四季要對得上。</summary>
+    public const double AxialTiltDegrees = 23.44;
+
+    /// <summary>
+    /// 一年中第幾天（0 起算，可以有小數）的太陽赤緯（度），跟前端 <c>computeSubsolarPoint</c> 同一個近似式。
+    /// 北半球夏至（約第 172 天）是 +23.44、冬至是 −23.44。
+    /// </summary>
+    /// <param name="dayOfYear">一年中第幾天。</param>
+    public static double SolarDeclinationDegrees(double dayOfYear) =>
+        -AxialTiltDegrees * Math.Cos(2 * Math.PI / 365.0 * (dayOfYear + 10));
+
+    /// <summary>
+    /// 某緯度、某赤緯的日平均日照（太陽常數的比例）：(h₀ sinφ sinδ + cosφ cosδ sin h₀)/π，h₀ 是日出的時角。
+    /// 赤道的年平均約 0.30，極夏約 0.4、極夜是 0。
+    /// </summary>
+    internal static double DailyInsolation(double latitudeDegrees, double declinationDegrees)
+    {
+        var phi = latitudeDegrees * Math.PI / 180.0;
+        var delta = declinationDegrees * Math.PI / 180.0;
+        var cosH = Math.Clamp(-Math.Tan(phi) * Math.Tan(delta), -1.0, 1.0);
+        var h0 = Math.Acos(cosH);
+        return (h0 * Math.Sin(phi) * Math.Sin(delta) + Math.Cos(phi) * Math.Cos(delta) * Math.Sin(h0)) / Math.PI;
+    }
+
+    /// <summary>
+    /// 日照每變化 1（太陽常數的比例）、完全大陸性的地方溫度變化幾度。
+    /// 地球北緯 60 度的日照年變化約 0.33（約 450 W/m²），西伯利亞內陸的年溫差約 40°C，所以約 120。
+    /// </summary>
+    private const double SeasonalSensitivityC = 120.0;
+
+    /// <summary>海面的季節振幅相對大陸內部的比例：海水的熱容量大，北大西洋的年溫差只有幾度。</summary>
+    private const double OceanSeasonalAmplitude = 0.2;
+
+    /// <summary>海岸的季節振幅相對大陸內部的比例（卑爾根的年溫差約 14°C），往內陸依 <see cref="MaritimeReachKm"/> 變大。</summary>
+    private const double CoastalSeasonalAmplitude = 0.35;
+
+    /// <summary>海洋的溫度比日照落後幾天（海面最暖在 8、9 月）。</summary>
+    private const double OceanLagDays = 60;
+
+    /// <summary>陸地的溫度比日照落後幾天（陸地最暖在 7 月）。</summary>
+    private const double LandLagDays = 30;
+
+    /// <summary>雨帶跟著太陽南北移動的比例：赤道輻合帶在地球上大約擺動 ±10 度。</summary>
+    private const double RainBeltShiftPerDeclination = 0.5;
+
+    /// <summary>
+    /// 季風：陸地夏天比年平均熱、空氣上升（多雨），冬天比較冷、空氣下沉（乾燥）。
+    /// 每比年平均熱 15°C，垂直運動加這麼多（垂直運動的範圍是 −1~1）。
+    /// </summary>
+    private const float MonsoonGain = 0.8f;
+
+    /// <summary>
+    /// 解 <paramref name="seasons"/> 個時段（12＝每月、4＝每季）的氣候：每個時段依太陽赤緯算溫度，
+    /// 雨帶跟著太陽移動、陸地有季風，再解一次水氣輸送（水文地貌規劃 H3，2026-10-24）。
+    ///
+    /// **年平均的狀態不會被改**：解完把溫度、降水、水氣、風場全部還原。每格各時段降水的平均會縮放成等於年平均降水，
+    /// 所以四季只改變「水什麼時候來」，不改變一年的總水量——侵蝕、湖泊用的年平均水系完全不受影響。
+    /// 每個時段的溫度平均也正好等於年平均溫度（日照的距平在各時段加總為 0）。
+    /// </summary>
+    /// <param name="state">模擬狀態（年平均已經解好）。</param>
+    /// <param name="seasons">一年分幾個時段。</param>
+    public SeasonalClimate SolveSeasons(SimulationState state, int seasons)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentOutOfRangeException.ThrowIfLessThan(seasons, 2);
+        var n = state.CellCount;
+        var annualTemperature = (float[])state.Temperature.Clone();
+        var annualPrecipitation = (float[])state.Precipitation.Clone();
+        var annualAtmosphere = (float[])state.AtmosphericMoisture.Clone();
+        var annualMoisture = (float[])state.Moisture.Clone();
+        if (_coastHops.Length != n) ComputeCoastHops(state);
+        var spacingKm = _grid.AverageCellSpacingMeters / 1000.0;
+
+        var result = new SeasonalClimate(seasons, n);
+        var days = Enumerable.Range(0, seasons).Select(m => (m + 0.5) * 365.0 / seasons).ToArray();
+
+        // 每格的振幅與落後
+        var amplitude = new double[n];
+        var lag = new double[n];
+        for (var c = 0; c < n; c++)
+        {
+            if (state.WaterDepth[c] > 0f)
+            {
+                amplitude[c] = OceanSeasonalAmplitude;
+                lag[c] = OceanLagDays;
+            }
+            else
+            {
+                var inland = 1 - Math.Exp(-_coastHops[c] * spacingKm / MaritimeReachKm);
+                amplitude[c] = CoastalSeasonalAmplitude + (1 - CoastalSeasonalAmplitude) * inland;
+                lag[c] = LandLagDays;
+            }
+        }
+
+        // 日照距平：減掉「這些時段的平均」，各時段加總正好是 0，月均溫平均起來就是年均溫
+        var insolation = new double[seasons][];
+        for (var m = 0; m < seasons; m++) insolation[m] = new double[n];
+        Parallel.For(0, n, c =>
+        {
+            var mean = 0.0;
+            for (var m = 0; m < seasons; m++)
+            {
+                insolation[m][c] = DailyInsolation(_grid.Latitude[c], SolarDeclinationDegrees(days[m] - lag[c]));
+                mean += insolation[m][c];
+            }
+            mean /= seasons;
+            for (var m = 0; m < seasons; m++) insolation[m][c] -= mean;
+        });
+
+        try
+        {
+            for (var m = 0; m < seasons; m++)
+            {
+                var month = m;
+                result.DeclinationDegrees[m] = SolarDeclinationDegrees(days[m]);
+                Parallel.For(0, n, c =>
+                {
+                    state.Temperature[c] = (float)(annualTemperature[c] + amplitude[c] * SeasonalSensitivityC * insolation[month][c]);
+                });
+
+                BuildWindField(RainBeltShiftPerDeclination * result.DeclinationDegrees[m]);
+                Parallel.For(0, n, c =>
+                {
+                    if (state.WaterDepth[c] > 0f) return;
+                    var heating = Math.Clamp((state.Temperature[c] - annualTemperature[c]) / 15f, -1f, 1f);
+                    _verticalMotion[c] += MonsoonGain * heating;
+                });
+                BuildInflowWeights();
+                SolveMoistureTransport(state);
+
+                Array.Copy(state.Temperature, result.Temperature[m], n);
+                Array.Copy(state.Precipitation, result.Precipitation[m], n);
+            }
+
+            // 各時段降水的平均縮放成年平均降水：四季只改變水什麼時候來，不改變總量
+            Parallel.For(0, n, c =>
+            {
+                var sum = 0.0;
+                for (var m = 0; m < seasons; m++) sum += result.Precipitation[m][c];
+                var mean = sum / seasons;
+                for (var m = 0; m < seasons; m++)
+                {
+                    result.Precipitation[m][c] = mean > 1e-9
+                        ? (float)(result.Precipitation[m][c] * annualPrecipitation[c] / mean)
+                        : annualPrecipitation[c];
+                }
+            });
+        }
+        finally
+        {
+            Array.Copy(annualTemperature, state.Temperature, n);
+            Array.Copy(annualPrecipitation, state.Precipitation, n);
+            Array.Copy(annualAtmosphere, state.AtmosphericMoisture, n);
+            Array.Copy(annualMoisture, state.Moisture, n);
+            BuildWindField();
+            BuildInflowWeights();
+        }
+        return result;
     }
 
     /// <summary>
@@ -601,17 +803,17 @@ public sealed class Climate
     /// 風向由三胞環流的帶狀分布決定（見類別說明）。同一個 cos 項同時決定東西與南北分量，
     /// 所以信風自然是「東北風」而不是純東風——北半球低緯的風確實是從東北吹向西南。
     /// </summary>
-    private void BuildWindField()
+    private void BuildWindField(double latitudeShiftDegrees = 0)
     {
+        // 重建時要先清掉：權重只寫「對齊的」鄰居，上一個月的值不會被覆蓋
+        Array.Clear(_outflowWeight);
+        Array.Clear(_windSpeed);
         Parallel.For(0, _grid.CellCount, cell =>
         {
-            var latitude = _grid.Latitude[cell];
+            // 環流胞跟著太陽南北移動（水文地貌規劃 H3）：年平均時不平移
+            var latitude = _grid.Latitude[cell] - latitudeShiftDegrees;
 
-            // 相位讓信風在15度、西風在45度、極地東風在75度達到最強，
-            // 而0/30/60度（赤道輻合帶、副熱帶高壓、極鋒）風速接近零
-            var band = Math.Cos(Math.PI * (Math.Abs(latitude) - 15.0) / 30.0);
-            var eastward = -band;                                  // 負值＝東風（由東往西吹）
-            var northward = -Math.Sign(latitude) * band * 0.5;     // 低緯往赤道、中緯往極區
+            var (eastward, northward) = PrevailingWind(latitude);
 
             // 垂直運動：0度上升、30度下沉、60度上升、90度下沉（Hadley/Ferrel/Polar 三胞的接縫）
             _verticalMotion[cell] = (float)Math.Cos(Math.PI * Math.Abs(latitude) / 30.0);
@@ -671,4 +873,36 @@ public sealed class Climate
             }
         });
     }
+}
+
+/// <summary>多個時段的氣候（<see cref="Climate.SolveSeasons"/> 的結果）：每個時段每一格的溫度與降水。</summary>
+public sealed class SeasonalClimate
+{
+    /// <summary>建立空的結果。</summary>
+    /// <param name="seasons">時段數。</param>
+    /// <param name="cellCount">格數。</param>
+    public SeasonalClimate(int seasons, int cellCount)
+    {
+        Seasons = seasons;
+        Temperature = new float[seasons][];
+        Precipitation = new float[seasons][];
+        for (var m = 0; m < seasons; m++)
+        {
+            Temperature[m] = new float[cellCount];
+            Precipitation[m] = new float[cellCount];
+        }
+        DeclinationDegrees = new double[seasons];
+    }
+
+    /// <summary>一年分幾個時段（12＝每月）。時段 m 的中點是一年中第 (m+0.5)·365/時段數 天。</summary>
+    public int Seasons { get; }
+
+    /// <summary>[時段][格] 溫度（攝氏）。</summary>
+    public float[][] Temperature { get; }
+
+    /// <summary>[時段][格] 降水（跟年平均同一個相對尺度：各時段平均＝年平均）。</summary>
+    public float[][] Precipitation { get; }
+
+    /// <summary>各時段中點的太陽赤緯（度）。</summary>
+    public double[] DeclinationDegrees { get; }
 }

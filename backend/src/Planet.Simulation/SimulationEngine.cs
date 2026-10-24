@@ -71,7 +71,11 @@ public sealed class SimulationEngine
     /// <summary>v2 的外營力（只有板塊座標系模式有，否則是 null），見 <see cref="Simulation.FluvialErosion"/>。</summary>
     public FluvialErosion? FluvialErosion => _fluvial;
 
+    /// <summary>v2 的風蝕與黃土（水文地貌規劃 H5）；標記法是 null。</summary>
+    public AeolianProcesses? Aeolian => _aeolian;
+
     private readonly FluvialErosion? _fluvial;
+    private readonly AeolianProcesses? _aeolian;
 
     /// <summary>冰凍圈。沒有自己的狀態（全部寫在 <c>IceThickness</c> 裡），Reset 也不用重建。</summary>
     private readonly Cryosphere _ice = new();
@@ -157,6 +161,7 @@ public sealed class SimulationEngine
         {
             _hydrology = new Hydrology(grid);
             _fluvial = new FluvialErosion(grid);
+            _aeolian = new AeolianProcesses(grid);
             // v2 P6：冰蓋依降雪打折、溫度每一步更新、海洋熱輸送（見 Cryosphere.SnowLimited、Climate.UpdateTemperatureOnly、Climate.OceanHeatTransport）
             _ice.SnowLimited = true;
             _climate.OceanHeatTransport = true;
@@ -286,6 +291,8 @@ public sealed class SimulationEngine
         _plumes.Step(Grid, State, YearsPerStep / 1_000_000.0);
         // 裂縫火山要讀這一步剛分類好的板塊邊界（斷層帶在哪），所以排在板塊運動之後
         _fissures.Step(Grid, State, Plates, YearsPerStep / 1_000_000.0, _tectonics.CrustPointKeys);
+        // 岩性（水文地貌規劃 H1）：四種火山共同的出口是 VolcanicActivity，在這裡統一蓋上火山岩
+        if (_crustTransport == CrustTransport.PlateFrame) Lithology.ApplyVolcanicCover(State, YearsPerStep / 1_000_000.0);
         Timings.Mark("火山（熱柱＋裂縫）");
 
         // 造礁與侵蝕排在均衡注水**之前**，用的是上一步的水深／水溫／逕流。
@@ -297,6 +304,7 @@ public sealed class SimulationEngine
         _reefs.Step(State, YearsPerStep);
         if (_fluvial is not null && _hydrology is not null) _fluvial.Step(State, _hydrology, YearsPerStep);
         else _erosion.Step(State, YearsPerStep);
+        _aeolian?.Step(State, _climate, YearsPerStep);
         Timings.Mark("造礁＋侵蝕");
 
         // 冰蓋用上一步的水深（判斷擱淺在陸地上）與氣溫。它鎖住的水會在下面的海平面
@@ -346,6 +354,9 @@ public sealed class SimulationEngine
         {
             _climate.Solve(State);
             _yearsSinceClimateSolve = 0;
+            // 四季（水文地貌規劃 H3/H4）：只用來更新洪峰係數，季節差越大侵蝕越強。演化用 4 季就夠（每季一個代表），
+            // 放大時才解 12 個月（見 SolveSeasons）
+            if (_hydrology is not null) UpdateFloodFactor(EvolutionSeasons);
         }
         else if (_crustTransport == CrustTransport.PlateFrame)
         {
@@ -365,6 +376,27 @@ public sealed class SimulationEngine
         CheckStopCondition();
         Timings.Mark("停止條件");
         Timings.EndStep();
+    }
+
+    /// <summary>演化中重解氣候時，四季的水文分幾個時段（每季一個）。</summary>
+    private const int EvolutionSeasons = 4;
+
+    private void UpdateFloodFactor(int seasons)
+    {
+        var (_, hydrology) = SolveSeasons(seasons);
+        Array.Copy(hydrology.FloodFactor, State.FloodFactor, State.CellCount);
+    }
+
+    /// <summary>
+    /// 解目前地形的四季：氣候（<see cref="Climate.SolveSeasons"/>）與水文（<see cref="SeasonalHydrology"/>）。
+    /// 不改模擬狀態（年平均的氣候與水系都還原）。只有 v2（依連通性注水）才有水系可以算。
+    /// </summary>
+    /// <param name="seasons">一年分幾個時段（12＝每月）。</param>
+    public (SeasonalClimate Climate, SeasonalHydrologyResult Hydrology) SolveSeasons(int seasons)
+    {
+        if (_hydrology is null) throw new InvalidOperationException("四季的水文要有依連通性注水的水系（v2 板塊座標系模式）。");
+        var climate = _climate.SolveSeasons(State, seasons);
+        return (climate, SeasonalHydrology.Solve(Grid, State, _hydrology, climate));
     }
 
     /// <summary>每步耗時分項（累積平均）。見 <see cref="StepTimings"/>。</summary>

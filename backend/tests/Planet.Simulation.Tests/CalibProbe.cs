@@ -48,10 +48,90 @@ public class CalibProbe(ITestOutputHelper output)
         var landKm2 = Enumerable.Range(0, s.CellCount).Count(c => s.WaterDepth[c] <= 0f) * grid.AverageCellAreaSquareMeters / 1e6;
         if (seaAt.Count > 1) sb.AppendLine($"淨輸出到海（最後 20 步）{(seaAt.Last() - seaAt.First()) / (seaAt.Count - 1) * 1e9 / (landKm2 * 1e6) / (engine.YearsPerStep / 1e6):F0} m/Myr（地球約 50）");
         sb.AppendLine($"剝蝕率（最後 20 步，物質厚度）{(erodedRecent.Count > 0 ? erodedRecent.Average() : 0) * 1e9 / (landKm2 * 1e6) / (engine.YearsPerStep / 1e6):F0} m/Myr（地球約 50）");
+        MeasureLandforms(engine, sb);
+        sb.AppendLine($"每步平均耗時（ms）：{string.Join("、", engine.Timings.AverageMillisecondsPerStep().Select(t => $"{t.Section} {t.AverageMilliseconds:F0}"))}");
+        MeasureSeasons(engine, grid, dir, sb);
         File.WriteAllText(Path.Combine(dir, "calib.txt"), sb.ToString());
-        File.WriteAllBytes(Path.Combine(dir, "calib_elev.rgba"), new SimulationFieldRenderer(grid).Render(s, SimulationField.ElevationWithPlateBoundaries));
+        var renderer = new SimulationFieldRenderer(grid);
+        File.WriteAllBytes(Path.Combine(dir, "calib_elev.rgba"), renderer.Render(s, SimulationField.ElevationWithPlateBoundaries));
+        File.WriteAllBytes(Path.Combine(dir, "calib_lithology.rgba"), renderer.Render(s, SimulationField.Lithology));
+        File.WriteAllBytes(Path.Combine(dir, "calib_landforms.rgba"), renderer.Render(s, SimulationField.Landforms));
+        File.WriteAllBytes(Path.Combine(dir, "calib_rivers.rgba"), renderer.Render(s, SimulationField.RiversAndLakes, engine.Hydrology));
         using (var f = File.Create(Path.Combine(dir, "calib_snap.bin"))) SimulationSnapshot.Write(engine, f);
         output.WriteLine(sb.ToString());
+    }
+
+    /// <summary>水文地貌規劃 H3、H4：12 個月的氣候與水情，畫 1 月、7 月的氣溫、降水、積雪，以及河的水情。</summary>
+    internal static void MeasureSeasons(SimulationEngine engine, SimulationGrid grid, string dir, StringBuilder sb)
+    {
+        var s = engine.State;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (climate, hydro) = engine.SolveSeasons(12);
+        sb.AppendLine($"12 個月的氣候＋水文：{sw.ElapsedMilliseconds} ms");
+        var min = Rivers.MinDischarge(grid, s) / 10f; // 規劃 H4：河的門檻降到 1,000 km²
+        var rivers = Enumerable.Range(0, s.CellCount).Where(c => s.WaterDepth[c] <= 0f && engine.Hydrology!.Discharge[c] >= min).ToArray();
+        var regimes = rivers.GroupBy(c => hydro.Regime[c]).OrderBy(g => g.Key).Select(g => $"{g.Key} {100.0 * g.Count() / rivers.Length:F0}%");
+        sb.AppendLine($"河（≥1,000 km²，{rivers.Length} 格）：{string.Join("、", regimes)}；基流佔比平均 {rivers.Average(c => hydro.BaseflowShare[c]):F2}、融雪 {rivers.Average(c => hydro.MeltShare[c]):F2}、洪峰係數平均 {rivers.Average(c => hydro.FloodFactor[c]):F2}");
+        var land = Enumerable.Range(0, s.CellCount).Where(c => s.WaterDepth[c] <= 0f).ToArray();
+        sb.AppendLine($"積雪佔陸地：1 月 {100.0 * land.Count(c => hydro.SnowCovered[0][c]) / land.Length:F0}%、7 月 {100.0 * land.Count(c => hydro.SnowCovered[6][c]) / land.Length:F0}%；海冰佔海：1 月 {100.0 * Enumerable.Range(0, s.CellCount).Count(c => s.WaterDepth[c] > 0f && hydro.Frozen[0][c]) / (s.CellCount - land.Length):F0}%、7 月 {100.0 * Enumerable.Range(0, s.CellCount).Count(c => s.WaterDepth[c] > 0f && hydro.Frozen[6][c]) / (s.CellCount - land.Length):F0}%");
+
+        var renderer = new SimulationFieldRenderer(grid);
+        var w = SimulationFieldRenderer.Width;
+        var h = SimulationFieldRenderer.Height;
+        void Paint(string name, Func<int, (byte R, byte G, byte B)> color)
+        {
+            var px = new byte[w * h * 4];
+            for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var (r, g, b) = color(renderer.CellAtPixel(x, y));
+                var i = (y * w + x) * 4;
+                px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+            }
+            File.WriteAllBytes(Path.Combine(dir, name + ".rgba"), px);
+        }
+        (byte, byte, byte) Lerp(double t, (byte, byte, byte) a, (byte, byte, byte) b)
+        {
+            t = Math.Clamp(t, 0, 1);
+            return ((byte)(a.Item1 + (b.Item1 - a.Item1) * t), (byte)(a.Item2 + (b.Item2 - a.Item2) * t), (byte)(a.Item3 + (b.Item3 - a.Item3) * t));
+        }
+        var meanP = s.Precipitation.Average();
+        foreach (var (m, label) in new[] { (0, "jan"), (6, "jul") })
+        {
+            Paint($"season_temp_{label}", c => Lerp((climate.Temperature[m][c] + 30) / 65, (0x2b, 0x5f, 0xd9), (0xd9, 0x33, 0x2b)));
+            Paint($"season_precip_{label}", c => s.WaterDepth[c] > 0f ? ((byte)0x10, (byte)0x18, (byte)0x28)
+                : Lerp(Math.Sqrt(climate.Precipitation[m][c] / (3 * meanP)), (0xc9, 0xa0, 0x5c), (0x0a, 0x4d, 0x2e)));
+            Paint($"season_snow_{label}", c => s.WaterDepth[c] > 0f
+                ? (hydro.Frozen[m][c] ? ((byte)0xd8, (byte)0xe8, (byte)0xf0) : ((byte)0x10, (byte)0x20, (byte)0x38))
+                : hydro.SnowCovered[m][c] ? ((byte)0xff, (byte)0xff, (byte)0xff) : ((byte)0x50, (byte)0x60, (byte)0x40));
+        }
+        Paint("season_regime", c => s.WaterDepth[c] > 0f ? ((byte)0x10, (byte)0x18, (byte)0x28)
+            : engine.Hydrology!.Discharge[c] < min ? ((byte)0x30, (byte)0x30, (byte)0x30)
+            : hydro.Regime[c] switch
+            {
+                FlowRegime.Perennial => ((byte)0x30, (byte)0x80, (byte)0xff),
+                FlowRegime.Seasonal => ((byte)0x40, (byte)0xe0, (byte)0x80),
+                _ => ((byte)0xe0, (byte)0xa0, (byte)0x40),
+            });
+    }
+
+    /// <summary>水文地貌規劃 H1、H2：陸地露出的岩石、沖積地形與三角洲的範圍。</summary>
+    internal static void MeasureLandforms(SimulationEngine engine, StringBuilder sb)
+    {
+        var s = engine.State;
+        var land = Enumerable.Range(0, s.CellCount).Where(c => s.WaterDepth[c] <= 0f).ToArray();
+        var rocks = land.GroupBy(c => Lithology.ExposedAt(s, c)).OrderBy(g => g.Key)
+            .Select(g => $"{g.Key} {100.0 * g.Count() / land.Length:F1}%");
+        sb.AppendLine($"陸地露出的岩石：{string.Join("、", rocks)}");
+        var aggrading = land.Count(c => s.AggradationRate[c] > 1f && s.AggradationRate[c] > s.IncisionRate[c]);
+        var incising = land.Count(c => s.IncisionRate[c] > 1f);
+        var glacial = land.Count(c => s.GlacialIncisionRate[c] > 1f);
+        var deltas = Enumerable.Range(0, s.CellCount).Count(c => s.DeltaSupply[c] > 0f && s.WaterDepth[c] > 0f);
+        sb.AppendLine($"陸地：堆積為主 {100.0 * aggrading / land.Length:F1}%、下切 {100.0 * incising / land.Length:F1}%、冰蝕 {100.0 * glacial / land.Length:F1}%；有三角洲供砂的河口 {deltas} 格");
+        var top = land.MaxBy(c => s.SurfaceElevationAt(c));
+        sb.AppendLine($"最高的格 {top}：高 {s.SurfaceElevationAt(top) - s.SeaLevelMeters:F0} m＝基岩 {s.BedrockElevation[top]:F0}＋褶皺 {s.StructuralRelief[top]:F0}＋沉積 {s.SedimentThickness[top]:F0}＋冰 {s.IceThickness[top]:F0}（地殼 {s.CrustThickness[top]:F1} km、黃土 {s.LoessRate[top]:F1}、堆積 {s.AggradationRate[top]:F0} m/Myr）");
+        var f = engine.FluvialErosion!;
+        sb.AppendLine($"最後一步：侵蝕 {f.LastErodedVolumeKm3:F0} km³，陸上堆積 {f.LastLandDepositKm3:F0}、三角洲 {f.LastDeltaDepositKm3:F0}、湖 {f.LastLakeDepositKm3:F0} km³");
     }
 
     internal static void Measure(SimulationEngine engine, SimulationGrid grid, StringBuilder sb)

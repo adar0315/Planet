@@ -34,6 +34,16 @@ export const SIMULATION_FIELDS: { field: SimulationFieldName; label: string; hin
   { field: 'WaterDepth', label: '水深', hint: '檢查海陸分布與湖泊' },
   { field: 'SedimentThickness', label: '沉積物', hint: '沉積與有機物堆積' },
   { field: 'RiversAndLakes', label: '河流與湖', hint: '亮青＝湖、藍＝河（越深越大）；集水面積 1 萬平方公里以上才畫' },
+  {
+    field: 'Lithology',
+    label: '岩性',
+    hint: '粉紅＝結晶基盤（硬）、土黃＝沉積岩（軟）、暗紅＝火山岩、紫＝混雜岩、淡米＝鬆散沉積物',
+  },
+  {
+    field: 'Landforms',
+    label: '侵蝕與堆積',
+    hint: '紅褐＝河流下切、黃＝沖積扇與平原、青＝冰川刨蝕、淡黃白＝風蝕、粉褐＝黃土、海上綠＝三角洲',
+  },
   { field: 'IceThickness', label: '冰蓋', hint: '冰鎖住的水會讓海平面下降' },
 ]
 

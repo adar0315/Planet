@@ -437,6 +437,18 @@ public static class ContinentLayout
     }
 
     /// <summary>
+    /// 起始大陸的沉積蓋層厚度（公尺，水文地貌規劃 H1）：海岸最厚、往內陸 <see cref="Lithology.CoverRampKm"/> 內變薄到 0
+    /// （被動大陸邊緣的沉積楔），內陸再用大尺度雜訊挖出幾個沉積盆地（克拉通盆地）。其餘的內陸露出結晶基盤。
+    /// </summary>
+    private static float InitialCoverMeters(double coastDistanceKm, SimplexNoise3D noise, double x, double y, double z)
+    {
+        var margin = Lithology.CoastalCoverMeters * Math.Max(0.0, 1.0 - coastDistanceKm / Lithology.CoverRampKm);
+        // 盆地：雜訊高過 0.15 的部分才算，約佔內陸的三成；頻率 2.5 ＝ 盆地約一兩千公里寬
+        var basin = Math.Max(0.0, noise.Fbm(x - 80, y + 30, z - 60, 3, 2.5) - 0.15) / 0.85 * Lithology.InteriorBasinCoverMeters;
+        return (float)Math.Max(margin, basin);
+    }
+
+    /// <summary>
     /// 照配置建立起始的地殼與板塊歸屬（取代早期大轟炸），回傳每塊陸地（依陸塊編號）之後要用的板塊（<see cref="PlateOf"/>）：
     ///
     /// - **陸地**：大陸地殼，海岸 <see cref="CoastCrustKm"/>、往內陸線性加厚到 <see cref="InteriorCrustKm"/>
@@ -475,6 +487,8 @@ public static class ContinentLayout
             state.OrganicThickness[c] = 0f;
             state.SedimentThickness[c] = 0f;
             state.OceanicOnly[c] = false;
+            state.CoverThickness[c] = 0f;
+            state.CoverRock[c] = CoverRock.Sedimentary;
             if (label[c] == Ocean)
             {
                 state.Crust[c] = CrustType.Oceanic;
@@ -495,6 +509,7 @@ public static class ContinentLayout
                 state.CrustThickness[c] = (float)(CoastCrustKm + ramp * (InteriorCrustKm - CoastCrustKm) + bump);
                 state.CrustDensity[c] = Isostasy.ContinentalCrustDensity;
                 state.CrustAge[c] = ContinentalAgeMyr;
+                state.CoverThickness[c] = InitialCoverMeters(coastHops[c] * spacingKm, noise, x, y, z);
             }
         }
 

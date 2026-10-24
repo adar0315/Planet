@@ -37,6 +37,9 @@ internal sealed class PlateFrameCrust
     private readonly int _cellCount;
     private readonly (double W, double X, double Y, double Z)[] _rotation;
     private readonly float[][] _thickness, _age, _density, _organic, _relief, _sediment;
+    // 蓋層（水文地貌規劃 H1）：基岩頂部的岩石種類與厚度，跟著地殼點走
+    private readonly float[][] _cover;
+    private readonly CoverRock[][] _coverRock;
     private readonly CrustType[][] _crust;
     private readonly bool[][] _oceanicOnly, _valid;
     private readonly int[][] _usedStamp, _forward;
@@ -62,7 +65,7 @@ internal sealed class PlateFrameCrust
     private int[] _owner, _bodyCell, _newOwner, _newBodyCell;
 
 
-    private readonly float[] _dThickness, _dAge, _dDensity, _dOrganic, _dRelief;
+    private readonly float[] _dThickness, _dAge, _dDensity, _dOrganic, _dRelief, _dCover;
     private readonly bool[] _categoryChanged;
     private readonly bool[] _hidden;
 
@@ -87,6 +90,8 @@ internal sealed class PlateFrameCrust
         _thickness = Allocate<float>(plateCount); _age = Allocate<float>(plateCount);
         _density = Allocate<float>(plateCount); _organic = Allocate<float>(plateCount); _relief = Allocate<float>(plateCount);
         _sediment = Allocate<float>(plateCount);
+        _cover = Allocate<float>(plateCount);
+        _coverRock = Allocate<CoverRock>(plateCount);
         _crust = Allocate<CrustType>(plateCount);
         _oceanicOnly = Allocate<bool>(plateCount); _valid = Allocate<bool>(plateCount);
         _usedStamp = Allocate<int>(plateCount);
@@ -96,7 +101,7 @@ internal sealed class PlateFrameCrust
         _owner = new int[cellCount]; _bodyCell = new int[cellCount];
         _newOwner = new int[cellCount]; _newBodyCell = new int[cellCount];
         _dThickness = new float[cellCount]; _dAge = new float[cellCount];
-        _dDensity = new float[cellCount]; _dOrganic = new float[cellCount]; _dRelief = new float[cellCount];
+        _dDensity = new float[cellCount]; _dOrganic = new float[cellCount]; _dRelief = new float[cellCount]; _dCover = new float[cellCount];
         _categoryChanged = new bool[cellCount];
         _hidden = new bool[cellCount];
         _component = new int[cellCount];
@@ -213,6 +218,8 @@ internal sealed class PlateFrameCrust
             _organic[p][c] = state.OrganicThickness[c];
             _relief[p][c] = state.StructuralRelief[c];
             _sediment[p][c] = state.SedimentThickness[c];
+            _cover[p][c] = state.CoverThickness[c];
+            _coverRock[p][c] = state.CoverRock[c];
             _crust[p][c] = state.Crust[c];
             _oceanicOnly[p][c] = state.OceanicOnly[c];
             _origin[p][c] = c;
@@ -398,6 +405,9 @@ internal sealed class PlateFrameCrust
         _organic[p][body] = 0f;
         _relief[p][body] = 0f;
         _sediment[p][body] = 0f;
+        _cover[p][body] = 0f;
+        // 種類也要重設：這一點之前可能有過地殼、留著沒存檔的舊值，讀檔續跑會跟沒中斷的那條分歧
+        _coverRock[p][body] = CoverRock.Sedimentary;
         _crust[p][body] = CrustType.Oceanic;
         _oceanicOnly[p][body] = plate.IsOceanicOnly;
         _origin[p][body] = _nextOrigin++;
@@ -672,6 +682,7 @@ internal sealed class PlateFrameCrust
             _age[plate][b] = 0f;
             _organic[plate][b] = 0f;
             _relief[plate][b] = 0f;
+            _cover[plate][b] = 0f;
         }
     }
 
@@ -1086,6 +1097,8 @@ internal sealed class PlateFrameCrust
         _organic[to][toBody] = _organic[from][fromBody];
         _relief[to][toBody] = _relief[from][fromBody];
         _sediment[to][toBody] = _sediment[from][fromBody];
+        _cover[to][toBody] = _cover[from][fromBody];
+        _coverRock[to][toBody] = _coverRock[from][fromBody];
         _crust[to][toBody] = _crust[from][fromBody];
         _oceanicOnly[to][toBody] = _oceanicOnly[from][fromBody];
         _origin[to][toBody] = _origin[from][fromBody];
@@ -1317,6 +1330,9 @@ internal sealed class PlateFrameCrust
         var before = _thickness[to][toBody];
         var after = MathF.Min(before + addKm, Isostasy.MaxCrustThicknessKm);
         _thickness[to][toBody] = after;
+        // 刮進來的沉積物變成增積楔的混雜岩，蓋在最上面（水文地貌規劃 H1）
+        _cover[to][toBody] = MathF.Min(Lithology.MaxCoverMeters, _cover[to][toBody] + (after - before) * 1000f);
+        _coverRock[to][toBody] = CoverRock.Melange;
         LastScrapedSedimentKm += addKm;
         UpliftSourcesKm[4] += addKm;
         LastSedimentOverflowKm += addKm - (after - before);
@@ -1364,6 +1380,8 @@ internal sealed class PlateFrameCrust
             state.OrganicThickness[c] = _organic[p][b];
             state.StructuralRelief[c] = _relief[p][b];
             state.SedimentThickness[c] = _sediment[p][b];
+            state.CoverThickness[c] = _cover[p][b];
+            state.CoverRock[c] = _coverRock[p][b];
             state.Crust[c] = _crust[p][b];
             state.OceanicOnly[c] = _oceanicOnly[p][b];
         });
@@ -1394,7 +1412,9 @@ internal sealed class PlateFrameCrust
             _dDensity[c] = state.CrustDensity[c] - _density[p][b];
             _dOrganic[c] = state.OrganicThickness[c] - _organic[p][b];
             _dRelief[c] = state.StructuralRelief[c] - _relief[p][b];
-            _categoryChanged[c] = state.Crust[c] != _crust[p][b] || state.OceanicOnly[c] != _oceanicOnly[p][b];
+            _dCover[c] = state.CoverThickness[c] - _cover[p][b];
+            _categoryChanged[c] = state.Crust[c] != _crust[p][b] || state.OceanicOnly[c] != _oceanicOnly[p][b]
+                || state.CoverRock[c] != _coverRock[p][b];
         });
 
         var u = grid.UnitVector;
@@ -1418,6 +1438,7 @@ internal sealed class PlateFrameCrust
                     _organic[plate][b] = state.OrganicThickness[g];
                     _sediment[plate][b] = state.SedimentThickness[g];
                     _relief[plate][b] = state.StructuralRelief[g];
+                    _cover[plate][b] = state.CoverThickness[g];
                 }
                 else
                 {
@@ -1430,10 +1451,12 @@ internal sealed class PlateFrameCrust
                     // 之後被顯示出來就是一根兩倍厚的沉積柱（P7 第一次校準：40 Myr 單格 39 公里、四周 18 公里）
                     _sediment[plate][b] = state.SedimentThickness[g];
                     _relief[plate][b] = Math.Clamp(_relief[plate][b] + _dRelief[g], -MaxReliefMeters, MaxReliefMeters);
+                    _cover[plate][b] = Math.Clamp(_cover[plate][b] + _dCover[g], 0f, Lithology.MaxCoverMeters);
                 }
                 if (!_categoryChanged[g]) return;
                 _crust[plate][b] = state.Crust[g];
                 _oceanicOnly[plate][b] = state.OceanicOnly[g];
+                _coverRock[plate][b] = state.CoverRock[g];
             });
         }
     }
@@ -1455,6 +1478,7 @@ internal sealed class PlateFrameCrust
                 writer.Write(_thickness[p][b]); writer.Write(_age[p][b]);
                 writer.Write(_density[p][b]); writer.Write(_organic[p][b]); writer.Write(_relief[p][b]); writer.Write(_sediment[p][b]);
                 writer.Write((byte)_crust[p][b]); writer.Write(_oceanicOnly[p][b]);
+                writer.Write(_cover[p][b]); writer.Write((byte)_coverRock[p][b]);
                 writer.Write(_origin[p][b]);
             }
         }
@@ -1492,6 +1516,7 @@ internal sealed class PlateFrameCrust
                 _thickness[p][b] = reader.ReadSingle(); _age[p][b] = reader.ReadSingle();
                 _density[p][b] = reader.ReadSingle(); _organic[p][b] = reader.ReadSingle(); _relief[p][b] = reader.ReadSingle(); _sediment[p][b] = reader.ReadSingle();
                 _crust[p][b] = (CrustType)reader.ReadByte(); _oceanicOnly[p][b] = reader.ReadBoolean();
+                _cover[p][b] = reader.ReadSingle(); _coverRock[p][b] = (CoverRock)reader.ReadByte();
                 _origin[p][b] = reader.ReadInt32();
                 _valid[p][b] = true;
             }

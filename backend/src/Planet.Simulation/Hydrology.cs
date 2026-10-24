@@ -133,6 +133,13 @@ public sealed class Hydrology
     /// <param name="basin">盆地編號（<see cref="BasinOf"/>）。</param>
     internal int BasinOutlet(int basin) => _parent[_firstCell[basin]];
 
+    /// <summary>盆地的數目（<see cref="BasinOf"/> 的值域）。</summary>
+    internal int BasinCount => _firstCell.Count;
+
+    /// <summary>這個盆地平均往下游放多少水（降水的相對單位 × 格）；鹹湖、乾盆地是 0。</summary>
+    /// <param name="basin">盆地編號。</param>
+    internal double BasinOutflow(int basin) => basin >= 0 && basin < _firstCell.Count ? _outflow[basin] : 0;
+
     /// <summary>湖面高度（公尺），只對 <see cref="LakeOf"/> ≥ 0 的格子有意義。</summary>
     /// <param name="cell">格子。</param>
     internal float LakeLevelAt(int cell) => _lakeLevel[cell];
@@ -199,7 +206,8 @@ public sealed class Hydrology
         SimulationSnapshot.WriteArray(writer, _lakeLevel);
         SimulationSnapshot.WriteArray(writer, _discharge);
         writer.Write(_firstCell.Count);
-        for (var b = 0; b < _firstCell.Count; b++) { writer.Write(_firstCell[b]); writer.Write(_holdsWater[b]); }
+        // 湖的出流也要存（水文地貌規劃 H4）：四季的水文讀檔之後要知道每個湖平均放多少水下去
+        for (var b = 0; b < _firstCell.Count; b++) { writer.Write(_firstCell[b]); writer.Write(_holdsWater[b]); writer.Write(_outflow[b]); }
     }
 
     /// <summary>讀檔，見 <see cref="WriteTo"/>。</summary>
@@ -216,7 +224,7 @@ public sealed class Hydrology
         var basins = reader.ReadInt32();
         _firstCell.Clear();
         if (_holdsWater.Length < basins) { _holdsWater = new bool[basins]; _outflow = new double[basins]; }
-        for (var b = 0; b < basins; b++) { _firstCell.Add(reader.ReadInt32()); _holdsWater[b] = reader.ReadBoolean(); }
+        for (var b = 0; b < basins; b++) { _firstCell.Add(reader.ReadInt32()); _holdsWater[b] = reader.ReadBoolean(); _outflow[b] = reader.ReadDouble(); }
         _lakeCellsWritten.Clear();
         for (var c = 0; c < _lakeOf.Length; c++) if (_lakeOf[c] >= 0) _lakeCellsWritten.Add(c);
         _orderVersion++;
@@ -647,6 +655,9 @@ public sealed class Hydrology
     /// 雨的部分照 <see cref="Climate.RunoffFraction"/>（其餘蒸散掉）；雪的部分存到融雪季才流下來，蒸散損失很少，
     /// 用 <see cref="SnowmeltRunoffFraction"/>。降雪的比例見 <see cref="Climate.SnowFraction"/>。冰蓋往平衡厚度鬆弛、沒有記融化量，冰河本身的消融不另外算。
     /// </summary>
+    internal static float RunoffFractionAtCell(SimulationState state, int cell) => RunoffFractionAt(state, cell);
+
+    /// <inheritdoc cref="RunoffFractionAtCell"/>
     private static float RunoffFractionAt(SimulationState state, int cell)
     {
         var snow = Climate.SnowFraction(state.Temperature[cell]);
@@ -654,7 +665,7 @@ public sealed class Hydrology
     }
 
     /// <summary>融雪的逕流係數。以融雪為主的高山集水區（阿爾卑斯、天山）年逕流係數約 0.6~0.9。</summary>
-    private const float SnowmeltRunoffFraction = 0.8f;
+    internal const float SnowmeltRunoffFraction = 0.8f;
 
     /// <summary>湖面蒸發（降水的相對單位）：15°C 時是全球平均降水的 <see cref="EvaporationAt15CPerMeanPrecipitation"/> 倍，隨溫度指數變化。</summary>
     private float EvaporationAt(SimulationState state, int cell, double meanPrecipitation)
