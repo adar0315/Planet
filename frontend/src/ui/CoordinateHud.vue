@@ -6,6 +6,7 @@ import KeyBindingPanel from './KeyBindingPanel.vue'
 import { useTerrainStyleStore } from '@/stores/terrainStyles'
 import { ELEVATION_EXAGGERATION, METERS_PER_ELEVATION_LEVEL } from '@/map/tileMeshBuilder'
 import { FLIGHT_TIERS, SPEED_OF_SOUND_MPS } from '@/map/flightMotion'
+import { interpolateMonthly, monthPosition, seasonName } from '@/map/seasons'
 
 const gameState = useGameStateStore()
 const keyBindings = useKeyBindingsStore()
@@ -68,6 +69,22 @@ const keys = computed(() => ({
   ].join('/'),
 }))
 
+/** 當地的季節、當月氣溫與降水（水文地貌規劃 H8）。程序化的星球沒有四季資料，只顯示季節名稱。 */
+const seasonLabel = computed(() => {
+  const tile = gameState.currentTile
+  if (!tile) return null
+  const name = seasonName(tile.latitude, gameState.gameTime)
+  const cell = tile.sourceCellId !== undefined ? gameState.seasonsOf(tile.sourceCellId) : undefined
+  if (!cell) return `${name}季`
+  const position = monthPosition(gameState.gameTime)
+  const temperature = interpolateMonthly(cell.temperature, position)
+  const precipitation = interpolateMonthly(cell.precipitation, position)
+  const annual = cell.precipitation.reduce((a, b) => a + b, 0) / cell.precipitation.length
+  const wetness = annual > 0 ? precipitation / annual : 1
+  const rain = wetness >= 1.5 ? '雨季' : wetness <= 0.5 ? '乾季' : '雨量普通'
+  return `${name}季、${temperature.toFixed(1)}°C、${rain}（當月降水是全年平均的 ${(wetness * 100).toFixed(0)}%）`
+})
+
 /** 飛行區塊：檔位、速度（含馬赫數）、離地高度。 */
 const flightLabel = computed(() => {
   const f = gameState.flight
@@ -90,6 +107,7 @@ const flightLabel = computed(() => {
       }}）
     </div>
     <div>時間：{{ formattedTime }}</div>
+    <div v-if="seasonLabel">季節：{{ seasonLabel }}</div>
     <div>模式：{{ modeLabel[gameState.mode] }}</div>
     <div v-if="gameState.isGodView" class="god-view">
       上帝視角（時間暫停、角色留在原地）：{{ keys.forward }}{{ keys.left }}{{ keys.back }}{{ keys.right }}

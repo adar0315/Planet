@@ -4,6 +4,8 @@ import { buildTileOutline, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { buildTilePatchMeshSliced, type TilePatchMesh } from '@/map/tilePatchMesh'
 import { createTilePatch, neighborsOf, type TilePatch } from '@/map/tilePatch'
 import { determineDayPeriod } from '@/map/solarTime'
+import { monthPosition, seasonalTerrain } from '@/map/seasons'
+import type { SeasonData } from './seasonData'
 import { useGameStateStore } from '@/stores/gameState'
 import { useTerrainStyleStore } from '@/stores/terrainStyles'
 import type { TileDto } from '@/types/tile'
@@ -30,6 +32,11 @@ export interface PatchManager {
   flushColorsIfDirty(): boolean
   /** 標示這些Tile的外框（亮黃色，可點擊移動的鄰居）。傳入的是完整Tile清單，不是插槽——patchManager不需要知道「哪個方向鍵對到哪一格」。 */
   highlightNeighbors(neighbors: Iterable<TileDto>): void
+  /**
+   * 某一格（地塊或近看細分的小格）在目前遊戲時間的顏色：時段（清晨／白天／黃昏／夜晚）＋季節（積雪、結冰、河的水位）。
+   * 小格（isSubTile）的河依中心線距離決定；地塊的河是「範圍裡有河就整格是河」，拉遠時用（水文地貌規劃 H6/H8）。
+   */
+  colorFor(tile: TileDto, isSubTile: boolean): number
   dispose(): void
 }
 
@@ -47,6 +54,7 @@ export function createPatchManager(
   gameState: ReturnType<typeof useGameStateStore>,
   terrainStyleStore: ReturnType<typeof useTerrainStyleStore>,
   isCancelled: () => boolean,
+  seasonData: SeasonData,
 ): PatchManager {
   const tileGroup = new THREE.Group()
   scene.add(tileGroup)
@@ -66,10 +74,15 @@ export function createPatchManager(
     patchMesh = null
   }
 
-  /** 依Tile所在經緯度＋目前遊戲時間，算出清晨/白天/黃昏/夜晚哪個時段對應的顏色。 */
-  function colorForTile(tile: TileDto): number {
+  /** 依Tile所在經緯度＋目前遊戲時間，算出清晨/白天/黃昏/夜晚哪個時段、哪個季節對應的顏色。 */
+  function colorFor(tile: TileDto, isSubTile: boolean): number {
     const period = determineDayPeriod(tile.latitude, tile.longitude, gameState.gameTime)
-    return terrainStyleStore.getColorHex(tile.terrain, period)
+    const terrain = seasonalTerrain(tile, monthPosition(gameState.gameTime), seasonData.seasonsOf, isSubTile)
+    return terrainStyleStore.getColorHex(terrain, period)
+  }
+
+  function colorForTile(tile: TileDto): number {
+    return colorFor(tile, false)
   }
 
   async function loadPatch(latitude: number, longitude: number): Promise<PatchLoadResult | null> {
@@ -102,6 +115,10 @@ export function createPatchManager(
     // 切片建構期間遊戲時間可能剛好跨過時段，先建好的格子會拿到舊顏色、後建的拿到新顏色。
     // 換上去之後統一重新上色一次，確保整片顏色一致。
     colorsDirty = true
+    // 四季資料（積雪、結冰、河的水位）抓到之後再重新上色一次；沒有也照常畫
+    void seasonData.ensure(tiles).then((loaded) => {
+      if (loaded) colorsDirty = true
+    })
 
     return { patch: next, mesh: nextMesh }
   }
@@ -147,6 +164,7 @@ export function createPatchManager(
       return patchMesh
     },
     loadPatch,
+    colorFor,
     markColorsDirty,
     flushColorsIfDirty,
     highlightNeighbors,

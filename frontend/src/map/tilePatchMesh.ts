@@ -35,6 +35,11 @@ export interface TilePatchMesh {
   recolorTile(tileIndex: number, colorHex: number): void
   /** 重新計算全部Tile的顏色，最後只觸發一次GPU上傳。 */
   recolorAll(colorOf: (tile: TileDto, index: number) => number): void
+  /**
+   * 藏起／顯示一格（含側面牆）。近看細分時，被小六角取代的地塊要藏起來（水文地貌規劃 H7）。
+   * 藏的做法是把這格的頂點全部收到格心——三角形面積變成 0，GPU 不會畫；原本的位置留一份備份，顯示時還原。
+   */
+  setTileHidden(tileIndex: number, hidden: boolean): void
   /** 釋放geometry。材質是module-level共用的，不能dispose。 */
   dispose(): void
 }
@@ -287,10 +292,9 @@ function createPatchMeshBuilder(
     const totalTriangles = t
 
     const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(positions.subarray(0, totalVertices * 3), 3),
-    )
+    const positionArray = positions.subarray(0, totalVertices * 3)
+    const positionAttribute = new THREE.BufferAttribute(positionArray, 3)
+    geometry.setAttribute('position', positionAttribute)
     geometry.setAttribute(
       'normal',
       new THREE.BufferAttribute(normals.subarray(0, totalVertices * 3), 3),
@@ -303,6 +307,7 @@ function createPatchMeshBuilder(
     geometry.computeBoundingSphere()
 
     const mesh = new THREE.Mesh(geometry, patchMaterial)
+    const hiddenBackup = new Map<number, Float32Array>()
 
     function writeTileColor(tileIndex: number, colorHex: number): void {
       color.setHex(colorHex)
@@ -346,6 +351,32 @@ function createPatchMeshBuilder(
         // 整批改完只觸發一次上傳（原本是每格一次needsUpdate＝2000次bufferSubData）。
         colorAttribute.clearUpdateRanges()
         colorAttribute.needsUpdate = true
+      },
+
+      setTileHidden(tileIndex: number, hidden: boolean): void {
+        if (tileIndex < 0 || tileIndex >= tileCount) return
+        const from = vertexStart[tileIndex]!
+        const to = vertexStart[tileIndex + 1]!
+        if (hidden) {
+          if (hiddenBackup.has(tileIndex)) return
+          hiddenBackup.set(tileIndex, positionArray.slice(from * 3, to * 3))
+          // 第一個頂點是上蓋的中心
+          const cx = positionArray[from * 3]!
+          const cy = positionArray[from * 3 + 1]!
+          const cz = positionArray[from * 3 + 2]!
+          for (let vertex = from; vertex < to; vertex++) {
+            positionArray[vertex * 3] = cx
+            positionArray[vertex * 3 + 1] = cy
+            positionArray[vertex * 3 + 2] = cz
+          }
+        } else {
+          const backup = hiddenBackup.get(tileIndex)
+          if (!backup) return
+          positionArray.set(backup, from * 3)
+          hiddenBackup.delete(tileIndex)
+        }
+        positionAttribute.addUpdateRange(from * 3, (to - from) * 3)
+        positionAttribute.needsUpdate = true
       },
 
       dispose(): void {

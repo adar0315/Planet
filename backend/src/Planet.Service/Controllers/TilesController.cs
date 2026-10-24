@@ -14,13 +14,54 @@ public class TilesController : ControllerBase
     private readonly ITileRepository _tileRepository;
     private readonly ITileNeighborResolver _neighborResolver;
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
+    private readonly SubTileService _subTiles;
 
     /// <summary>建立控制器。</summary>
-    public TilesController(ITileRepository tileRepository, ITileNeighborResolver neighborResolver, OverviewTextureGenerator overviewTextureGenerator)
+    public TilesController(
+        ITileRepository tileRepository, ITileNeighborResolver neighborResolver,
+        OverviewTextureGenerator overviewTextureGenerator, SubTileService subTiles)
     {
         _tileRepository = tileRepository;
         _neighborResolver = neighborResolver;
         _overviewTextureGenerator = overviewTextureGenerator;
+        _subTiles = subTiles;
+    }
+
+    /// <summary>
+    /// 近看細分（水文地貌規劃 H7）：這些地塊底下約 250 公尺一格的小六角，含彼此的鄰居與河道的資訊。
+    /// 用 POST 是因為一次要上千個地塊編號，放在網址上會超過長度限制。
+    /// </summary>
+    /// <param name="request">要細分的地塊編號（最多 <see cref="SubTileService.MaxParentsPerRequest"/> 個）。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>小格清單。</returns>
+    /// <response code="200">小格清單。</response>
+    /// <response code="400">沒給地塊，或一次要太多。</response>
+    [HttpPost("subtiles")]
+    [ProducesResponseType<IReadOnlyList<SubTileDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<IReadOnlyList<SubTileDto>>> GetSubTiles([FromBody] SubTileRequest request, CancellationToken ct)
+    {
+        if (request.TileIds is not { Length: > 0 } ids) return BadRequest("要給地塊編號。");
+        if (ids.Length > SubTileService.MaxParentsPerRequest) return BadRequest($"一次最多 {SubTileService.MaxParentsPerRequest} 個地塊。");
+        return Ok(await _subTiles.GetSubTilesAsync(ids, ct));
+    }
+
+    /// <summary>
+    /// 模擬粗格的四季（水文地貌規劃 H8）：12 個月的氣溫、降水、流量比例，與積雪、結冰的月份。程序化的星球回傳空清單。
+    /// </summary>
+    /// <param name="request">粗格編號（最多 <see cref="SubTileService.MaxCellsPerRequest"/> 個）。</param>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>每個粗格的四季。</returns>
+    /// <response code="200">每個粗格的四季。</response>
+    /// <response code="400">沒給粗格，或一次要太多。</response>
+    [HttpPost("cell-seasons")]
+    [ProducesResponseType<IReadOnlyList<CellSeasonsDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<IReadOnlyList<CellSeasonsDto>>> GetCellSeasons([FromBody] CellSeasonsRequest request, CancellationToken ct)
+    {
+        if (request.CellIds is not { Length: > 0 } ids) return BadRequest("要給粗格編號。");
+        if (ids.Length > SubTileService.MaxCellsPerRequest) return BadRequest($"一次最多 {SubTileService.MaxCellsPerRequest} 個粗格。");
+        return Ok(await _subTiles.GetSeasonsAsync(ids, ct));
     }
 
     /// <summary>查詢指定經緯度附近最近的地塊。</summary>
@@ -149,3 +190,11 @@ public class TilesController : ControllerBase
     }
 
 }
+
+/// <summary><c>POST api/tiles/subtiles</c> 的內容。</summary>
+/// <param name="TileIds">要細分的地塊編號。</param>
+public record SubTileRequest(long[] TileIds);
+
+/// <summary><c>POST api/tiles/cell-seasons</c> 的內容。</summary>
+/// <param name="CellIds">粗格編號。</param>
+public record CellSeasonsRequest(int[] CellIds);

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef, watch } from 'vue'
 import type { TileDto } from '@/types/tile'
+import type { SeasonsLookup } from '@/map/seasons'
 
 export type GameMode = 'observe' | 'stepped' | 'realtime'
 
@@ -164,6 +165,12 @@ export const useGameStateStore = defineStore('gameState', () => {
    */
   const isGodView = ref(false)
 
+  /**
+   * 查模擬粗格的四季資料（水文地貌規劃 H8）。走動視角的場景建立時換成真的快取，給 HUD 顯示當地的季節、氣溫、降水。
+   * 用 shallowRef 包一個函式：資料本身在場景的快取裡，這裡只是一個查詢入口，不需要深層響應式。
+   */
+  const seasonsOf = shallowRef<SeasonsLookup>(() => undefined)
+
   /** 每次+1代表使用者要求切換上帝視角（HUD 按鈕用；鍵盤直接在 inputHandlers 處理）。 */
   const godViewToggleSignal = ref(0)
 
@@ -241,6 +248,7 @@ export const useGameStateStore = defineStore('gameState', () => {
     cameraZoomPercent,
     flight,
     isGodView,
+    seasonsOf,
     godViewToggleSignal,
     requestToggleGodView,
     resetViewSignal,

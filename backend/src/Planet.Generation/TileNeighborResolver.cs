@@ -119,6 +119,19 @@ public class TileNeighborResolver : ITileNeighborResolver
     }
 
     /// <summary>
+    /// 把某個面上的格點座標換成正規的表示（面索引最小的那個面）。給近看細分的小六角用（<see cref="SubTileGrid"/>）：
+    /// 它在各個面上列舉格點，要跟資料庫、鄰居推導用同一套表示，才查得到。
+    /// </summary>
+    /// <param name="faceIndex">面。</param>
+    /// <param name="row">列（面的第二個頂點的權重）。</param>
+    /// <param name="col">欄（面的第三個頂點的權重）。</param>
+    public (int FaceIndex, int Row, int Col) Canonicalize(int faceIndex, int row, int col)
+    {
+        var (ia, ib, ic) = IcosahedronGeometry.Faces[faceIndex];
+        return Canonicalize(new Dictionary<int, int> { [ia] = _n - row - col, [ib] = row, [ic] = col });
+    }
+
+    /// <summary>
     /// 給定一個點在「哪些physical頂點上有哪些權重」，找出能表達這個點的所有面中，面索引最小的那個
     /// （面內部的點只有唯一一個面能表達，沒有歧義；邊界點恰有2個候選面；角點最多5個候選面）。
     /// </summary>

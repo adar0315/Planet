@@ -106,3 +106,18 @@ export const GOD_VIEW_PATCH_CEILING_METERS = 300_000
 
 /** 水平速度＝每秒移動目前的鏡頭距離，但不低於這個值（公尺／秒）。 */
 export const GOD_VIEW_MIN_SPEED_MPS = 500
+
+/**
+ * 近看細分（水文地貌規劃 H7）：鏡頭距離低於這個值（公尺）就把附近的地塊換成約 250 公尺的小六角。
+ * 預設鏡頭 20 公里時看不出小格，拉近到幾公里才看得到河道、沙灘的形狀。
+ */
+export const SUBTILE_CAMERA_DISTANCE_METERS = 8_000
+
+/** 細分多大的範圍（公尺，半徑）。約 300 個地塊、五千個小格。 */
+export const SUBTILE_RADIUS_METERS = 12_000
+
+/** 注視點離上一次細分的中心超過這麼遠（公尺）才重新要一批。 */
+export const SUBTILE_REFRESH_METERS = 4_000
+
+/** 小格的邊長（公尺）：地塊的四分之一（後端 SubTileGrid.Factor = 4）。 */
+export const SUBTILE_EDGE_METERS = 250
