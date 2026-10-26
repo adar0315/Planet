@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import type { TileDto } from '@/types/tile'
-import { computeTilePolygon, tileSurfaceRadius, type TileMeshOptions } from './tileMeshBuilder'
+import {
+  computeTilePolygon,
+  slopeNormalOf,
+  tileSurfaceRadius,
+  type TileMeshOptions,
+} from './tileMeshBuilder'
 
 /**
  * 把整個patch的Tile合併成「一個」BufferGeometry／一次draw call。
@@ -46,6 +51,27 @@ export interface TilePatchMesh {
 
 const patchMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
 
+/** 格子邊線：淡淡的深色，不寫深度（線之間不互相遮）。 */
+const edgeLineMaterial = new THREE.LineBasicMaterial({
+  color: 0x000000,
+  transparent: true,
+  opacity: 0.22,
+  depthWrite: false,
+})
+
+/** 邊線往上抬多少公尺（不含誇張倍率），避免跟頂面搶深度而閃爍。 */
+const EDGE_LINE_LIFT_METERS = 5
+
+/**
+ * 近看細分用的額外畫法（2026-10-26，使用者要求「陸地一片平坦沒細節」的改善）。地塊本身不開。
+ */
+export interface PatchMeshExtras {
+  /** 頂面用依鄰格高度算出的坡面法向量（山坡陰影）；水面維持朝正上方。 */
+  slopeShading?: boolean
+  /** 描出每一格的邊線（掛在 mesh 底下的一個 LineSegments）。 */
+  edgeLines?: boolean
+}
+
 /** 每格最多的頂點數：上蓋(1中心+6角落) + 6面牆×4頂點。 */
 const MAX_VERTICES_PER_TILE = 7 + 6 * 4
 /** 每格最多的三角形數：上蓋6 + 6面牆×2。 */
@@ -77,8 +103,9 @@ export function buildTilePatchMesh(
   options: TileMeshOptions,
   colorOf: (tile: TileDto, index: number) => number,
   neighboursOf?: NeighbourLookup,
+  extras?: PatchMeshExtras,
 ): TilePatchMesh {
-  const builder = createPatchMeshBuilder(tiles, options, colorOf, neighboursOf)
+  const builder = createPatchMeshBuilder(tiles, options, colorOf, neighboursOf, extras)
   builder.fillRange(0, builder.tileCount)
   return builder.finish()
 }
@@ -131,9 +158,9 @@ export async function buildTilePatchMeshSliced(
   options: TileMeshOptions,
   colorOf: (tile: TileDto, index: number) => number,
   neighboursOf?: NeighbourLookup,
-  opts?: { budgetMs?: number; isCancelled?: () => boolean },
+  opts?: { budgetMs?: number; isCancelled?: () => boolean } & PatchMeshExtras,
 ): Promise<TilePatchMesh | null> {
-  const builder = createPatchMeshBuilder(tiles, options, colorOf, neighboursOf)
+  const builder = createPatchMeshBuilder(tiles, options, colorOf, neighboursOf, opts)
   const budgetMs = opts?.budgetMs ?? DEFAULT_SLICE_BUDGET_MS
 
   let next = 0
@@ -157,8 +184,11 @@ function createPatchMeshBuilder(
   options: TileMeshOptions,
   colorOf: (tile: TileDto, index: number) => number,
   neighboursOf?: NeighbourLookup,
+  extras?: PatchMeshExtras,
 ): PatchMeshBuilder {
   const tileCount = tiles.length
+  const edgePositions: number[] = []
+  const edgeLift = 1 + EDGE_LINE_LIFT_METERS / options.planetRadiusMeters
 
   // 先照最壞情況配置，最後再用 subarray 裁到實際大小——
   // 側面牆的數量要算過多邊形才知道，分兩趟走訪等於把最貴的部分做兩次。
@@ -178,6 +208,7 @@ function createPatchMeshBuilder(
   const scratchRadial = new THREE.Vector3()
   const scratchNormal = new THREE.Vector3()
   const scratchMid = new THREE.Vector3()
+  const scratchSlope = new THREE.Vector3()
 
   let v = 0
   let t = 0
@@ -210,19 +241,50 @@ function createPatchMeshBuilder(
     triangleStart[i] = t
     color.setHex(colorOf(tile, i))
 
+    const neighbours = neighboursOf?.(tile, i)
     const { center, normal, ring, sideCount, edgeNeighbours } = computeTilePolygon(
       tile,
       options,
-      neighboursOf?.(tile, i),
+      neighbours,
     )
+
+    // 山坡陰影：陸地的頂面改用坡面法向量（水面是平的，維持朝上）
+    const capNormal =
+      extras?.slopeShading && neighbours && tile.seaLevel <= tile.elevationLevel
+        ? slopeNormalOf(tile, neighbours, options, scratchSlope)
+        : normal
 
     // ---- 上蓋 ----
     const capBase = v
-    writeVertex(center.x, center.y, center.z, normal.x, normal.y, normal.z)
+    writeVertex(center.x, center.y, center.z, capNormal.x, capNormal.y, capNormal.z)
     for (let k = 0; k < sideCount; k++) {
       const p = ring[k]!
       // 整格共用同一個切平面法向量（不呼叫computeVertexNormals，那會把相鄰格平滑化、毀掉格子邊界）
-      writeVertex(p.x, p.y, p.z, normal.x, normal.y, normal.z)
+      writeVertex(p.x, p.y, p.z, capNormal.x, capNormal.y, capNormal.z)
+    }
+
+    // ---- 邊線 ----
+    // 每條邊只畫一次：由較高的那一格畫（線在牆頂、從上面看得到）；一樣高時由編號大的畫；沒有鄰居的邊一律畫
+    if (extras?.edgeLines) {
+      for (let k = 0; k < sideCount; k++) {
+        const neighbour = edgeNeighbours[k]
+        if (
+          neighbour &&
+          (neighbour.elevationLevel > tile.elevationLevel ||
+            (neighbour.elevationLevel === tile.elevationLevel && neighbour.tileId < tile.tileId))
+        )
+          continue
+        const a = ring[k]!
+        const b = ring[(k + 1) % sideCount]!
+        edgePositions.push(
+          a.x * edgeLift,
+          a.y * edgeLift,
+          a.z * edgeLift,
+          b.x * edgeLift,
+          b.y * edgeLift,
+          b.z * edgeLift,
+        )
+      }
     }
     for (let k = 0; k < sideCount; k++) {
       writeTriangle(capBase, capBase + 1 + k, capBase + 1 + ((k + 1) % sideCount), i)
@@ -307,6 +369,14 @@ function createPatchMeshBuilder(
     geometry.computeBoundingSphere()
 
     const mesh = new THREE.Mesh(geometry, patchMaterial)
+    let edgeGeometry: THREE.BufferGeometry | null = null
+    if (edgePositions.length > 0) {
+      edgeGeometry = new THREE.BufferGeometry()
+      edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3))
+      // 掛在 mesh 底下：跟著加進／移出場景，不必另外管理
+
+      mesh.add(new THREE.LineSegments(edgeGeometry, edgeLineMaterial))
+    }
     const hiddenBackup = new Map<number, Float32Array>()
 
     function writeTileColor(tileIndex: number, colorHex: number): void {
@@ -381,6 +451,7 @@ function createPatchMeshBuilder(
 
       dispose(): void {
         geometry.dispose() // 材質是module-level共用的，不能在這裡dispose
+        edgeGeometry?.dispose()
       },
     }
   }

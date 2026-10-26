@@ -93,7 +93,9 @@ onMounted(async () => {
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10000)
   camera.position.set(0, RENDER_RADIUS * 0.6, RENDER_RADIUS * 2.2)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true })
+  // 對數深度緩衝：近裁切面會跟著鏡頭拉近縮到幾十公尺（cameraRig），遠端卻還是整顆星球，
+  // 一般的深度緩衝撐不住這個比例，遠處的格子會互相閃爍
+  renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
   renderer.setSize(window.innerWidth, window.innerHeight)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
   container.appendChild(renderer.domElement)

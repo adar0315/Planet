@@ -55,6 +55,15 @@ const DRAG_DEG_PER_PIXEL = 0.25
 /** 滾輪縮放的靈敏度：距離乘上 exp(deltaY × 這個值)。指數縮放在遠近兩端的手感才一致。 */
 const WHEEL_ZOOM_RATE = 0.001
 
+/**
+ * 近裁切面＝鏡頭距離 × 這個比例。傾斜到 85° 時鏡頭離地只剩距離的約 9%，
+ * 再扣掉誇張 8 倍的起伏，取 2% 才不會切到腳下的地面。
+ */
+const NEAR_PER_DISTANCE = 0.02
+/** 近裁切面的上下限（場景單位）。上限是原本固定的值，遠看時維持原樣。 */
+const MIN_NEAR = 1e-5
+const MAX_NEAR = 0.1
+
 /** 移動時環顧偏移回正的速度（每秒衰減的比例常數）。 */
 const LOOK_RECENTER_RATE = 3
 
@@ -160,6 +169,14 @@ export function createCameraRig(
     camera.position.copy(focus).addScaledVector(viewDir, distance)
     camera.up.copy(lookDir) // 畫面上方＝看的方向
     camera.lookAt(focus)
+
+    // 近裁切面跟著鏡頭距離：固定 0.1 場景單位約 3.7 公里，鏡頭拉到 4 公里時，斜看的前景地面
+    // 與選取框整段被切掉（2026-10-26 使用者回報）。精度靠 renderer 的對數深度緩衝撐住。
+    const near = THREE.MathUtils.clamp(distance * NEAR_PER_DISTANCE, MIN_NEAR, MAX_NEAR)
+    if (near !== camera.near) {
+      camera.near = near
+      camera.updateProjectionMatrix()
+    }
   }
 
   return {

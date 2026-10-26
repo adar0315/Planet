@@ -4,6 +4,7 @@ import { latLonToVector3 } from '@/map/sphereCoordinates'
 import { createTilePatch, neighborsOf } from '@/map/tilePatch'
 import { buildTilePatchMeshSliced, type TilePatchMesh } from '@/map/tilePatchMesh'
 import type { TileMeshOptions } from '@/map/tileMeshBuilder'
+import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
 import type { SubTileDto, TileDto } from '@/types/tile'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
@@ -51,6 +52,8 @@ export function createSubTileManager(
   scene.add(group)
 
   let subMesh: TilePatchMesh | null = null
+  /** 目前這批小格的亮度倍率（依高低與編號，見 subTileShading），重新上色時要再乘一次。 */
+  let brightness = new Map<number, number>()
   /** 目前被小格取代、藏起來的地塊。 */
   let hiddenParents = new Set<number>()
   /** 藏地塊時用的是哪一個地塊 mesh：patch 換掉之後新的 mesh 沒有藏，要重新藏一次。 */
@@ -60,6 +63,10 @@ export function createSubTileManager(
   let generation = 0
 
   const focusUnit = new THREE.Vector3()
+
+  function shadedColor(tile: TileDto, factors: ReadonlyMap<number, number>): number {
+    return scaleColorHex(patchManager.colorFor(tile, true), factors.get(tile.tileId) ?? 1)
+  }
 
   function setParentsHidden(ids: Iterable<number>, hidden: boolean) {
     const mesh = patchManager.patchMesh
@@ -107,14 +114,22 @@ export function createSubTileManager(
       if (myGeneration !== generation) return
 
       const subPatch = createTilePatch(subs)
+      const nextBrightness = new Map<number, number>()
+      for (const sub of subs)
+        nextBrightness.set(sub.tileId, subTileBrightness(sub, neighborsOf(subPatch, sub.tileId)))
       const built = await buildTilePatchMeshSliced(
         subs,
         subOptions,
-        (tile) => patchManager.colorFor(tile, true),
+        (tile) => shadedColor(tile, nextBrightness),
         (tile) => neighborsOf(subPatch, tile.tileId),
-        { isCancelled: () => isCancelled() || myGeneration !== generation },
+        {
+          isCancelled: () => isCancelled() || myGeneration !== generation,
+          slopeShading: true,
+          edgeLines: true,
+        },
       )
       if (!built || myGeneration !== generation) return
+      brightness = nextBrightness
 
       // 換上去：舊的小格拿掉、新的放上；藏的地塊換成新的這一批
       if (subMesh) {
@@ -159,7 +174,7 @@ export function createSubTileManager(
     },
 
     recolor() {
-      subMesh?.recolorAll((tile) => patchManager.colorFor(tile, true))
+      subMesh?.recolorAll((tile) => shadedColor(tile, brightness))
     },
 
     dispose() {

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { TileDto } from '@/types/tile'
-import { latLonToVector3, tangentBasisAt } from './sphereCoordinates'
+import { latLonToVector3, latLonToVector3Into, tangentBasisAt } from './sphereCoordinates'
 
 export interface TileMeshOptions {
   /** 場景中星球的顯示半徑（場景單位，不是公尺）。 */
@@ -11,7 +11,16 @@ export interface TileMeshOptions {
   edgeLengthMeters?: number
 }
 
-const outlineMaterial = new THREE.LineBasicMaterial({ color: 0xffe066, linewidth: 2 })
+/**
+ * 外框不做深度測試、最後才畫：近看細分（250 公尺小格）時，外框還在地塊的高度，
+ * 比它高一兩級的小格會把外框整段蓋掉（2026-10-26 使用者回報）。
+ */
+const outlineMaterial = new THREE.LineBasicMaterial({
+  color: 0xffe066,
+  linewidth: 2,
+  depthTest: false,
+})
+const OUTLINE_RENDER_ORDER = 10
 
 /**
  * 地形起伏的視覺誇張倍率：ElevationLevel每級5公尺，相對星球半徑(~1851公里)是極小的比例，
@@ -195,6 +204,48 @@ export function tileSurfaceRadius(tile: TileDto, options: TileMeshOptions): numb
 }
 
 /**
+ * 依鄰格的地表高度算出這一格頂面的「坡面」法向量（山坡陰影用，2026-10-26）。
+ *
+ * 格子的頂面是平的、法向量朝正上方，所以不論高低，受光都一樣，近看細分時整片看起來是平的。
+ * 這裡用鄰格高度差做最小平方法求坡度：六個方向均勻分布時，Σ Δhₖ·dₖ/|dₖ|² 剛好是 N/2 倍的梯度。
+ * 高度用畫面上的（含誇張倍率），陰影才跟看到的起伏一致。幾何不變，只換法向量。
+ *
+ * @returns 單位法向量（世界座標）。鄰居不足兩個時就是正上方。
+ */
+export function slopeNormalOf(
+  tile: TileDto,
+  neighbours: readonly TileDto[],
+  options: TileMeshOptions,
+  target = new THREE.Vector3(),
+): THREE.Vector3 {
+  const up = latLonToVector3Into(tile.latitude, tile.longitude, 1, target)
+  if (neighbours.length < 2) return up
+  const height = tileSurfaceRadius(tile, options)
+  scratchGradient.set(0, 0, 0)
+  for (const neighbour of neighbours) {
+    latLonToVector3Into(
+      neighbour.latitude,
+      neighbour.longitude,
+      options.renderRadius,
+      scratchOffset,
+    )
+    scratchOffset.addScaledVector(up, -options.renderRadius)
+    scratchOffset.addScaledVector(up, -scratchOffset.dot(up)) // 只留切平面上的分量
+    const lengthSq = scratchOffset.lengthSq()
+    if (lengthSq === 0) continue
+    scratchGradient.addScaledVector(
+      scratchOffset,
+      (tileSurfaceRadius(neighbour, options) - height) / lengthSq,
+    )
+  }
+  scratchGradient.multiplyScalar(2 / neighbours.length)
+  return up.sub(scratchGradient).normalize()
+}
+
+const scratchGradient = new THREE.Vector3()
+const scratchOffset = new THREE.Vector3()
+
+/**
  * 飛行時的「地面」半徑（場景單位）：陸地是格子頂面，水下的格子是水面而不是水底。
  * 飛機的最低高度從這裡算——從海床算的話，在海上可以一路潛到幾公里深的海溝裡。
  */
@@ -224,5 +275,7 @@ export function buildTileOutline(
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
 
-  return new THREE.LineLoop(geometry, outlineMaterial)
+  const outline = new THREE.LineLoop(geometry, outlineMaterial)
+  outline.renderOrder = OUTLINE_RENDER_ORDER
+  return outline
 }

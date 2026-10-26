@@ -32,7 +32,10 @@ export async function fetchSubTiles(tileIds: readonly number[]): Promise<SubTile
     body: JSON.stringify({ tileIds }),
   })
   if (!response.ok) throw new Error(`取得細分地塊失敗: ${response.status}`)
-  return response.json()
+  // 後端的編號欄位叫 subTileId，前端沿用 TileDto 的 tileId。漏了這一步的話 tileId 全是 undefined：
+  // 鄰居一個都查不到，每格都退回固定半徑的近似畫法，六角形互相重疊（2026-10-26 使用者回報「顯示有問題」）
+  const raw: (Omit<SubTileDto, 'tileId'> & { subTileId: number })[] = await response.json()
+  return raw.map(({ subTileId, ...rest }) => ({ ...rest, tileId: subTileId }))
 }
 
 /** 模擬粗格的四季（水文地貌規劃 H8）。程序化的星球回傳空陣列。 */
