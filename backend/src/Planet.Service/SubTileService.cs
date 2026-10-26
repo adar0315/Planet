@@ -13,8 +13,8 @@ namespace Planet.Service;
 /// </summary>
 public sealed class SubTileService
 {
-    /// <summary>一次最多要幾個地塊的小格（約 1,500 個地塊＝半徑 20 公里、兩萬多個小格）。</summary>
-    public const int MaxParentsPerRequest = 1_500;
+    /// <summary>一次最多要幾個地塊的小格（約 2,500 個地塊＝半徑 40 公里、四萬個小格；前端細分半徑 36 公里約 1,900 個）。</summary>
+    public const int MaxParentsPerRequest = 2_500;
 
     /// <summary>一次最多要幾個粗格的四季。</summary>
     public const int MaxCellsPerRequest = 5_000;

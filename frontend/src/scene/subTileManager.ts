@@ -15,8 +15,11 @@ import {
   SUBTILE_REFRESH_METERS,
 } from './planetSceneConstants'
 
-/** 一次最多細分幾個地塊（後端的上限）。 */
-const MAX_PARENTS = 1_500
+/**
+ * 一次最多細分幾個地塊（後端 SubTileService.MaxParentsPerRequest）。半徑 36 公里約 1,900 個。
+ * 一定要一次要完：分批的話，批次交界的小格查不到鄰居，會退回近似畫法而互相重疊。
+ */
+const MAX_PARENTS = 2_500
 
 /**
  * 近看細分（水文地貌規劃 H7，2026-10-24）：鏡頭拉近時，把注視點附近的地塊換成約 250 公尺的小六角——
