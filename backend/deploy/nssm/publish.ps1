@@ -7,7 +7,7 @@
 # 把後端重新發布到部署目錄並重啟服務。
 # 嫌打字麻煩的話可以直接雙擊同目錄下的 publish.bat，它會自動跳UAC提權後呼叫這支腳本。
 #
-# 為什麼一定要先停服務：服務執行中會鎖住 Planet.Service.dll，publish 會失敗，
+# 為什麼一定要先停服務：服務執行中會鎖住 Planet.Service.exe（2026-10-26 起是單一執行檔），publish 會失敗，
 # 錯誤訊息是「由於另一個處理程序正在使用檔案...」（2026-09-06 實際踩過）。
 #
 # 路徑刻意用正斜線：.NET 與 PowerShell 在 Windows 上都吃，而且不會被各層跳脫吃掉反斜線。
@@ -27,8 +27,9 @@ $projectDir = Resolve-Path (Join-Path $PSScriptRoot "../../src/Planet.Service")
 Write-Host "1/4 停止服務 $ServiceName ..." -ForegroundColor Cyan
 & $NssmPath stop $ServiceName | Out-Null
 
-# nssm stop 回來時行程可能還沒真的結束，等到檔案鎖真的放開為止
-$dll = Join-Path $PublishDir "Planet.Service.dll"
+# nssm stop 回來時行程可能還沒真的結束，等到檔案鎖真的放開為止。
+# 看 exe 不看 dll：單一檔案發佈之後部署目錄裡沒有 Planet.Service.dll，打不開會被當成「還鎖著」空等 30 秒
+$dll = Join-Path $PublishDir "Planet.Service.exe"
 $waited = 0
 while ($waited -lt 30) {
     try {

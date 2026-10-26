@@ -81,6 +81,9 @@ header（SignalR走WebSocket需要）跟`proxy_read_timeout 3600s`（預設60秒
 1. 重新 publish：`dotnet publish backend/src/Planet.Service -c Release -o C:\PlanetPublish`
    （`-o` 一定要是這個不含單引號的路徑，見下面`install-service.ps1`同一個註解）。
    不會動到 `C:\PlanetPublish\appsettings.Production.json`（來源沒有同名檔案）。
+   2026-10-26 起發佈成**單一的 `Planet.Service.exe`**（csproj 的 `PublishSingleFile`），服務執行中鎖住的是這個 exe。
+   `C:\PlanetPublish` 第一次換成單一檔案時，要先清掉舊的 DLL 與語系目錄（只留 `appsettings.Production.json` 與 `snapshots\`），
+   清之前先跟使用者確認——`snapshots\` 是地質模擬的存檔，刪了救不回來。
 2. 用系統管理員權限重啟服務：`C:\DCIM\nssm.exe restart PlanetService`
    （這步需要admin，這個環境的一般shell做不到，要請使用者自己執行）。
 

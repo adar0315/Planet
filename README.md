@@ -119,6 +119,7 @@ npm run dev
 ### 部署（2026-08-30，已完成並驗證）
 
 - **EXE打包**：`Planet.Service.csproj` 設定 `RuntimeIdentifier=win-x64` + `SelfContained=true`，`dotnet publish src/Planet.Service -c Release -o C:\PlanetPublish` 已驗證成功（**`-o` 一定要指到路徑本身不含單引號的絕對路徑**——這個repo放在 `D:\Adar's novel stories\Planet\...`，路徑裡的單引號會讓 `dotnet publish` 內建target壞掉噴MSB3094，詳見 [docs/architecture.md](docs/architecture.md)）。
+- **單一執行檔**（2026-10-26）：csproj 另外開了 `PublishSingleFile`，publish 出來只有一個 `Planet.Service.exe`（約 120 MB，含 .NET 執行環境、所有 DLL 與除錯符號）加上 `appsettings*.json`，原本約 400 個檔案。設定檔與 `snapshots` 存檔仍在 exe 旁邊（程式用 `AppContext.BaseDirectory` 找）。**第一次改成單一檔案發佈到 `C:\PlanetPublish` 時**，要先停服務、把舊的 DLL 與語系目錄清掉，只留 `appsettings.Production.json` 與 `snapshots\`，否則舊檔案會一直留在那裡。NSSM 指向的仍是同一個 `Planet.Service.exe`，不用改。
 - **DB連線改用SQL帳密**：改用SQL Server帳號驗證取代Windows整合驗證，這樣NSSM服務不管用哪個Windows帳號執行都能連上DB，不用額外處理服務帳號權限。連線字串本身不進版控，見下方「設定機密」。
 - **NSSM服務安裝**：`deploy/nssm/install-service.ps1` 已驗證成功——服務裝好、啟動、API透過 `http://localhost:5202` 正常回應，`netstat`確認port確實是服務進程在監聽。目前為`SERVICE_DEMAND_START`（手動啟動），確認長期穩定後可改`SERVICE_AUTO_START`開機自動啟動。
 

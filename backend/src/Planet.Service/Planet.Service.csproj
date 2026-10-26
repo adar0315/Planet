@@ -6,12 +6,34 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <!--
+      發佈成單一的 Planet.Service.exe（2026-10-26 使用者要求，原本約 400 個檔案）：.NET 執行環境與所有 DLL 都包進去，
+      原生 DLL（SQL Server 用戶端的 SNI 等）執行時自動解壓到暫存目錄。只影響 dotnet publish，平常的 build／run／F5 不變。
+      appsettings*.json（含機密）與 snapshots 存檔仍在 exe 旁邊：程式用 AppContext.BaseDirectory 找它們，單一檔案下就是 exe 所在目錄。
+    -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- 不輸出各語系的資源目錄（cs、de、ja…）：訊息照預設的英文 -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- 開發時的連線字串／管理金鑰放這裡（存在 %APPDATA%\Microsoft\UserSecrets，不在repo內）。 -->
     <UserSecretsId>planet-service-dev-secrets</UserSecretsId>
     <AssemblyTitle>Planet Service</AssemblyTitle>
     <Product>Planet</Product>
     <Description>Planet 星球地圖走動系統後端：Goldberg多面體星球生成、地塊查詢REST API、玩家移動SignalR Hub。</Description>
+  </PropertyGroup>
+
+  <!--
+    只在 dotnet publish 時：除錯符號包進 exe、不輸出 XML 文件檔與 IIS 用的 web.config，發佈目錄只剩 exe 與設定檔。
+    平常的 build 不受影響（被參考的專案的 .pdb 照樣複製，F5 偵錯才進得了 Planet.Simulation 等專案的中斷點）。
+    OpenAPI 的說明是編譯時從 XML 註解產生的，不需要執行時讀 .xml。
+  -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true'">
+    <DebugType>embedded</DebugType>
+    <AllowedReferenceRelatedFileExtensions>-</AllowedReferenceRelatedFileExtensions>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
 
   <ItemGroup>
