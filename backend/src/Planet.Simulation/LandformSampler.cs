@@ -61,8 +61,32 @@ public sealed class LandformSampler
     /// <summary>曲流的波長是河寬的幾倍（地球上約 10~14 倍）。</summary>
     private const double MeanderWavelengthPerWidth = 12;
 
-    /// <summary>坡度大於這個值的河段不彎（山區的河受岩壁控制，幾乎是直的）。</summary>
+    /// <summary>坡度大於這個值的河段不曲流（山區的河受岩壁控制），改成沿著谷擺動（見 <see cref="ValleyWiggleMeters"/>）。</summary>
     private const double StraightRiverSlope = 2e-3;
+
+    /// <summary>
+    /// 山區河谷的擺動振幅（公尺）：谷在山嘴之間左右繞（交錯山嘴），不是一刀直劃。
+    /// 2026-10-26 使用者回報山區小河的谷「像一道道直刮痕」——原本坡度一陡曲流就整個關掉，谷是格心到格心的直線。
+    /// </summary>
+    private const double ValleyWiggleMeters = 600;
+
+    /// <summary>山區河谷擺動的半波長（公尺）。</summary>
+    private const double ValleyWiggleHalfWaveMeters = 3_000;
+
+    /// <summary>
+    /// 河谷要多寬的河才刻得到 <see cref="MaxValleyDepthMeters"/>：谷深上限 ∝ √(河寬 ÷ 這個值)。
+    /// 10 公尺的小溪約 240 公尺、100 公尺的河約 750 公尺（原本小溪也刻 1.5 公里，畫面上 8 倍後像刀痕）。
+    /// </summary>
+    private const double ValleyDepthFullWidthMeters = 400;
+
+    /// <summary>谷肩的圓滑寬度（公尺）＝谷深 × 這個比例，最多 <see cref="MaxValleyShoulderMeters"/>：谷壁跟原本的地面不再是一條硬折線。</summary>
+    private const double ValleyShoulderShare = 0.3;
+
+    /// <summary>谷肩圓滑寬度的上限（公尺）。</summary>
+    private const double MaxValleyShoulderMeters = 250;
+
+    /// <summary>河谷最遠刻到離河多遠（公尺），也是最近河道搜尋的範圍。</summary>
+    private const double ValleyReachMeters = 8_000;
 
     /// <summary>三角洲的半徑（公里）＝ 這個值 × √(供砂 ÷ 1,000)，最多 60 公里，小於 3 公里就不畫。</summary>
     private const double DeltaRadiusKmPerSqrtSupply = 15;
@@ -106,6 +130,7 @@ public sealed class LandformSampler
     private readonly double[] _curveReach; // 這條曲線離弦最遠多少（單位球），用來快速略過
     private readonly float[] _valleyFloor; // 每格河谷底的高度（公尺）
     private readonly int[] _deltaApex; // 每格海：流進來的大河是從哪一格來的（−1 沒有三角洲）
+    private readonly bool[] _riverHead; // 河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）
 
     /// <summary>建立取樣器。</summary>
     /// <param name="grid">模擬網格。</param>
@@ -125,10 +150,18 @@ public sealed class LandformSampler
         {
             var cell = cells[c];
             var height = Math.Max(0, cell.SurfaceElevationMeters);
-            var depth = Math.Min(MaxValleyDepthMeters, Math.Max(cell.IncisionRate, cell.GlacialIncisionRate) * ValleyIncisionMyr);
+            var depthCap = MaxValleyDepthMeters * Math.Sqrt(Math.Min(1, Math.Max(cell.RiverWidthMeters, Rivers.MinChannelWidthMeters / 2) / ValleyDepthFullWidthMeters));
+            var depth = Math.Min(depthCap, Math.Max(cell.IncisionRate, cell.GlacialIncisionRate) * ValleyIncisionMyr);
             depth = Math.Min(depth, height * MaxValleyDepthShareOfHeight);
             _valleyFloor[c] = (float)(cell.SurfaceElevationMeters - depth);
         }
+
+        // 源頭：沒有任何河段流進來的河
+        _riverHead = new bool[n];
+        var hasUpstream = new bool[n];
+        for (var c = 0; c < n; c++)
+            if (cells[c].RiverDownstreamCellId >= 0) hasUpstream[cells[c].RiverDownstreamCellId] = true;
+        for (var c = 0; c < n; c++) _riverHead[c] = cells[c].RiverDownstreamCellId >= 0 && !hasUpstream[c];
 
         // 河道曲線
         _curveStart = new int[n + 1];
@@ -202,7 +235,13 @@ public sealed class LandformSampler
         // 曲流不是正弦波：振幅沿河忽大忽小（調變的兩端也是 0，前後兩段照樣接得起來）
         var modulationWaves = 1 + (int)(Hash(c * 7 + 3) % 3);
         var modulationPhase = (Hash(c * 13 + 5) % 1000) / 1000.0 * 2 * Math.PI;
-        var samples = Math.Clamp(halfWaves * 6, 12, 240);
+        // 沿谷不規則地擺動（兩個整數半波疊加，兩端仍是 0）
+        // 平地的小河曲流振幅只有幾十公尺，15 公里的河段看起來仍是直線，所以平地也留一半的擺動
+        var wiggle = (1 - 0.5 * sinuosity) * Math.Min(0.08 * chordMeters, ValleyWiggleMeters) / _radius;
+        var wiggleWaves = Math.Max(2, (int)Math.Round(chordMeters / ValleyWiggleHalfWaveMeters));
+        var wiggleWaves2 = wiggleWaves + 1; // 頻率相近的兩個波：拍頻讓擺動忽大忽小，不是規則的鋸齒
+        var wigglePhase = (Hash(c * 17 + 11) & 1) == 0 ? 1.0 : -1.0;
+        var samples = Math.Clamp(Math.Max(halfWaves * 6, wiggleWaves2 * 10), 12, 240);
 
         var farthest = 0.0;
         for (var i = 0; i <= samples; i++)
@@ -212,7 +251,8 @@ public sealed class LandformSampler
             var tangent = Sub(CatmullRom(p0, p1, p2, p3, Math.Min(1, t + 1e-3)), CatmullRom(p0, p1, p2, p3, Math.Max(0, t - 1e-3)));
             var normal = Normalize(Cross(tangent, p));
             var modulation = 0.55 + 0.45 * Math.Sin(2 * Math.PI * modulationWaves * t + modulationPhase);
-            var offset = amplitude * phase * Math.Sin(halfWaves * Math.PI * t) * modulation;
+            var offset = amplitude * phase * Math.Sin(halfWaves * Math.PI * t) * modulation
+                + wiggle * wigglePhase * (0.6 * Math.Sin(wiggleWaves * Math.PI * t) + 0.5 * Math.Sin(wiggleWaves2 * Math.PI * t));
             p = Normalize(Add(p, Scale(normal, offset)));
             points.Add(p.Item1); points.Add(p.Item2); points.Add(p.Item3);
             farthest = Math.Max(farthest, DistanceToChord(p, p1, p2));
@@ -266,20 +306,10 @@ public sealed class LandformSampler
             var source = _cells[riverCell];
             var down = source.RiverDownstreamCellId;
             riverWidth = source.RiverWidthMeters;
-            var floor = Lerp(_valleyFloor[riverCell], down >= 0 && _cells[down].WaterDepthMeters <= 0f ? _valleyFloor[down] : 0, riverT);
-            floor = Math.Max(floor, 0);
+            var floor = ValleyFloorAt(riverCell, riverT, elevation);
             var depth = Math.Max(1, riverWidth * DepthPerWidth);
             var halfWidth = riverWidth / 2;
             var aggrading = source.AggradationRate > Math.Max(source.IncisionRate, source.GlacialIncisionRate);
-            var glacial = source.GlacialIncisionRate > source.IncisionRate;
-            var rock = (ExposedRock)source.ExposedRock;
-            var wallSlope = Math.Tan((glacial ? 40 : rock switch
-            {
-                ExposedRock.Crystalline or ExposedRock.Volcanic or ExposedRock.OceanicBasalt => 35,
-                ExposedRock.Melange => 25,
-                ExposedRock.Sedimentary => 20,
-                _ => 10,
-            }) * Math.PI / 180);
 
             if (riverDist <= halfWidth)
             {
@@ -307,15 +337,19 @@ public sealed class LandformSampler
             }
             else
             {
-                // 河谷：V 形（或冰蝕的 U 形），谷壁陡度看岩性
-                var floorHalf = glacial ? GlacialFloorHalfWidthMeters : halfWidth;
-                var profile = floor + Math.Max(0, riverDist - floorHalf) * wallSlope;
-                if (profile < elevation)
+                // 河谷：V 形（或冰蝕的 U 形），谷壁陡度看岩性。
+                // 斷面取附近每一小段河道各自斷面的最小值——只用最近那一段的話，河彎內側「最近的一段」會突然換成另一段，
+                // 谷底高度跟著跳一階，從河彎放射出一道道直線的陡坎（2026-10-26 近看時的刮痕）。連續函數的最小值仍然連續。
+                var (profile, wallSlope) = ValleyProfile(p, nearest, neighbors[..count], elevation);
+                // 谷肩圓滑：斷面跟原本的地面取「平滑的較小值」，交界不是一條硬折線
+                var shoulder = Math.Min(MaxValleyShoulderMeters, Math.Max(1, (elevation - floor) * ValleyShoulderShare));
+                var carved = SmoothMin(elevation, profile, shoulder);
+                if (carved < elevation)
                 {
                     // 硬岩的陡谷壁露出岩石
-                    if (wallSlope > 0.6 && elevation - profile > 50 && terrain is not (TerrainType.Forest or TerrainType.SnowField))
+                    if (wallSlope > 0.6 && elevation - carved > 50 && terrain is not (TerrainType.Forest or TerrainType.SnowField))
                         terrain = TerrainType.Rock;
-                    elevation = profile;
+                    elevation = carved;
                 }
             }
         }
@@ -405,7 +439,7 @@ public sealed class LandformSampler
             if (down < 0) continue;
             // 快速略過：離弦太遠的不用逐段算
             var chordDist = DistanceToChord(p, (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]));
-            var margin = _curveReach[c] + (_cells[c].RiverWidthMeters * FloodplainWidthPerChannelWidth + 5_000) / _radius;
+            var margin = _curveReach[c] + (_cells[c].RiverWidthMeters * FloodplainWidthPerChannelWidth + ValleyReachMeters) / _radius;
             if (chordDist - margin > best / _radius) continue;
 
             var from = _curveStart[c];
@@ -423,6 +457,78 @@ public sealed class LandformSampler
             }
         }
         return (bestCell, bestT, best);
+    }
+
+    /// <summary>
+    /// 某條河段（從 <paramref name="c"/> 流出）在位置 <paramref name="t"/>（0~1）的谷底高度（公尺）。
+    /// 源頭那一段谷從 0 漸漸加深（原本在源頭就是全深，四周一圈陡壁，像刀切的楔形）。
+    /// </summary>
+    private double ValleyFloorAt(int c, double t, double elevation)
+    {
+        var down = _cells[c].RiverDownstreamCellId;
+        var floor = Lerp(_valleyFloor[c], down >= 0 && _cells[down].WaterDepthMeters <= 0f ? _valleyFloor[down] : 0, t);
+        floor = Math.Max(floor, 0);
+        if (_riverHead[c] && floor < elevation)
+        {
+            var taper = t * t * (3 - 2 * t);
+            floor = elevation - (elevation - floor) * taper;
+        }
+        return floor;
+    }
+
+    /// <summary>谷壁的坡度（tan）：冰蝕谷 40°，其餘看露出的岩性。</summary>
+    private double WallSlopeOf(int c)
+    {
+        var cell = _cells[c];
+        var glacial = cell.GlacialIncisionRate > cell.IncisionRate;
+        return Math.Tan((glacial ? 40 : (ExposedRock)cell.ExposedRock switch
+        {
+            ExposedRock.Crystalline or ExposedRock.Volcanic or ExposedRock.OceanicBasalt => 35,
+            ExposedRock.Melange => 25,
+            ExposedRock.Sedimentary => 20,
+            _ => 10,
+        }) * Math.PI / 180);
+    }
+
+    /// <summary>
+    /// 河谷斷面的高度（公尺）：附近每一小段河道（下切為主的河段）各自算「谷底＋離河距離×谷壁坡度」，取最小值。
+    /// 回傳（斷面高度、取到最小值那段的谷壁坡度）；附近沒有河谷是 (+∞, 0)。
+    /// </summary>
+    private (double Profile, double WallSlope) ValleyProfile((double, double, double) p, int nearest, ReadOnlySpan<int> neighbors, double elevation)
+    {
+        var best = double.PositiveInfinity;
+        var bestSlope = 0.0;
+        var u = _grid.UnitVector;
+        for (var i = -1; i < neighbors.Length; i++)
+        {
+            var c = i < 0 ? nearest : neighbors[i];
+            var cell = _cells[c];
+            var down = cell.RiverDownstreamCellId;
+            if (down < 0 || cell.AggradationRate > Math.Max(cell.IncisionRate, cell.GlacialIncisionRate)) continue;
+            var chordDist = DistanceToChord(p, (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]));
+            if ((chordDist - _curveReach[c]) * _radius > ValleyReachMeters) continue;
+
+            var slope = WallSlopeOf(c);
+            var floorHalf = cell.GlacialIncisionRate > cell.IncisionRate ? GlacialFloorHalfWidthMeters : cell.RiverWidthMeters / 2;
+            var from = _curveStart[c];
+            var to = _curveStart[c + 1];
+            for (var s = from; s < to - 1; s++)
+            {
+                var a = (_curvePoints[s * 3], _curvePoints[s * 3 + 1], _curvePoints[s * 3 + 2]);
+                var b = (_curvePoints[s * 3 + 3], _curvePoints[s * 3 + 4], _curvePoints[s * 3 + 5]);
+                var (d, tl) = DistanceToSegment(p, a, b);
+                var meters = d * _radius;
+                if (meters > ValleyReachMeters) continue;
+                var t = (s - from + tl) / (to - 1 - from);
+                var profile = ValleyFloorAt(c, t, elevation) + Math.Max(0, meters - floorHalf) * slope;
+                if (profile < best)
+                {
+                    best = profile;
+                    bestSlope = slope;
+                }
+            }
+        }
+        return (best, bestSlope);
     }
 
     /// <summary>三角洲：扇面裡的陸地壓成 0~3 公尺的泥灘與沼澤，分流是淡水。有畫到回傳 true。</summary>
@@ -541,6 +647,13 @@ public sealed class LandformSampler
     }
 
     private static double Lerp(double a, double b, double t) => a + (b - a) * t;
+
+    /// <summary>平滑的較小值（多項式 smooth min）：兩者相差超過 <paramref name="k"/> 時就是 min，接近時圓滑過渡、略低於兩者。</summary>
+    private static double SmoothMin(double a, double b, double k)
+    {
+        var h = Math.Max(k - Math.Abs(a - b), 0) / k;
+        return Math.Min(a, b) - h * h * k / 4;
+    }
     private static (double, double, double) Sub((double, double, double) a, (double, double, double) b) => (a.Item1 - b.Item1, a.Item2 - b.Item2, a.Item3 - b.Item3);
     private static (double, double, double) Add((double, double, double) a, (double, double, double) b) => (a.Item1 + b.Item1, a.Item2 + b.Item2, a.Item3 + b.Item3);
     private static (double, double, double) Scale((double, double, double) a, double s) => (a.Item1 * s, a.Item2 * s, a.Item3 * s);

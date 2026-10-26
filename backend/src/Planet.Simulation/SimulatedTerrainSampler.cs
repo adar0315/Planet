@@ -91,7 +91,7 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
         Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
         var count = _grid.GetNeighbors(nearest, neighbors);
         double weightSum = 0, elevationSum = 0, oceanWeight = 0, landWeight = 0;
-        double low = double.MaxValue, high = double.MinValue;
+        double landElevationSum = 0, landElevationSq = 0;
         int bestOcean = -1, bestLand = -1;
         double bestOceanWeight = 0, bestLandWeight = 0;
         for (var i = -1; i < count; i++)
@@ -112,8 +112,8 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
             {
                 landWeight += w;
                 if (w > bestLandWeight) { bestLandWeight = w; bestLand = k; }
-                low = Math.Min(low, cell.SurfaceElevationMeters);
-                high = Math.Max(high, cell.SurfaceElevationMeters);
+                landElevationSum += w * cell.SurfaceElevationMeters;
+                landElevationSq += w * cell.SurfaceElevationMeters * (double)cell.SurfaceElevationMeters;
             }
         }
         var elevation = elevationSum / weightSum;
@@ -137,7 +137,10 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
         // 4. 陸地加上細部起伏：振幅看附近粗格的起伏（平原幾公尺、山區上百公尺），波長幾公里
         if (_cells[chosen].WaterDepthMeters <= 0f && landWeight > 0)
         {
-            var relief = high - low;
+            // 起伏用核加權的標準差，不用「最高減最低」：最近粗格一換，參與的格子集合就變，最高最低跳一階，
+            // 振幅跟著跳，沿著粗格交界刻出一道道弧形的陡坎（2026-10-26，山區近看的刮痕）。加權的量跟著權重連續變化。
+            var landMean = landElevationSum / landWeight;
+            var relief = ReliefPerStandardDeviation * Math.Sqrt(Math.Max(0, landElevationSq / landWeight - landMean * landMean));
             var amplitude = DetailReliefShare * relief + DetailBaseMeters;
             var f = _grid.PlanetRadiusMeters / DetailWavelengthMeters;
             elevation = Math.Max(elevation, 0) + amplitude * _detailNoise.Fbm(x * f, y * f, z * f, 4, 1.0);
@@ -154,6 +157,9 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
 
     /// <summary>細部起伏是附近粗格起伏的多少比例，再加上這個最小值（公尺）。</summary>
     private const double DetailReliefShare = 0.1, DetailBaseMeters = 6;
+
+    /// <summary>起伏（最高減最低）約是標準差的幾倍：六、七個格子的全距約 2.7 個標準差，維持原本校準的幅度。</summary>
+    private const double ReliefPerStandardDeviation = 2.7;
 
     /// <summary>細部起伏最長的波長（公尺）。</summary>
     private const double DetailWavelengthMeters = 4_000;
