@@ -64,6 +64,27 @@ public sealed class FluvialErosion
     internal double TransportCoefficient { get; set; } = 3e6;
 
     /// <summary>
+    /// 坡面搬運係數（公尺／百萬年，乘上坡度）：搬運容量再加上 這個值 · S · Δt，跟流量無關。
+    /// 一格 15 公里裡面有無數條看不到的小溝與坡面，潛移、崩落、小溪把風化物與上游山區刨下來的物質送到下游；
+    /// 只用格子的流量算容量的話，坡面流量太小，就地堆下來——n=150 的 819 步陸地有 63% 以堆積為主，92% 是坡面
+    /// （2026-11-07 使用者回報）。從存檔接著跑 100 步量（堆積為主用 <see cref="IsAggrading"/>）：
+    /// 0 → 64%、1×10⁷ → 29%、3×10⁷ → 27%、1×10⁸ → 25%，海洋比例與陸地平均高度幾乎不變。
+    /// 每格落差 30 公尺時一步可以帶走 3×10⁷·30/15,000·0.05 ＝ 3,000 公尺；平緩的地方（平原、盆地）這一項很小，照樣堆積。
+    /// </summary>
+    internal double HillslopeTransportCoefficient { get; set; } = 3e7;
+
+    /// <summary>堆積速率（公尺／百萬年，移動平均）至少這麼大才算「以堆積為主」，見 <see cref="IsAggrading"/>。</summary>
+    public const float MinAggradationRate = 5f;
+
+    /// <summary>
+    /// 這一格是不是以堆積為主（沖積平原、沖積扇、盆地）：堆積速率夠大，而且大過下切與冰蝕。
+    /// 要有門檻：堆積速率是 100 萬年的移動平均，坡面偶爾堆一次就留下每百萬年幾公尺，而坡面的下切幾乎是 0，
+    /// 不設門檻的話這些坡面全算成堆積。放大（沖積扇、泛濫平原、不刻河谷）、圖層、校準都用這一個定義。
+    /// </summary>
+    public static bool IsAggrading(float aggradation, float incision, float glacialIncision) =>
+        aggradation >= MinAggradationRate && aggradation > Math.Max(incision, glacialIncision);
+
+    /// <summary>
     /// 一步最多堆高多少公尺（陸上的河流堆積）。20 公尺／5 萬年 ＝ 0.4 公釐／年，地球沖積扇、前陸盆地的量級。
     /// 不設上限的話，大河在第一個緩坡就把整條河的泥沙倒下來，堆出一座壩。
     /// </summary>
@@ -289,7 +310,7 @@ public sealed class FluvialErosion
             // 搬運容量（H2）：搬不動的在這一格堆下來——沖積扇、沖積平原。流進海或湖的那一格不堆（交給三角洲與湖）
             if (p >= 0 && !IsSea(state, lakeOf, p) && lakeOf[p] < 0)
             {
-                var capacity = TransportCoefficient * flood * Math.Max(discharge[c], 0f)
+                var capacity = (TransportCoefficient * flood * Math.Max(discharge[c], 0f) + HillslopeTransportCoefficient)
                     * Math.Max(drop, 0f) / SlopeReferenceLengthMeters * deltaMyr;
                 var excess = _load[c] - capacity;
                 if (excess > 0)

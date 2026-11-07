@@ -450,7 +450,7 @@ public sealed class LandformSampler
             var floor = ValleyFloorAt(riverCell, riverT);
             var depth = Math.Max(1, riverWidth * DepthPerWidth);
             var halfWidth = riverWidth / 2;
-            var aggrading = source.AggradationRate > Math.Max(source.IncisionRate, source.GlacialIncisionRate);
+            var aggrading = FluvialErosion.IsAggrading(source.AggradationRate, source.IncisionRate, source.GlacialIncisionRate);
 
             if (riverDist <= halfWidth)
             {
@@ -550,7 +550,7 @@ public sealed class LandformSampler
             {
                 elevation += Dune(p, latitude);
             }
-            else if (cell.AggradationRate > 20f && cell.AggradationRate > cell.IncisionRate && Relief(nearest, neighbors[..count]) > 200
+            else if (cell.AggradationRate > 20f && FluvialErosion.IsAggrading(cell.AggradationRate, cell.IncisionRate, cell.GlacialIncisionRate) && Relief(nearest, neighbors[..count]) > 200
                      && terrain is TerrainType.Sand or TerrainType.Shrubland or TerrainType.Grassland)
             {
                 terrain = TerrainType.Gravel; // 乾燥區的沖積扇
@@ -693,7 +693,7 @@ public sealed class LandformSampler
             var c = i < 0 ? nearest : neighbors[i];
             var cell = _cells[c];
             var down = _down[c];
-            if (down < 0 || cell.AggradationRate > Math.Max(cell.IncisionRate, cell.GlacialIncisionRate)) continue;
+            if (down < 0 || FluvialErosion.IsAggrading(cell.AggradationRate, cell.IncisionRate, cell.GlacialIncisionRate)) continue;
             var chordDist = DistanceToChord(p, (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]));
             if ((chordDist - _curveReach[c]) * _radius > ValleyReachMeters) continue;
 

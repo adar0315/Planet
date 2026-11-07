@@ -315,7 +315,7 @@ public sealed class SimulationFieldRenderer
         var aggradation = state.AggradationRate[cell];
         var glacial = state.GlacialIncisionRate[cell];
         var incision = state.IncisionRate[cell];
-        if (aggradation >= incision && aggradation >= glacial && aggradation > 1f)
+        if (FluvialErosion.IsAggrading(aggradation, incision, glacial))
             return SqrtRamp(aggradation, 400f, (0x40, 0x38, 0x18), (0xff, 0xe0, 0x40));
         if (glacial > incision && glacial > 1f)
             return SqrtRamp(glacial, 400f, (0x18, 0x38, 0x40), (0x80, 0xf0, 0xff));

@@ -123,7 +123,7 @@ public class CalibProbe(ITestOutputHelper output)
         var rocks = land.GroupBy(c => Lithology.ExposedAt(s, c)).OrderBy(g => g.Key)
             .Select(g => $"{g.Key} {100.0 * g.Count() / land.Length:F1}%");
         sb.AppendLine($"陸地露出的岩石：{string.Join("、", rocks)}");
-        var aggrading = land.Count(c => s.AggradationRate[c] > 1f && s.AggradationRate[c] > s.IncisionRate[c]);
+        var aggrading = land.Count(c => FluvialErosion.IsAggrading(s.AggradationRate[c], s.IncisionRate[c], s.GlacialIncisionRate[c]));
         var incising = land.Count(c => s.IncisionRate[c] > 1f);
         var glacial = land.Count(c => s.GlacialIncisionRate[c] > 1f);
         var deltas = Enumerable.Range(0, s.CellCount).Count(c => s.DeltaSupply[c] > 0f && s.WaterDepth[c] > 0f);
