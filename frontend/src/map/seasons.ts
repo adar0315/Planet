@@ -70,6 +70,7 @@ const NO_SNOW: ReadonlySet<TerrainType> = new Set<TerrainType>(['Freshwater', 'S
 /**
  * 小格的「河道」半寬至少這麼多（公尺）：小格約 250 公尺，河比小格窄的時候，離中心線最近的那一串小格仍然要是水，
  * 河才連得成一條線（使用者要的是看得到的河，2026-10-24）。約等於小格格心間距的一半。
+ * 後端 LandformSampler.VisibleRiverHalfWidthMeters 要同一個值：這個範圍內的小格高度才是河床，河才會一路往下。
  */
 export const MIN_VISIBLE_RIVER_HALF_WIDTH_METERS = 220
 

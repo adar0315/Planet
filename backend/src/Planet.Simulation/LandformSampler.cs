@@ -85,11 +85,30 @@ public sealed class LandformSampler
     /// <summary>谷肩圓滑寬度的上限（公尺）。</summary>
     private const double MaxValleyShoulderMeters = 250;
 
+    /// <summary>
+    /// 河段的下游地表比上游高出這麼多（公尺）以上，就不算連通：河在這裡結束（內流河）。
+    /// 模擬的流向會穿過乾涸的內流盆地：盆底低於溢出口幾千公尺，水根本沒有填滿，流向卻還是接到溢出口（2026-11-07 量到翻過 3 公里高的山脊）。
+    /// 比這小的高差是粗格的誤差，刻一段峽谷穿過去。
+    /// </summary>
+    private const double MaxRiverRiseMeters = 200;
+
+    /// <summary>河床最小的坡度：上游一定比下游高，至少高這麼多（公尺／公尺）。</summary>
+    private const double MinRiverSlope = 1e-4;
+
+    /// <summary>
+    /// 小格算「河」的範圍（公尺，離中心線）：跟前端 seasons.ts 的 MIN_VISIBLE_RIVER_HALF_WIDTH_METERS 同一個值，改的話兩邊一起改。
+    /// 河比小格窄，離中心線最近的那串小格要畫成河，高度也要是河床高度，不能是谷壁上的高度。
+    /// </summary>
+    public const double VisibleRiverHalfWidthMeters = 220;
+
     /// <summary>河谷最遠刻到離河多遠（公尺），也是最近河道搜尋的範圍。</summary>
     private const double ValleyReachMeters = 8_000;
 
     /// <summary>三角洲的半徑（公里）＝ 這個值 × √(供砂 ÷ 1,000)，最多 60 公里，小於 3 公里就不畫。</summary>
     private const double DeltaRadiusKmPerSqrtSupply = 15;
+
+    /// <summary>三角洲只畫在這個高度（公尺）以下的陸地。</summary>
+    private const double MaxDeltaLandMeters = 60;
 
     /// <summary>三角洲分流的數目。</summary>
     private const int DeltaDistributaries = 5;
@@ -131,6 +150,7 @@ public sealed class LandformSampler
     private readonly float[] _valleyFloor; // 每格河谷底的高度（公尺）
     private readonly int[] _deltaApex; // 每格海：流進來的大河是從哪一格來的（−1 沒有三角洲）
     private readonly bool[] _riverHead; // 河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）
+    private readonly int[] _down; // 每格的下游粗格（−1 沒有）：RiverDownstreamCellId 去掉不連通的河段（見 MaxRiverRiseMeters）
 
     /// <summary>建立取樣器。</summary>
     /// <param name="grid">模擬網格。</param>
@@ -144,7 +164,19 @@ public sealed class LandformSampler
         _radius = grid.PlanetRadiusMeters;
         var n = grid.CellCount;
 
-        // 河谷底：格子高度減掉谷深，而且不高於上游、不低於下游的谷底（谷底要一路往下游降）
+        // 河段：下游高太多的不算連通（河在那裡結束）。低於海平面的乾陸地畫出來是 0 公尺。
+        // 冰河上沒有河：河從冰河末端開始，流到冰河就結束（河道高度跟冰面高度無關，接在一起會一下跳幾公里）
+        _down = new int[n];
+        for (var c = 0; c < n; c++)
+        {
+            var down = cells[c].RiverDownstreamCellId;
+            var connected = down >= 0 && cells[c].Terrain != TerrainType.Glacier && cells[down].Terrain != TerrainType.Glacier
+                && (cells[down].WaterDepthMeters > 0f
+                    || Math.Max(0, cells[down].SurfaceElevationMeters) - Math.Max(0, cells[c].SurfaceElevationMeters) <= MaxRiverRiseMeters);
+            _down[c] = connected ? down : -1;
+        }
+
+        // 河谷底：格子高度減掉谷深，再整理成一路往下游降（見 MakeValleyFloorsDescend）
         _valleyFloor = new float[n];
         for (var c = 0; c < n; c++)
         {
@@ -153,15 +185,16 @@ public sealed class LandformSampler
             var depthCap = MaxValleyDepthMeters * Math.Sqrt(Math.Min(1, Math.Max(cell.RiverWidthMeters, Rivers.MinChannelWidthMeters / 2) / ValleyDepthFullWidthMeters));
             var depth = Math.Min(depthCap, Math.Max(cell.IncisionRate, cell.GlacialIncisionRate) * ValleyIncisionMyr);
             depth = Math.Min(depth, height * MaxValleyDepthShareOfHeight);
-            _valleyFloor[c] = (float)(cell.SurfaceElevationMeters - depth);
+            _valleyFloor[c] = (float)Math.Max(0, cell.SurfaceElevationMeters - depth);
         }
+        MakeValleyFloorsDescend();
 
         // 源頭：沒有任何河段流進來的河
         _riverHead = new bool[n];
         var hasUpstream = new bool[n];
         for (var c = 0; c < n; c++)
-            if (cells[c].RiverDownstreamCellId >= 0) hasUpstream[cells[c].RiverDownstreamCellId] = true;
-        for (var c = 0; c < n; c++) _riverHead[c] = cells[c].RiverDownstreamCellId >= 0 && !hasUpstream[c];
+            if (_down[c] >= 0) hasUpstream[_down[c]] = true;
+        for (var c = 0; c < n; c++) _riverHead[c] = _down[c] >= 0 && !hasUpstream[c];
 
         // 河道曲線
         _curveStart = new int[n + 1];
@@ -171,7 +204,7 @@ public sealed class LandformSampler
         for (var c = 0; c < n; c++)
         {
             _curveStart[c] = points.Count / 3;
-            var down = cells[c].RiverDownstreamCellId;
+            var down = _down[c];
             if (down < 0) continue;
             reach[c] = BuildCurve(c, down, points, neighbors);
         }
@@ -184,7 +217,7 @@ public sealed class LandformSampler
         Array.Fill(_deltaApex, -1);
         for (var c = 0; c < n; c++)
         {
-            var down = cells[c].RiverDownstreamCellId;
+            var down = _down[c];
             if (down < 0 || cells[down].WaterDepthMeters <= 0f || !cells[down].IsOcean) continue;
             if (DeltaRadiusMeters(down) <= 0) continue;
             if (_deltaApex[down] < 0 || cells[c].RiverWidthMeters > cells[_deltaApex[down]].RiverWidthMeters) _deltaApex[down] = c;
@@ -214,10 +247,10 @@ public sealed class LandformSampler
         for (var k = 0; k < count; k++)
         {
             var nb = neighbors[k];
-            if (_cells[nb].RiverDownstreamCellId != c) continue;
+            if (_down[nb] != c) continue;
             if (upstream < 0 || _cells[nb].RiverWidthMeters > _cells[upstream].RiverWidthMeters) upstream = nb;
         }
-        var next = _cells[down].RiverDownstreamCellId;
+        var next = _down[down];
 
         var p1 = (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
         var p2 = (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]);
@@ -260,6 +293,17 @@ public sealed class LandformSampler
         return farthest;
     }
 
+    /// <summary>一條河段（從 <paramref name="cell"/> 流出）的河道中心線，由上游往下游，經緯度（度）。沒有河是空的。</summary>
+    /// <param name="cell">河段的起點粗格。</param>
+    public IEnumerable<(double Latitude, double Longitude)> RiverCenterline(int cell)
+    {
+        for (var s = _curveStart[cell]; s < _curveStart[cell + 1]; s++)
+        {
+            var z = Math.Clamp(_curvePoints[s * 3 + 2], -1, 1);
+            yield return (Math.Asin(z) * 180 / Math.PI, Math.Atan2(_curvePoints[s * 3 + 1], _curvePoints[s * 3]) * 180 / Math.PI);
+        }
+    }
+
     /// <summary>取樣某個經緯度（度）。</summary>
     /// <param name="latitude">緯度。</param>
     /// <param name="longitude">經度。</param>
@@ -269,7 +313,10 @@ public sealed class LandformSampler
     /// 附近的海佔多少（0~1，平滑核加權，見 <see cref="SimulatedTerrainSampler.SampleDetailed"/>）。給了就用它判斷沙灘、海崖帶，
     /// 沒給就用粗格之間的 Voronoi 分界（海岸線是格子的邊）。
     /// </param>
-    public LandformSample Sample(double latitude, double longitude, int nearest = -1, double? interpolatedElevation = null, double? coastProximity = null)
+    /// <param name="riverBandMeters">離河道中心線這麼遠以內，高度畫成河床（見 <see cref="VisibleRiverHalfWidthMeters"/>）。</param>
+    /// <param name="riverBandAddsToChannel">true：範圍是半個河寬再加上 <paramref name="riverBandMeters"/>（地塊：範圍裡有河就整格是河）；false：取兩者較大的（小格）。</param>
+    public LandformSample Sample(double latitude, double longitude, int nearest = -1, double? interpolatedElevation = null, double? coastProximity = null,
+        double riverBandMeters = VisibleRiverHalfWidthMeters, bool riverBandAddsToChannel = false)
     {
         var lat = latitude * Math.PI / 180.0;
         var lon = longitude * Math.PI / 180.0;
@@ -301,23 +348,31 @@ public sealed class LandformSampler
         double? water = null;
         var floodplain = false;
         double riverWidth = 0;
-        if (riverCell >= 0 && terrain != TerrainType.Glacier)
+        var onRiver = false;
+        if (riverCell >= 0)
         {
             var source = _cells[riverCell];
-            var down = source.RiverDownstreamCellId;
             riverWidth = source.RiverWidthMeters;
-            var floor = ValleyFloorAt(riverCell, riverT, elevation);
+            var floor = ValleyFloorAt(riverCell, riverT);
             var depth = Math.Max(1, riverWidth * DepthPerWidth);
             var halfWidth = riverWidth / 2;
             var aggrading = source.AggradationRate > Math.Max(source.IncisionRate, source.GlacialIncisionRate);
 
             if (riverDist <= halfWidth)
             {
-                // 河道本身
+                // 河道本身。高度直接等於河床（不取較小值）：細部起伏的凹陷也不能讓河忽高忽低，河一定一路往下游降
                 water = floor;
-                elevation = Math.Min(elevation, floor - depth);
+                elevation = floor - depth;
                 terrain = TerrainType.Freshwater;
                 category = WaterDepthCategory(depth);
+                onRiver = true;
+            }
+            else if (riverDist <= (riverBandAddsToChannel ? halfWidth + riverBandMeters : Math.Max(halfWidth, riverBandMeters)))
+            {
+                // 比河道寬、但畫出來算河的範圍（小格、拉遠的地塊）：地形不變（前端依季節決定是水還是乾河床），高度是河床
+                elevation = floor - depth;
+                floodplain = aggrading;
+                onRiver = true;
             }
             else if (aggrading)
             {
@@ -340,7 +395,7 @@ public sealed class LandformSampler
                 // 河谷：V 形（或冰蝕的 U 形），谷壁陡度看岩性。
                 // 斷面取附近每一小段河道各自斷面的最小值——只用最近那一段的話，河彎內側「最近的一段」會突然換成另一段，
                 // 谷底高度跟著跳一階，從河彎放射出一道道直線的陡坎（2026-10-26 近看時的刮痕）。連續函數的最小值仍然連續。
-                var (profile, wallSlope) = ValleyProfile(p, nearest, neighbors[..count], elevation);
+                var (profile, wallSlope) = ValleyProfile(p, nearest, neighbors[..count]);
                 // 谷肩圓滑：斷面跟原本的地面取「平滑的較小值」，交界不是一條硬折線
                 var shoulder = Math.Min(MaxValleyShoulderMeters, Math.Max(1, (elevation - floor) * ValleyShoulderShare));
                 var carved = SmoothMin(elevation, profile, shoulder);
@@ -354,8 +409,8 @@ public sealed class LandformSampler
             }
         }
 
-        // ---- 三角洲：大河流進海的那一格附近 ----
-        if (water is null)
+        // ---- 三角洲：大河流進海的那一格附近。只蓋低地：扇面畫在高地上會把山壓平，河沿線一下跳上千公尺 ----
+        if (water is null && !onRiver && elevation <= MaxDeltaLandMeters)
         {
             for (var i = -1; i < count; i++)
             {
@@ -367,7 +422,7 @@ public sealed class LandformSampler
         }
 
         // ---- 海岸：沙灘、礫灘、海崖（冰河、雪地的海岸不畫）----
-        if (water is null && terrain is not (TerrainType.Glacier or TerrainType.SnowField))
+        if (water is null && !onRiver && terrain is not (TerrainType.Glacier or TerrainType.SnowField))
         {
             // 海岸帶：平滑後的海陸比例換成「離海多遠」的近似（附近一半是海＝就在海邊）
             var coast = coastProximity is { } proximity
@@ -393,7 +448,7 @@ public sealed class LandformSampler
         }
 
         // ---- 風：黃土、沙丘；沖積扇；裸露的岩石 ----
-        if (water is null && !floodplain)
+        if (water is null && !floodplain && !onRiver)
         {
             if (cell.LoessRate >= LoessMinRate && terrain is TerrainType.Grassland or TerrainType.Shrubland)
             {
@@ -435,7 +490,7 @@ public sealed class LandformSampler
         for (var i = -1; i < neighbors.Length; i++)
         {
             var c = i < 0 ? nearest : neighbors[i];
-            var down = _cells[c].RiverDownstreamCellId;
+            var down = _down[c];
             if (down < 0) continue;
             // 快速略過：離弦太遠的不用逐段算
             var chordDist = DistanceToChord(p, (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]));
@@ -462,18 +517,61 @@ public sealed class LandformSampler
     /// <summary>
     /// 某條河段（從 <paramref name="c"/> 流出）在位置 <paramref name="t"/>（0~1）的谷底高度（公尺）。
     /// 源頭那一段谷從 0 漸漸加深（原本在源頭就是全深，四周一圈陡壁，像刀切的楔形）。
+    /// 起點用粗格的高度、不用這一點含細部起伏的高度：後者忽高忽低，河就不是一路往下了。
     /// </summary>
-    private double ValleyFloorAt(int c, double t, double elevation)
+    private double ValleyFloorAt(int c, double t)
     {
-        var down = _cells[c].RiverDownstreamCellId;
-        var floor = Lerp(_valleyFloor[c], down >= 0 && _cells[down].WaterDepthMeters <= 0f ? _valleyFloor[down] : 0, t);
-        floor = Math.Max(floor, 0);
-        if (_riverHead[c] && floor < elevation)
+        var floor = Lerp(_valleyFloor[c], FloorBelow(_down[c], _valleyFloor[c]), t);
+        if (!_riverHead[c]) return floor;
+        var top = Math.Max(_cells[c].SurfaceElevationMeters, floor);
+        return Lerp(top, floor, t * t * (3 - 2 * t));
+    }
+
+    /// <summary>河段終點的谷底：陸地是下游的谷底、湖是湖面、海是 0；沒有下游（河在這裡結束）維持 <paramref name="end"/>。</summary>
+    private double FloorBelow(int down, double end)
+    {
+        if (down < 0) return end;
+        var cell = _cells[down];
+        return cell.WaterDepthMeters <= 0f ? _valleyFloor[down] : cell.IsOcean ? 0 : cell.WaterSurfaceMeters;
+    }
+
+    /// <summary>
+    /// 把谷底整理成一路往下游降：河的上游一定比下游高。
+    /// 先由下游往上游，谷底不低於下游的湖面（流進高山湖的河不能比湖面低）；再由上游往下游，下游的谷底壓到比上游低——
+    /// 擋路的小丘就刻出峽谷。兩趟都走拓撲順序（河是樹狀的，支流都處理完才輪到匯流的那一格）。
+    /// </summary>
+    private void MakeValleyFloorsDescend()
+    {
+        var n = _down.Length;
+        var inflows = new int[n];
+        for (var c = 0; c < n; c++)
+            if (_down[c] >= 0) inflows[_down[c]]++;
+        var order = new List<int>();
+        for (var c = 0; c < n; c++)
+            if (_down[c] >= 0 && inflows[c] == 0) order.Add(c);
+        for (var i = 0; i < order.Count; i++)
         {
-            var taper = t * t * (3 - 2 * t);
-            floor = elevation - (elevation - floor) * taper;
+            var down = _down[order[i]];
+            if (--inflows[down] == 0 && _down[down] >= 0) order.Add(down);
         }
-        return floor;
+
+        var lowest = new float[n];
+        for (var i = order.Count - 1; i >= 0; i--)
+        {
+            var c = order[i];
+            var below = _cells[_down[c]];
+            lowest[c] = below.WaterDepthMeters <= 0f ? lowest[_down[c]] : below.IsOcean ? 0f : below.WaterSurfaceMeters;
+            _valleyFloor[c] = Math.Max(_valleyFloor[c], lowest[c]);
+        }
+
+        var u = _grid.UnitVector;
+        foreach (var c in order)
+        {
+            var d = _down[c];
+            if (_cells[d].WaterDepthMeters > 0f) continue;
+            var meters = Length(Sub((u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[d * 3], u[d * 3 + 1], u[d * 3 + 2]))) * _radius;
+            _valleyFloor[d] = Math.Max(lowest[d], Math.Min(_valleyFloor[d], _valleyFloor[c] - (float)(meters * MinRiverSlope)));
+        }
     }
 
     /// <summary>谷壁的坡度（tan）：冰蝕谷 40°，其餘看露出的岩性。</summary>
@@ -494,7 +592,7 @@ public sealed class LandformSampler
     /// 河谷斷面的高度（公尺）：附近每一小段河道（下切為主的河段）各自算「谷底＋離河距離×谷壁坡度」，取最小值。
     /// 回傳（斷面高度、取到最小值那段的谷壁坡度）；附近沒有河谷是 (+∞, 0)。
     /// </summary>
-    private (double Profile, double WallSlope) ValleyProfile((double, double, double) p, int nearest, ReadOnlySpan<int> neighbors, double elevation)
+    private (double Profile, double WallSlope) ValleyProfile((double, double, double) p, int nearest, ReadOnlySpan<int> neighbors)
     {
         var best = double.PositiveInfinity;
         var bestSlope = 0.0;
@@ -503,7 +601,7 @@ public sealed class LandformSampler
         {
             var c = i < 0 ? nearest : neighbors[i];
             var cell = _cells[c];
-            var down = cell.RiverDownstreamCellId;
+            var down = _down[c];
             if (down < 0 || cell.AggradationRate > Math.Max(cell.IncisionRate, cell.GlacialIncisionRate)) continue;
             var chordDist = DistanceToChord(p, (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]), (u[down * 3], u[down * 3 + 1], u[down * 3 + 2]));
             if ((chordDist - _curveReach[c]) * _radius > ValleyReachMeters) continue;
@@ -520,7 +618,7 @@ public sealed class LandformSampler
                 var meters = d * _radius;
                 if (meters > ValleyReachMeters) continue;
                 var t = (s - from + tl) / (to - 1 - from);
-                var profile = ValleyFloorAt(c, t, elevation) + Math.Max(0, meters - floorHalf) * slope;
+                var profile = ValleyFloorAt(c, t) + Math.Max(0, meters - floorHalf) * slope;
                 if (profile < best)
                 {
                     best = profile;

@@ -60,7 +60,8 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
     /// <inheritdoc />
     public TerrainSample Sample(double latitude, double longitude)
     {
-        var sample = SampleDetailed(latitude, longitude);
+        // 地塊：範圍裡有河就整格畫成河，所以整格的高度也是河床
+        var sample = SampleDetailed(latitude, longitude, TileRadiusMeters, riverBandAddsToChannel: true);
         var (level, waterLevel) = Levels(sample);
 
         // 這一格範圍裡有河：拉遠時整格畫成河水的藍色（H6）
@@ -75,7 +76,10 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
     /// <summary>取樣某一點的完整地貌（高度已經內插）。地塊與近看細分的小格都走這一支。</summary>
     /// <param name="latitude">緯度（度）。</param>
     /// <param name="longitude">經度（度）。</param>
-    public LandformSample SampleDetailed(double latitude, double longitude)
+    /// <param name="riverBandMeters">離河道中心線這麼遠以內，高度畫成河床。</param>
+    /// <param name="riverBandAddsToChannel">範圍是否再加上半個河寬，見 <see cref="LandformSampler.Sample"/>。</param>
+    public LandformSample SampleDetailed(double latitude, double longitude,
+        double riverBandMeters = LandformSampler.VisibleRiverHalfWidthMeters, bool riverBandAddsToChannel = false)
     {
         var lat = latitude * Math.PI / 180.0;
         var lon = longitude * Math.PI / 180.0;
@@ -146,7 +150,7 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
             elevation = Math.Max(elevation, 0) + amplitude * _detailNoise.Fbm(x * f, y * f, z * f, 4, 1.0);
             elevation = Math.Max(elevation, 0);
         }
-        return _landforms.Sample(latitude, longitude, chosen, elevation, coastProximity);
+        return _landforms.Sample(latitude, longitude, chosen, elevation, coastProximity, riverBandMeters, riverBandAddsToChannel);
     }
 
     /// <summary>位置扭曲的幅度（格距的倍數）。0.35 格距約 5 公里：分界扭成自然的曲線，又不會把一格整個搬到隔壁。</summary>
