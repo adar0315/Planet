@@ -3,7 +3,7 @@ import { fetchSubTiles } from '@/network/apiClient'
 import { latLonToVector3 } from '@/map/sphereCoordinates'
 import { createTilePatch, neighborsOf } from '@/map/tilePatch'
 import { buildTilePatchMeshSliced, type TilePatchMesh } from '@/map/tilePatchMesh'
-import type { TileMeshOptions } from '@/map/tileMeshBuilder'
+import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
 import type { SubTileDto, TileDto } from '@/types/tile'
 import type { PatchManager } from './patchManager'
@@ -29,7 +29,7 @@ const MAX_PARENTS = 2_500
  * 小格歸屬離它最近的地塊中心，拼起來的範圍邊界是鋸齒狀的，細分區最外圈會有約半個小格寬的接縫——
  * 那裡離鏡頭最遠，2026-10-24 使用者接受。
  *
- * 角色移動、跨格偵測、伺服器驗證仍然只用地塊，不受影響。
+ * 角色移動、跨格偵測、伺服器驗證仍然只用地塊，不受影響；只有站立高度改看腳下的小格（{@link SubTileManager.surfaceRadiusAt}）。
  */
 export interface SubTileManager {
   /**
@@ -38,6 +38,14 @@ export interface SubTileManager {
    * @param cameraDistanceMeters 鏡頭距離（公尺）。
    */
   update(focus: THREE.Vector3, cameraDistanceMeters: number): void
+  /**
+   * 腳下小格頂面的場景半徑：畫面上看到的是小格，角色要站在它上面，不是站在藏起來的地塊頂面上——
+   * 河谷旁地塊是一整格的高度，小格是谷底或谷壁，差上百公尺，角色看起來浮在半空（2026-11-07 使用者回報）。
+   * 這一格地塊沒有被小格取代時回傳 null（用地塊的高度）。
+   * @param unit 位置（單位向量）。
+   * @param tile 所在的地塊。
+   */
+  surfaceRadiusAt(unit: THREE.Vector3, tile: TileDto): number | null
   /** 遊戲時間變了（時段、季節）：小格重新上色。 */
   recolor(): void
   dispose(): void
@@ -57,6 +65,8 @@ export function createSubTileManager(
   let subMesh: TilePatchMesh | null = null
   /** 目前這批小格的亮度倍率（依高低與編號，見 subTileShading），重新上色時要再乘一次。 */
   let brightness = new Map<number, number>()
+  /** 目前這批小格依地塊分組，格心是單位向量（站立高度用）。 */
+  let subsByParent = new Map<number, { sub: SubTileDto; center: THREE.Vector3 }[]>()
   /** 目前被小格取代、藏起來的地塊。 */
   let hiddenParents = new Set<number>()
   /** 藏地塊時用的是哪一個地塊 mesh：patch 換掉之後新的 mesh 沒有藏，要重新藏一次。 */
@@ -89,6 +99,7 @@ export function createSubTileManager(
     }
     if (hiddenIn === patchManager.patchMesh) setParentsHidden(hiddenParents, false)
     hiddenParents = new Set()
+    subsByParent = new Map()
     hiddenIn = null
     lastCenter = null
   }
@@ -148,6 +159,13 @@ export function createSubTileManager(
       setParentsHidden(nextHidden, true)
       hiddenParents = nextHidden
       hiddenIn = patchManager.patchMesh
+      const byParent = new Map<number, { sub: SubTileDto; center: THREE.Vector3 }[]>()
+      for (const sub of subs) {
+        let list = byParent.get(sub.parentTileId)
+        if (!list) byParent.set(sub.parentTileId, (list = []))
+        list.push({ sub, center: latLonToVector3(sub.latitude, sub.longitude, 1) })
+      }
+      subsByParent = byParent
       lastCenter = center.clone()
     } catch {
       // 抓不到就維持現狀，下次移動再試
@@ -174,6 +192,25 @@ export function createSubTileManager(
       focusUnit.copy(focus).normalize()
       if (lastCenter && focusUnit.angleTo(lastCenter) * meshOptions.planetRadiusMeters < SUBTILE_REFRESH_METERS) return
       void load(focusUnit.clone())
+    },
+
+    surfaceRadiusAt(unit, tile) {
+      if (!subMesh || !hiddenParents.has(tile.tileId)) return null
+      // 小格歸屬離它最近的地塊中心，所以腳下那一格在這個地塊或它的鄰居底下
+      const patch = patchManager.patch
+      const parents = [tile.tileId, ...(patch ? neighborsOf(patch, tile.tileId).map((t) => t.tileId) : [])]
+      let best: SubTileDto | null = null
+      let bestDot = -Infinity
+      for (const id of parents) {
+        for (const { sub, center } of subsByParent.get(id) ?? []) {
+          const dot = center.dot(unit)
+          if (dot > bestDot) {
+            bestDot = dot
+            best = sub
+          }
+        }
+      }
+      return best ? tileSurfaceRadius(best, subOptions) : null
     },
 
     recolor() {

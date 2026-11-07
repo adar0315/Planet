@@ -110,6 +110,7 @@ export interface PlayerController {
  * @param meshOptions 地表高度換算用，跟地形 mesh 同一份——角色才會剛好站在格子頂面上。
  * @param edgeLengthMeters 細格邊長（公尺）。鄰居資料不齊時「最多能偏離格心多遠」用它換算。
  * @param setMoveWarning 回報移動相關的提示（被伺服器拒絕、離線未驗證），交給呼叫端顯示。
+ * @param surfaceRadiusAt 腳下畫出來的頂面半徑（近看細分的小格）；null 就用地塊頂面。
  */
 export function createPlayerController(
   gameState: ReturnType<typeof useGameStateStore>,
@@ -118,6 +119,7 @@ export function createPlayerController(
   meshOptions: TileMeshOptions,
   edgeLengthMeters: number,
   setMoveWarning: (message: string | null) => void,
+  surfaceRadiusAt: (unit: THREE.Vector3, tile: TileDto) => number | null = () => null,
 ): PlayerController {
   const position = new THREE.Vector3(1, 0, 0) // 單位向量
   const forward = new THREE.Vector3(0, 1, 0)
@@ -425,12 +427,12 @@ export function createPlayerController(
       }
     }
 
-    // 5. 高度。走路：站立高度往目前格的頂面平滑靠近（約 0.15 秒收斂）。飛行：升降與地形下限
+    // 5. 高度。走路：站立高度往腳下的頂面平滑靠近（約 0.15 秒收斂）——近看細分時是小格，否則是地塊。飛行：升降與地形下限
     const tile = gameState.currentTile
     if (flying) {
       updateAltitude(tile, dt)
     } else if (tile) {
-      const targetRadius = tileSurfaceRadius(tile, meshOptions)
+      const targetRadius = surfaceRadiusAt(position, tile) ?? tileSurfaceRadius(tile, meshOptions)
       displayedRadius += (targetRadius - displayedRadius) * (1 - Math.exp(-20 * dt))
     }
     updateFocusPoint()

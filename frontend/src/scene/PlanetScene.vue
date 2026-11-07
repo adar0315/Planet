@@ -152,6 +152,7 @@ onMounted(async () => {
     (message) => {
       moveWarning.value = message
     },
+    (unit, tile) => subTiles.surfaceRadiusAt(unit, tile),
   )
 
   const godView = createGodView(
