@@ -5,6 +5,7 @@ import { createTilePatch, neighborsOf } from '@/map/tilePatch'
 import { buildTilePatchMeshSliced, type TilePatchMesh } from '@/map/tilePatchMesh'
 import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
+import { withSphereClip, type SphereClip } from '@/map/sphereClipMaterial'
 import type { SubTileDto, TileDto } from '@/types/tile'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
@@ -22,12 +23,18 @@ import {
 const MAX_PARENTS = 2_500
 
 /**
+ * 地塊比小格的圓往內多畫這麼多公尺（約兩個小格）。兩邊在這一圈重疊：高的蓋住低的，
+ * 邊界上高低差的地方看進去是另一邊的頂面，不會看穿到底下。
+ */
+const CLIP_OVERLAP_METERS = 600
+
+/**
  * 近看細分（水文地貌規劃 H7，2026-10-24）：鏡頭拉近時，把注視點附近的地塊換成約 250 公尺的小六角——
  * 河道、沙灘、河谷的形狀才看得出來。小格是後端即時產生的（不存資料庫），鄰居也是後端算好的。
  *
- * 換的做法：小格合成一個 mesh 加進場景，被取代的地塊在地塊 mesh 裡藏起來（{@link TilePatchMesh.setTileHidden}）。
- * 小格歸屬離它最近的地塊中心，拼起來的範圍邊界是鋸齒狀的，細分區最外圈會有約半個小格寬的接縫——
- * 那裡離鏡頭最遠，2026-10-24 使用者接受。
+ * 換的做法：小格合成一個 mesh 加進場景。邊界是注視點周圍的一個圓（2026-11-07，原本是被取代地塊的鋸齒狀外緣，
+ * 小格跟地塊的六角交錯，留下一圈半個小格寬的縫）：小格只畫圓內，地塊只畫「圓往內縮 {@link CLIP_OVERLAP_METERS}」以外，
+ * 兩邊重疊一圈，誰高看到誰，縫裡一定有東西（見 sphereClipMaterial）。整格都在圓內的地塊直接藏起來（{@link TilePatchMesh.setTileHidden}），省得畫。
  *
  * 角色移動、跨格偵測、伺服器驗證仍然只用地塊，不受影響；只有站立高度改看腳下的小格（{@link SubTileManager.surfaceRadiusAt}）。
  */
@@ -59,6 +66,8 @@ export function createSubTileManager(
   isCancelled: () => boolean,
 ): SubTileManager {
   const subOptions: TileMeshOptions = { ...meshOptions, edgeLengthMeters: SUBTILE_EDGE_METERS }
+  /** 地塊的邊長＝外接圓半徑（公尺）。 */
+  const parentEdgeMeters = meshOptions.edgeLengthMeters ?? 1000
   const group = new THREE.Group()
   scene.add(group)
 
@@ -72,6 +81,13 @@ export function createSubTileManager(
   /** 藏地塊時用的是哪一個地塊 mesh：patch 換掉之後新的 mesh 沒有藏，要重新藏一次。 */
   let hiddenIn: TilePatchMesh | null = null
   let lastCenter: THREE.Vector3 | null = null
+  /** 加上圓形裁切的材質：小格的頂面、小格的邊線、地塊。第一次用到時從原本的材質複製。 */
+  let subFill: { material: THREE.Material; clip: SphereClip } | null = null
+  let subEdges: { material: THREE.Material; clip: SphereClip } | null = null
+  let parentFill: { material: THREE.Material; clip: SphereClip } | null = null
+  /** 目前的裁切圓：圓心（單位向量）、小格的半徑（弧度）。 */
+  let clipCenter = new THREE.Vector3()
+  let clipAngle = 0
   let loading = false
   let generation = 0
 
@@ -90,6 +106,34 @@ export function createSubTileManager(
     }
   }
 
+  /** 地塊 mesh 換上「只畫圓外」的材質（patch 換了新的 mesh 時要再換一次）。 */
+  function applyParentClip() {
+    const mesh = patchManager.patchMesh?.mesh
+    if (!mesh) return
+    parentFill ??= withSphereClip(mesh.material as THREE.Material, 'outside')
+    mesh.material = parentFill.material
+    parentFill.clip.center.copy(clipCenter)
+    parentFill.clip.setAngle(clipAngle - CLIP_OVERLAP_METERS / meshOptions.planetRadiusMeters)
+    parentFill.clip.setEnabled(true)
+  }
+
+  /** 小格 mesh（與它的邊線）換上「只畫圓內」的材質。 */
+  function applySubClip(mesh: THREE.Mesh) {
+    subFill ??= withSphereClip(mesh.material as THREE.Material, 'inside')
+    mesh.material = subFill.material
+    const lines = mesh.children.find((c): c is THREE.LineSegments => c instanceof THREE.LineSegments)
+    if (lines) {
+      subEdges ??= withSphereClip(lines.material as THREE.Material, 'inside')
+      lines.material = subEdges.material
+    }
+    for (const fill of [subFill, subEdges]) {
+      if (!fill) continue
+      fill.clip.center.copy(clipCenter)
+      fill.clip.setAngle(clipAngle)
+      fill.clip.setEnabled(true)
+    }
+  }
+
   function clear() {
     generation++ // 還在路上的那一批作廢
     if (subMesh) {
@@ -99,6 +143,7 @@ export function createSubTileManager(
     }
     if (hiddenIn === patchManager.patchMesh) setParentsHidden(hiddenParents, false)
     hiddenParents = new Set()
+    parentFill?.clip.setEnabled(false)
     subsByParent = new Map()
     hiddenIn = null
     lastCenter = null
@@ -110,17 +155,28 @@ export function createSubTileManager(
     const myGeneration = ++generation
     loading = true
     try {
-      // 注視點附近的地塊，由近到遠，最多 MAX_PARENTS 個
-      const radiusRad = SUBTILE_RADIUS_METERS / meshOptions.planetRadiusMeters
-      const minDot = Math.cos(radiusRad)
-      const candidates: { tile: TileDto; dot: number }[] = []
+      // 圓內的每一點都要有小格：小格可能歸屬到圓外一個地塊外接圓＋一個小格以內的地塊，這些都要。由近到遠，最多 MAX_PARENTS 個
+      const planetRadius = meshOptions.planetRadiusMeters
+      const parentReach = parentEdgeMeters + SUBTILE_EDGE_METERS
+      const candidates: { tile: TileDto; angle: number }[] = []
       for (const tile of patch.tiles) {
-        const dot = latLonToVector3(tile.latitude, tile.longitude, 1).dot(center)
-        if (dot >= minDot) candidates.push({ tile, dot })
+        const angle = latLonToVector3(tile.latitude, tile.longitude, 1).angleTo(center)
+        if (angle * planetRadius <= SUBTILE_RADIUS_METERS + parentReach) candidates.push({ tile, angle })
       }
-      candidates.sort((a, b) => b.dot - a.dot)
-      const parents = candidates.slice(0, MAX_PARENTS).map((c) => c.tile.tileId)
-      if (parents.length === 0) return
+      candidates.sort((a, b) => a.angle - b.angle)
+      const chosen = candidates.slice(0, MAX_PARENTS)
+      if (chosen.length === 0) return
+      const parents = chosen.map((c) => c.tile.tileId)
+      // 超過上限的話，圓縮到第一個沒要到的地塊碰不到的地方
+      const excluded = candidates[MAX_PARENTS]
+      const radiusMeters = excluded
+        ? Math.min(SUBTILE_RADIUS_METERS, excluded.angle * planetRadius - parentReach)
+        : SUBTILE_RADIUS_METERS
+      // 整格都在地塊的裁切圓內（看不到）的地塊藏起來
+      const hideWithinMeters = radiusMeters - CLIP_OVERLAP_METERS - parentEdgeMeters
+      const nextHidden = new Set(
+        chosen.filter((c) => c.angle * planetRadius <= hideWithinMeters).map((c) => c.tile.tileId),
+      )
 
       const subs = await fetchSubTiles(parents)
       if (myGeneration !== generation) return
@@ -151,8 +207,11 @@ export function createSubTileManager(
         subMesh.dispose()
       }
       subMesh = built
+      clipCenter = center.clone()
+      clipAngle = radiusMeters / planetRadius
+      applySubClip(built.mesh)
+      applyParentClip()
       group.add(built.mesh)
-      const nextHidden = new Set(subs.map((s: SubTileDto) => s.parentTileId))
       if (hiddenIn === patchManager.patchMesh) {
         setParentsHidden([...hiddenParents].filter((id) => !nextHidden.has(id)), false)
       }
@@ -185,6 +244,7 @@ export function createSubTileManager(
       }
       // 地塊 patch 換了（走遠補載）：新的 mesh 沒有藏，重新藏一次
       if (subMesh && hiddenIn !== patchManager.patchMesh) {
+        applyParentClip()
         setParentsHidden(hiddenParents, true)
         hiddenIn = patchManager.patchMesh
       }
@@ -195,7 +255,7 @@ export function createSubTileManager(
     },
 
     surfaceRadiusAt(unit, tile) {
-      if (!subMesh || !hiddenParents.has(tile.tileId)) return null
+      if (!subMesh || unit.angleTo(clipCenter) >= clipAngle - CLIP_OVERLAP_METERS / meshOptions.planetRadiusMeters) return null
       // 小格歸屬離它最近的地塊中心，所以腳下那一格在這個地塊或它的鄰居底下
       const patch = patchManager.patch
       const parents = [tile.tileId, ...(patch ? neighborsOf(patch, tile.tileId).map((t) => t.tileId) : [])]
