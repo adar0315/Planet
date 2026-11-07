@@ -26,8 +26,8 @@ import {
  * 側面牆只有在「這格比鄰居高」時才畫，往下接到鄰居的表面高度，把高低差的裂縫補起來。
  * 每面牆只由較高的那一格畫，所以不會重複。
  *
- * 湖：格子的頂面是湖底，另外在湖面的高度蓋一片半透明的平面（{@link LAKE_MESH_NAME}，2026-11-07 使用者要求），
- * 看得到水平的湖面，也透得到底下的湖底。同一個湖的湖面高度相同，相鄰的湖格拼起來是一整片平的水面。
+ * 湖與海：格子的頂面是水底，另外在水面的高度蓋一片半透明的平面（{@link LAKE_MESH_NAME}，2026-11-07 使用者要求），
+ * 看得到水平的水面，也透得到底下的水底。同一片水的水面高度相同，相鄰的格子拼起來是一整片平的水面。
  */
 export interface TilePatchMesh {
   /** 整個patch只有這一個Mesh（一次draw call）。 */
@@ -87,13 +87,13 @@ export const LAKE_MESH_NAME = 'lake-surface'
 export const EDGE_LINES_NAME = 'edge-lines'
 
 /**
- * 這格是不是湖：淡水、湖面高過湖底、而且不是河（河道的水面跟著季節變，河本身已經畫成水色的河床）。
- * 海不算。
+ * 這格要不要蓋水面：水面高過水底的湖、海、珊瑚礁（2026-11-07 使用者要求湖之後也加上海面）。
+ * 河不蓋：河道的水面跟著季節變，河本身已經畫成水色的河床。
  */
-export function isLakeTile(tile: TileDto): boolean {
-  return (
-    tile.terrain === 'Freshwater' && tile.seaLevel > tile.elevationLevel && tile.riverCellId == null
-  )
+export function hasWaterSurface(tile: TileDto): boolean {
+  if (tile.seaLevel <= tile.elevationLevel) return false
+  if (tile.terrain === 'Seawater' || tile.terrain === 'CoralReef') return true
+  return tile.terrain === 'Freshwater' && tile.riverCellId == null
 }
 
 /** 邊線往上抬多少公尺（不含誇張倍率），避免跟頂面搶深度而閃爍。 */
@@ -308,7 +308,7 @@ function createPatchMeshBuilder(
     }
 
     // ---- 湖面：同一個多邊形，抬到湖面的高度 ----
-    if (isLakeTile(tile)) {
+    if (hasWaterSurface(tile)) {
       const lakeRadius = tileFloorRadius(tile, options)
       const base = lakePositions.length / 3
       lakeTint(lakeColor.copy(color))
