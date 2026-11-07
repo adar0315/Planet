@@ -2,7 +2,12 @@ import * as THREE from 'three'
 import { fetchSubTiles } from '@/network/apiClient'
 import { latLonToVector3 } from '@/map/sphereCoordinates'
 import { createTilePatch, neighborsOf } from '@/map/tilePatch'
-import { buildTilePatchMeshSliced, type TilePatchMesh } from '@/map/tilePatchMesh'
+import {
+  buildTilePatchMeshSliced,
+  EDGE_LINES_NAME,
+  LAKE_MESH_NAME,
+  type TilePatchMesh,
+} from '@/map/tilePatchMesh'
 import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
 import { withSphereClip, type SphereClip } from '@/map/sphereClipMaterial'
@@ -85,6 +90,9 @@ export function createSubTileManager(
   let subFill: { material: THREE.Material; clip: SphereClip } | null = null
   let subEdges: { material: THREE.Material; clip: SphereClip } | null = null
   let parentFill: { material: THREE.Material; clip: SphereClip } | null = null
+  /** 湖面（半透明）：兩邊都切在同一個圓上，不重疊——重疊的那圈會疊兩層變深。 */
+  let subLakes: { material: THREE.Material; clip: SphereClip } | null = null
+  let parentLakes: { material: THREE.Material; clip: SphereClip } | null = null
   /** 目前的裁切圓：圓心（單位向量）、小格的半徑（弧度）。 */
   let clipCenter = new THREE.Vector3()
   let clipAngle = 0
@@ -115,18 +123,33 @@ export function createSubTileManager(
     parentFill.clip.center.copy(clipCenter)
     parentFill.clip.setAngle(clipAngle - CLIP_OVERLAP_METERS / meshOptions.planetRadiusMeters)
     parentFill.clip.setEnabled(true)
+    const lakes = mesh.getObjectByName(LAKE_MESH_NAME) as THREE.Mesh | undefined
+    if (lakes) {
+      parentLakes ??= withSphereClip(lakes.material as THREE.Material, 'outside')
+      lakes.material = parentLakes.material
+    }
+    if (parentLakes) {
+      parentLakes.clip.center.copy(clipCenter)
+      parentLakes.clip.setAngle(clipAngle)
+      parentLakes.clip.setEnabled(true)
+    }
   }
 
   /** 小格 mesh（與它的邊線）換上「只畫圓內」的材質。 */
   function applySubClip(mesh: THREE.Mesh) {
     subFill ??= withSphereClip(mesh.material as THREE.Material, 'inside')
     mesh.material = subFill.material
-    const lines = mesh.children.find((c): c is THREE.LineSegments => c instanceof THREE.LineSegments)
+    const lines = mesh.getObjectByName(EDGE_LINES_NAME) as THREE.LineSegments | undefined
     if (lines) {
       subEdges ??= withSphereClip(lines.material as THREE.Material, 'inside')
       lines.material = subEdges.material
     }
-    for (const fill of [subFill, subEdges]) {
+    const lakes = mesh.getObjectByName(LAKE_MESH_NAME) as THREE.Mesh | undefined
+    if (lakes) {
+      subLakes ??= withSphereClip(lakes.material as THREE.Material, 'inside')
+      lakes.material = subLakes.material
+    }
+    for (const fill of [subFill, subEdges, subLakes]) {
       if (!fill) continue
       fill.clip.center.copy(clipCenter)
       fill.clip.setAngle(clipAngle)
@@ -144,6 +167,7 @@ export function createSubTileManager(
     if (hiddenIn === patchManager.patchMesh) setParentsHidden(hiddenParents, false)
     hiddenParents = new Set()
     parentFill?.clip.setEnabled(false)
+    parentLakes?.clip.setEnabled(false)
     subsByParent = new Map()
     hiddenIn = null
     lastCenter = null
@@ -161,7 +185,8 @@ export function createSubTileManager(
       const candidates: { tile: TileDto; angle: number }[] = []
       for (const tile of patch.tiles) {
         const angle = latLonToVector3(tile.latitude, tile.longitude, 1).angleTo(center)
-        if (angle * planetRadius <= SUBTILE_RADIUS_METERS + parentReach) candidates.push({ tile, angle })
+        if (angle * planetRadius <= SUBTILE_RADIUS_METERS + parentReach)
+          candidates.push({ tile, angle })
       }
       candidates.sort((a, b) => a.angle - b.angle)
       const chosen = candidates.slice(0, MAX_PARENTS)
@@ -213,7 +238,10 @@ export function createSubTileManager(
       applyParentClip()
       group.add(built.mesh)
       if (hiddenIn === patchManager.patchMesh) {
-        setParentsHidden([...hiddenParents].filter((id) => !nextHidden.has(id)), false)
+        setParentsHidden(
+          [...hiddenParents].filter((id) => !nextHidden.has(id)),
+          false,
+        )
       }
       setParentsHidden(nextHidden, true)
       hiddenParents = nextHidden
@@ -250,15 +278,26 @@ export function createSubTileManager(
       }
       if (loading) return
       focusUnit.copy(focus).normalize()
-      if (lastCenter && focusUnit.angleTo(lastCenter) * meshOptions.planetRadiusMeters < SUBTILE_REFRESH_METERS) return
+      if (
+        lastCenter &&
+        focusUnit.angleTo(lastCenter) * meshOptions.planetRadiusMeters < SUBTILE_REFRESH_METERS
+      )
+        return
       void load(focusUnit.clone())
     },
 
     surfaceRadiusAt(unit, tile) {
-      if (!subMesh || unit.angleTo(clipCenter) >= clipAngle - CLIP_OVERLAP_METERS / meshOptions.planetRadiusMeters) return null
+      if (
+        !subMesh ||
+        unit.angleTo(clipCenter) >= clipAngle - CLIP_OVERLAP_METERS / meshOptions.planetRadiusMeters
+      )
+        return null
       // 小格歸屬離它最近的地塊中心，所以腳下那一格在這個地塊或它的鄰居底下
       const patch = patchManager.patch
-      const parents = [tile.tileId, ...(patch ? neighborsOf(patch, tile.tileId).map((t) => t.tileId) : [])]
+      const parents = [
+        tile.tileId,
+        ...(patch ? neighborsOf(patch, tile.tileId).map((t) => t.tileId) : []),
+      ]
       let best: SubTileDto | null = null
       let bestDot = -Infinity
       for (const id of parents) {

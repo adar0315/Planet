@@ -3,6 +3,7 @@ import type { TileDto } from '@/types/tile'
 import {
   computeTilePolygon,
   slopeNormalOf,
+  tileFloorRadius,
   tileSurfaceRadius,
   type TileMeshOptions,
 } from './tileMeshBuilder'
@@ -24,6 +25,9 @@ import {
  * 每格包含「上蓋」與「側面牆」：上蓋是共用角落構成的多邊形（與相鄰格密合），
  * 側面牆只有在「這格比鄰居高」時才畫，往下接到鄰居的表面高度，把高低差的裂縫補起來。
  * 每面牆只由較高的那一格畫，所以不會重複。
+ *
+ * 湖：格子的頂面是湖底，另外在湖面的高度蓋一片半透明的平面（{@link LAKE_MESH_NAME}，2026-11-07 使用者要求），
+ * 看得到水平的湖面，也透得到底下的湖底。同一個湖的湖面高度相同，相鄰的湖格拼起來是一整片平的水面。
  */
 export interface TilePatchMesh {
   /** 整個patch只有這一個Mesh（一次draw call）。 */
@@ -58,6 +62,39 @@ const edgeLineMaterial = new THREE.LineBasicMaterial({
   opacity: 0.22,
   depthWrite: false,
 })
+
+/** 湖面：半透明、不寫深度（透得到湖底，也不擋住後面的半透明物件），兩面都畫。 */
+const lakeMaterial = new THREE.MeshLambertMaterial({
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.55,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+})
+
+const WHITE = new THREE.Color(0xffffff)
+const lakeColor = new THREE.Color()
+
+/** 湖面的顏色：湖底那格的顏色調亮一些，水面跟底下的湖底才分得出來。原地修改並回傳。 */
+function lakeTint(c: THREE.Color): THREE.Color {
+  return c.lerp(WHITE, 0.35)
+}
+
+/** 湖面 mesh 的名稱（掛在地形 mesh 底下）。 */
+export const LAKE_MESH_NAME = 'lake-surface'
+
+/** 格子邊線 LineSegments 的名稱（掛在地形 mesh 底下）。 */
+export const EDGE_LINES_NAME = 'edge-lines'
+
+/**
+ * 這格是不是湖：淡水、湖面高過湖底、而且不是河（河道的水面跟著季節變，河本身已經畫成水色的河床）。
+ * 海不算。
+ */
+export function isLakeTile(tile: TileDto): boolean {
+  return (
+    tile.terrain === 'Freshwater' && tile.seaLevel > tile.elevationLevel && tile.riverCellId == null
+  )
+}
 
 /** 邊線往上抬多少公尺（不含誇張倍率），避免跟頂面搶深度而閃爍。 */
 const EDGE_LINE_LIFT_METERS = 5
@@ -188,6 +225,12 @@ function createPatchMeshBuilder(
 ): PatchMeshBuilder {
   const tileCount = tiles.length
   const edgePositions: number[] = []
+  // 湖面：另一個 geometry。每格的頂點範圍記下來（換色、藏格子要用），不是湖的格子範圍是空的
+  const lakePositions: number[] = []
+  const lakeNormals: number[] = []
+  const lakeColors: number[] = []
+  const lakeIndices: number[] = []
+  const lakeVertexStart = new Uint32Array(tileCount + 1)
   const edgeLift = 1 + EDGE_LINE_LIFT_METERS / options.planetRadiusMeters
 
   // 先照最壞情況配置，最後再用 subarray 裁到實際大小——
@@ -239,6 +282,7 @@ function createPatchMeshBuilder(
     indexByTileId.set(tile.tileId, i)
     vertexStart[i] = v
     triangleStart[i] = t
+    lakeVertexStart[i] = lakePositions.length / 3
     color.setHex(colorOf(tile, i))
 
     const neighbours = neighboursOf?.(tile, i)
@@ -261,6 +305,21 @@ function createPatchMeshBuilder(
       const p = ring[k]!
       // 整格共用同一個切平面法向量（不呼叫computeVertexNormals，那會把相鄰格平滑化、毀掉格子邊界）
       writeVertex(p.x, p.y, p.z, capNormal.x, capNormal.y, capNormal.z)
+    }
+
+    // ---- 湖面：同一個多邊形，抬到湖面的高度 ----
+    if (isLakeTile(tile)) {
+      const lakeRadius = tileFloorRadius(tile, options)
+      const base = lakePositions.length / 3
+      lakeTint(lakeColor.copy(color))
+      for (const p of [center, ...ring.slice(0, sideCount)]) {
+        const scale = lakeRadius / p.length()
+        lakePositions.push(p.x * scale, p.y * scale, p.z * scale)
+        lakeNormals.push(normal.x, normal.y, normal.z)
+        lakeColors.push(lakeColor.r, lakeColor.g, lakeColor.b)
+      }
+      for (let k = 0; k < sideCount; k++)
+        lakeIndices.push(base, base + 1 + k, base + 1 + ((k + 1) % sideCount))
     }
 
     // ---- 邊線 ----
@@ -349,6 +408,7 @@ function createPatchMeshBuilder(
   function finishBuild(): TilePatchMesh {
     vertexStart[tileCount] = v
     triangleStart[tileCount] = t
+    lakeVertexStart[tileCount] = lakePositions.length / 3
 
     const totalVertices = v
     const totalTriangles = t
@@ -375,8 +435,28 @@ function createPatchMeshBuilder(
       edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3))
       // 掛在 mesh 底下：跟著加進／移出場景，不必另外管理
 
-      mesh.add(new THREE.LineSegments(edgeGeometry, edgeLineMaterial))
+      const lines = new THREE.LineSegments(edgeGeometry, edgeLineMaterial)
+      lines.name = EDGE_LINES_NAME
+      mesh.add(lines)
     }
+    let lakeGeometry: THREE.BufferGeometry | null = null
+    let lakePositionArray: Float32Array | null = null
+    let lakeColorAttribute: THREE.BufferAttribute | null = null
+    if (lakeIndices.length > 0) {
+      lakeGeometry = new THREE.BufferGeometry()
+      lakePositionArray = new Float32Array(lakePositions)
+      lakeGeometry.setAttribute('position', new THREE.BufferAttribute(lakePositionArray, 3))
+      lakeGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(lakeNormals, 3))
+      lakeColorAttribute = new THREE.Float32BufferAttribute(lakeColors, 3)
+      lakeGeometry.setAttribute('color', lakeColorAttribute)
+      lakeGeometry.setIndex(lakeIndices)
+      const lakes = new THREE.Mesh(lakeGeometry, lakeMaterial)
+      lakes.name = LAKE_MESH_NAME
+      lakes.renderOrder = 1 // 半透明，在不透明的地形之後畫
+      lakes.raycast = () => {} // 點選照舊點到湖底那一格
+      mesh.add(lakes)
+    }
+    const hiddenLakeBackup = new Map<number, Float32Array>()
     const hiddenBackup = new Map<number, Float32Array>()
 
     function writeTileColor(tileIndex: number, colorHex: number): void {
@@ -388,6 +468,25 @@ function createPatchMeshBuilder(
         colorArray[vertex * 3 + 1] = color.g
         colorArray[vertex * 3 + 2] = color.b
       }
+      // 湖面跟著換色（結冰的月份變成冰的顏色）
+      if (lakeColorAttribute) {
+        const lakeColorArray = lakeColorAttribute.array as Float32Array
+        lakeTint(color)
+        for (
+          let vertex = lakeVertexStart[tileIndex]!;
+          vertex < lakeVertexStart[tileIndex + 1]!;
+          vertex++
+        ) {
+          lakeColorArray[vertex * 3] = color.r
+          lakeColorArray[vertex * 3 + 1] = color.g
+          lakeColorArray[vertex * 3 + 2] = color.b
+        }
+      }
+    }
+
+    /** 湖面的頂點很少，換色整批上傳。 */
+    function markLakeColors() {
+      if (lakeColorAttribute) lakeColorAttribute.needsUpdate = true
     }
 
     return {
@@ -412,6 +511,7 @@ function createPatchMeshBuilder(
         const to = vertexStart[tileIndex + 1]!
         colorAttribute.addUpdateRange(from * 3, (to - from) * 3)
         colorAttribute.needsUpdate = true
+        if (lakeVertexStart[tileIndex + 1]! > lakeVertexStart[tileIndex]!) markLakeColors()
       },
 
       recolorAll(colorOf: (tile: TileDto, index: number) => number): void {
@@ -421,6 +521,7 @@ function createPatchMeshBuilder(
         // 整批改完只觸發一次上傳（原本是每格一次needsUpdate＝2000次bufferSubData）。
         colorAttribute.clearUpdateRanges()
         colorAttribute.needsUpdate = true
+        markLakeColors()
       },
 
       setTileHidden(tileIndex: number, hidden: boolean): void {
@@ -447,11 +548,32 @@ function createPatchMeshBuilder(
         }
         positionAttribute.addUpdateRange(from * 3, (to - from) * 3)
         positionAttribute.needsUpdate = true
+
+        // 湖面也一起藏（同樣把頂點收到格心）
+        const lakeFrom = lakeVertexStart[tileIndex]!
+        const lakeTo = lakeVertexStart[tileIndex + 1]!
+        if (!lakePositionArray || !lakeGeometry || lakeTo <= lakeFrom) return
+        if (hidden) {
+          if (hiddenLakeBackup.has(tileIndex)) return
+          hiddenLakeBackup.set(tileIndex, lakePositionArray.slice(lakeFrom * 3, lakeTo * 3))
+          const cx = lakePositionArray[lakeFrom * 3]!
+          const cy = lakePositionArray[lakeFrom * 3 + 1]!
+          const cz = lakePositionArray[lakeFrom * 3 + 2]!
+          for (let vertex = lakeFrom; vertex < lakeTo; vertex++)
+            lakePositionArray.set([cx, cy, cz], vertex * 3)
+        } else {
+          const backup = hiddenLakeBackup.get(tileIndex)
+          if (!backup) return
+          lakePositionArray.set(backup, lakeFrom * 3)
+          hiddenLakeBackup.delete(tileIndex)
+        }
+        lakeGeometry.getAttribute('position').needsUpdate = true
       },
 
       dispose(): void {
         geometry.dispose() // 材質是module-level共用的，不能在這裡dispose
         edgeGeometry?.dispose()
+        lakeGeometry?.dispose()
       },
     }
   }
