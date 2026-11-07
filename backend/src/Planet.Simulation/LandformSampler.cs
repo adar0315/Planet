@@ -104,8 +104,20 @@ public sealed class LandformSampler
     /// <summary>河谷最遠刻到離河多遠（公尺），也是最近河道搜尋的範圍。</summary>
     private const double ValleyReachMeters = 8_000;
 
-    /// <summary>三角洲的半徑（公里）＝ 這個值 × √(供砂 ÷ 1,000)，最多 60 公里，小於 3 公里就不畫。</summary>
-    private const double DeltaRadiusKmPerSqrtSupply = 15;
+    /// <summary>
+    /// 三角洲的半徑（公里）＝ 這個值 × √(供砂 ÷ 1,000)，最多 60 公里，小於 <see cref="MinDeltaRadiusKm"/> 就不畫。
+    /// 原本是 15：半徑中位數 5 公里、最大 16 公里，比 15 公里的格距還小，地圖上幾乎看不到（2026-11-07 使用者回報）。
+    /// </summary>
+    private const double DeltaRadiusKmPerSqrtSupply = 30;
+
+    /// <summary>三角洲半徑小於這個值（公里）就不畫。</summary>
+    private const double MinDeltaRadiusKm = 4;
+
+    /// <summary>扇面的頂點在海岸往內陸半徑的這個比例：扇面大部分（其餘的 70%）往海裡長出去，三角洲是填海長出來的陸地。</summary>
+    private const double DeltaInlandShare = 0.3;
+
+    /// <summary>三角洲最高點（頂點）的高度（公尺），往外降到海平面上 0.5 公尺。</summary>
+    private const double DeltaTopMeters = 3.5;
 
     /// <summary>三角洲只畫在這個高度（公尺）以下的陸地。</summary>
     private const double MaxDeltaLandMeters = 60;
@@ -117,6 +129,9 @@ public sealed class LandformSampler
     private const double DeltaLobeWavelengthMeters = 8_000;
 
     private readonly Planet.Generation.SimplexNoise3D _deltaNoise = new(2711);
+
+    /// <summary>分流左右蜿蜒的幅度與波長（都是半徑的倍數）。</summary>
+    private const double DistributaryWiggleShare = 0.05, DistributaryWavesPerRadius = 0.45;
 
     /// <summary>三角洲扇面的半張角（度）。</summary>
     private const double DeltaHalfAngleDegrees = 70;
@@ -148,7 +163,12 @@ public sealed class LandformSampler
     private readonly double[] _curvePoints;
     private readonly double[] _curveReach; // 這條曲線離弦最遠多少（單位球），用來快速略過
     private readonly float[] _valleyFloor; // 每格河谷底的高度（公尺）
-    private readonly int[] _deltaApex; // 每格海：流進來的大河是從哪一格來的（−1 沒有三角洲）
+    private readonly Delta[] _deltas;
+    private readonly int[]?[] _deltasNear; // 每格：扇面可能蓋到這格的三角洲（_deltas 的索引），沒有是 null
+
+    /// <summary>一個三角洲：河口那一格海、流進來的河從哪一格來、扇面頂點、軸向（往海）、側向、半徑（公尺）。</summary>
+    private readonly record struct Delta(int Mouth, int ApexCell,
+        (double X, double Y, double Z) Apex, (double X, double Y, double Z) Axis, (double X, double Y, double Z) Side, double Radius);
     private readonly bool[] _riverHead; // 河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）
     private readonly int[] _down; // 每格的下游粗格（−1 沒有）：RiverDownstreamCellId 去掉不連通的河段（見 MaxRiverRiseMeters）
 
@@ -212,16 +232,89 @@ public sealed class LandformSampler
         _curvePoints = [.. points];
         _curveReach = reach;
 
-        // 三角洲：大河流進海的那一格海，記下是哪一格流進來的
-        _deltaApex = new int[n];
-        Array.Fill(_deltaApex, -1);
+        // 三角洲：大河流進海的那一格海，記下是哪一格流進來的（同一格海有好幾條河流進來時取最寬的）
+        var apexOf = new int[n];
+        Array.Fill(apexOf, -1);
         for (var c = 0; c < n; c++)
         {
             var down = _down[c];
             if (down < 0 || cells[down].WaterDepthMeters <= 0f || !cells[down].IsOcean) continue;
             if (DeltaRadiusMeters(down) <= 0) continue;
-            if (_deltaApex[down] < 0 || cells[c].RiverWidthMeters > cells[_deltaApex[down]].RiverWidthMeters) _deltaApex[down] = c;
+            if (apexOf[down] < 0 || cells[c].RiverWidthMeters > cells[apexOf[down]].RiverWidthMeters) apexOf[down] = c;
         }
+        (_deltas, _deltasNear) = BuildDeltas(apexOf);
+    }
+
+    /// <summary>
+    /// 三角洲的扇面：頂點在河口海岸（河那格與海那格的中間）往內陸一點，扇面往海裡長出去。
+    /// 再記下每格附近有哪些三角洲——扇面可以比格距大好幾倍，只看最近格與鄰居找不到。
+    /// </summary>
+    private (Delta[] Deltas, int[]?[] Near) BuildDeltas(int[] apexOf)
+    {
+        var u = _grid.UnitVector;
+        var n = _cells.Count;
+        var deltas = new List<Delta>();
+        var near = new List<int>?[n];
+        var margin = 2 * _grid.AverageCellSpacingMeters;
+        Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
+        for (var mouth = 0; mouth < n; mouth++)
+        {
+            var apexCell = apexOf[mouth];
+            if (apexCell < 0) continue;
+            var radius = DeltaRadiusMeters(mouth);
+            var land = (u[apexCell * 3], u[apexCell * 3 + 1], u[apexCell * 3 + 2]);
+            var sea = (u[mouth * 3], u[mouth * 3 + 1], u[mouth * 3 + 2]);
+            var coast = Normalize(Add(land, sea));
+            var axis = Normalize(Sub(sea, land));
+            var apex = Normalize(Sub(coast, Scale(axis, DeltaInlandShare * radius / _radius)));
+            var index = deltas.Count;
+            deltas.Add(new Delta(mouth, apexCell, apex, axis, Normalize(Cross(apex, axis)), radius));
+
+            // 從河口那格往外找，格心離頂點在半徑＋兩個格距以內的格子都記下來
+            var seen = new HashSet<int> { mouth };
+            var queue = new Queue<int>();
+            queue.Enqueue(mouth);
+            while (queue.Count > 0)
+            {
+                var c = queue.Dequeue();
+                (near[c] ??= []).Add(index);
+                var count = _grid.GetNeighbors(c, neighbors);
+                for (var i = 0; i < count; i++)
+                {
+                    var k = neighbors[i];
+                    if (!seen.Add(k)) continue;
+                    if (Length(Sub((u[k * 3], u[k * 3 + 1], u[k * 3 + 2]), apex)) * _radius <= radius + margin) queue.Enqueue(k);
+                }
+            }
+        }
+        return ([.. deltas], near.Select(l => l?.ToArray()).ToArray());
+    }
+
+    /// <summary>點在不在某個三角洲的扇面裡。在的話回傳離頂點多遠（公尺）、沿軸與側向的分量（單位球）、輪廓雜訊。</summary>
+    private bool InFan((double, double, double) p, in Delta delta, out double distance, out double along, out double across, out double lobe)
+    {
+        var dir = Sub(p, delta.Apex);
+        distance = Length(dir) * _radius;
+        along = Dot(dir, delta.Axis);
+        across = Dot(dir, delta.Side);
+        lobe = 0;
+        // 先用雜訊的上限排除遠處（雜訊最貴）
+        if (distance > delta.Radius * (0.8 + 0.35 * 1.5) || distance < 1) return false;
+        // 邊緣用雜訊打散：三角洲的輪廓是一個個朵狀的沙洲，不是圓規畫的扇形
+        var f = _radius / DeltaLobeWavelengthMeters;
+        lobe = _deltaNoise.Fbm(p.Item1 * f, p.Item2 * f, p.Item3 * f, 3, 1.0);
+        if (distance > delta.Radius * (0.8 + 0.35 * lobe)) return false;
+        var angle = Math.Atan2(across, along) * 180 / Math.PI;
+        return Math.Abs(angle) <= DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
+    }
+
+    /// <summary>點在不在任何三角洲的扇面裡。</summary>
+    private bool InAnyFan((double, double, double) p, int nearest)
+    {
+        if (_deltasNear[nearest] is not { } list) return false;
+        foreach (var d in list)
+            if (InFan(p, _deltas[d], out _, out _, out _, out _)) return true;
+        return false;
     }
 
     /// <summary>三角洲的半徑（公尺）；太小不畫是 0。</summary>
@@ -230,7 +323,7 @@ public sealed class LandformSampler
         var supply = _cells[mouth].DeltaSupply;
         if (supply <= 0f) return 0;
         var km = Math.Min(60, DeltaRadiusKmPerSqrtSupply * Math.Sqrt(supply / 1_000.0));
-        return km < 3 ? 0 : km * 1000;
+        return km < MinDeltaRadiusKm ? 0 : km * 1000;
     }
 
     /// <summary>
@@ -331,17 +424,18 @@ public sealed class LandformSampler
         Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
         var count = _grid.GetNeighbors(nearest, neighbors);
 
-        // ---- 水 ----
-        if (cell.WaterDepthMeters > 0f)
+        // ---- 水（三角洲往海裡長出去的部分是陸地）----
+        var seaDelta = cell.WaterDepthMeters > 0f && cell.IsOcean && InAnyFan(p, nearest);
+        if (cell.WaterDepthMeters > 0f && !seaDelta)
         {
             var surface = (double)cell.WaterSurfaceMeters;
             elevation = Math.Min(elevation, surface - 1);
             return new LandformSample(cell.Terrain, cell.HeightCategory, elevation, surface, nearest, -1, double.PositiveInfinity, 0, false);
         }
 
-        var terrain = cell.Terrain;
-        var category = cell.HeightCategory;
-        elevation = Math.Max(elevation, 0);
+        var terrain = seaDelta ? TerrainType.Swamp : cell.Terrain;
+        var category = seaDelta ? 0 : cell.HeightCategory;
+        elevation = seaDelta ? DeltaTopMeters : Math.Max(elevation, 0); // 下面的三角洲再往外壓低
 
         // ---- 河：找最近的河道 ----
         var (riverCell, riverT, riverDist) = NearestRiver(p, nearest, neighbors[..count]);
@@ -410,19 +504,16 @@ public sealed class LandformSampler
         }
 
         // ---- 三角洲：大河流進海的那一格附近。只蓋低地：扇面畫在高地上會把山壓平，河沿線一下跳上千公尺 ----
-        if (water is null && !onRiver && elevation <= MaxDeltaLandMeters)
+        var onDelta = false;
+        if (water is null && !onRiver && elevation <= MaxDeltaLandMeters && _deltasNear[nearest] is { } deltas)
         {
-            for (var i = -1; i < count; i++)
-            {
-                var k = i < 0 ? nearest : neighbors[i];
-                if (_deltaApex[k] < 0) continue;
-                if (PaintDelta(p, k, ref terrain, ref category, ref elevation, ref water)) break;
-                // 一格的分流畫好就夠了
-            }
+            var distributaryHalfWidth = riverBandAddsToChannel ? riverBandMeters / 2 : riverBandMeters;
+            foreach (var d in deltas)
+                if (onDelta = PaintDelta(p, _deltas[d], distributaryHalfWidth, ref terrain, ref category, ref elevation, ref water)) break;
         }
 
         // ---- 海岸：沙灘、礫灘、海崖（冰河、雪地的海岸不畫）----
-        if (water is null && !onRiver && terrain is not (TerrainType.Glacier or TerrainType.SnowField))
+        if (water is null && !onRiver && !onDelta && !seaDelta && terrain is not (TerrainType.Glacier or TerrainType.SnowField))
         {
             // 海岸帶：平滑後的海陸比例換成「離海多遠」的近似（附近一半是海＝就在海邊）
             var coast = coastProximity is { } proximity
@@ -448,7 +539,7 @@ public sealed class LandformSampler
         }
 
         // ---- 風：黃土、沙丘；沖積扇；裸露的岩石 ----
-        if (water is null && !floodplain && !onRiver)
+        if (water is null && !floodplain && !onRiver && !onDelta && !seaDelta)
         {
             if (cell.LoessRate >= LoessMinRate && terrain is TerrainType.Grassland or TerrainType.Shrubland)
             {
@@ -629,39 +720,29 @@ public sealed class LandformSampler
         return (best, bestSlope);
     }
 
-    /// <summary>三角洲：扇面裡的陸地壓成 0~3 公尺的泥灘與沼澤，分流是淡水。有畫到回傳 true。</summary>
-    private bool PaintDelta((double, double, double) p, int mouth, ref TerrainType terrain, ref int category, ref double elevation, ref double? water)
+    /// <summary>
+    /// 三角洲：扇面裡的陸地壓成 0.5~3.5 公尺的沼澤與泥灘，分流是淡水。有畫到回傳 true。
+    /// 分流至少 <paramref name="minHalfWidth"/> 寬（跟河一樣：比小格窄的話畫不出來）。
+    /// </summary>
+    private bool PaintDelta((double, double, double) p, in Delta delta, double minHalfWidth,
+        ref TerrainType terrain, ref int category, ref double elevation, ref double? water)
     {
-        var apexCell = _deltaApex[mouth];
-        var radius = DeltaRadiusMeters(mouth);
-        var u = _grid.UnitVector;
-        var apex = (u[apexCell * 3], u[apexCell * 3 + 1], u[apexCell * 3 + 2]);
-        var sea = (u[mouth * 3], u[mouth * 3 + 1], u[mouth * 3 + 2]);
-        // 邊緣用雜訊打散：三角洲的輪廓是一個個朵狀的沙洲，不是圓規畫的扇形
-        var f = _radius / DeltaLobeWavelengthMeters;
-        var lobe = _deltaNoise.Fbm(p.Item1 * f, p.Item2 * f, p.Item3 * f, 3, 1.0);
-        var distance = Length(Sub(p, apex)) * _radius;
-        if (distance > radius * (0.8 + 0.35 * lobe) || distance < 1) return false;
+        if (!InFan(p, delta, out var distance, out var along, out var across, out var lobe)) return false;
 
-        // 扇面的方向：從頂點（河流出山的那一格）指向河口那一格海
-        var axis = Normalize(Sub(sea, apex));
-        var side = Normalize(Cross(apex, axis));
-        var dir = Sub(p, apex);
-        var along = Dot(dir, axis);
-        var across = Dot(dir, side);
-        var angle = Math.Atan2(across, along) * 180 / Math.PI;
-        if (Math.Abs(angle) > DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe)) return false;
-
-        // 分流：從頂點放射出去的幾條直線，各自稍微偏一點
-        var width = Math.Max(_cells[apexCell].RiverWidthMeters * 0.4, Rivers.MinChannelWidthMeters);
+        // 分流：從頂點放射出去的幾條水道，各自稍微偏一點，再左右蜿蜒（直線像車輪的輻條）
+        var halfWidth = Math.Max(Math.Max(_cells[delta.ApexCell].RiverWidthMeters * 0.4, Rivers.MinChannelWidthMeters) / 2, minHalfWidth);
         for (var i = 0; i < DeltaDistributaries; i++)
         {
             var spread = (i - (DeltaDistributaries - 1) / 2.0) / ((DeltaDistributaries - 1) / 2.0) * DeltaHalfAngleDegrees * 0.8;
-            spread += ((Hash(mouth * 31 + i) & 15) - 7.5) * 1.5;
+            spread += ((Hash(delta.Mouth * 31 + i) & 15) - 7.5) * 1.5;
             var rad = spread * Math.PI / 180;
-            var lateral = Math.Abs(-Math.Sin(rad) * along + Math.Cos(rad) * across) * _radius;
             var forward = (Math.Cos(rad) * along + Math.Sin(rad) * across) * _radius;
-            if (forward > 0 && lateral < width / 2)
+            var phase = (Hash(delta.Mouth * 57 + i) & 255) / 256.0 * 2 * Math.PI;
+            var wave = 2 * Math.PI * forward / (delta.Radius * DistributaryWavesPerRadius);
+            var wiggle = DistributaryWiggleShare * delta.Radius * Math.Min(1, forward / (0.25 * delta.Radius))
+                * (Math.Sin(wave + phase) + 0.4 * Math.Sin(2.3 * wave + 2 * phase));
+            var lateral = Math.Abs((-Math.Sin(rad) * along + Math.Cos(rad) * across) * _radius - wiggle);
+            if (forward > 0 && lateral < halfWidth)
             {
                 terrain = TerrainType.Freshwater;
                 category = WaterDepthCategory(2);
@@ -670,9 +751,9 @@ public sealed class LandformSampler
                 return true;
             }
         }
-        // 分流之間：泥灘（靠海）與沼澤（靠內陸），往海邊越來越低
-        var fraction = distance / radius;
-        elevation = Math.Min(elevation, 3 * (1 - fraction) + 0.5);
+        // 分流之間：沼澤（靠內陸）與泥灘（靠海），往海邊越來越低
+        var fraction = distance / delta.Radius;
+        elevation = Math.Min(elevation, (DeltaTopMeters - 0.5) * (1 - fraction) + 0.5);
         terrain = fraction + 0.3 * lobe > 0.6 ? TerrainType.Mud : TerrainType.Swamp;
         category = 0;
         return true;

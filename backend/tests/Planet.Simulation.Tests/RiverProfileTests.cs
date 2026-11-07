@@ -127,6 +127,36 @@ public class RiverProfileTests
         Assert.NotEmpty(sampler.RiverCenterline(path[3])); // 冰河末端重新開始
     }
 
+    /// <summary>三角洲往海裡長出去（2026-11-07：原本只畫在河那格的陸地上，又只有幾公里，地圖上看不到）。</summary>
+    [Fact]
+    public void DeltaBuildsLandOutIntoTheSea()
+    {
+        var (cells, path) = River([300, 200, 100, 50, 20], sea => sea.DeltaSupply = 1_000f);
+        var sampler = new LandformSampler(Grid, cells);
+        cells[path[^1]].DeltaSupply = 0f;
+        var withoutDelta = new LandformSampler(Grid, cells);
+        var u = Grid.UnitVector;
+        (double X, double Y, double Z) At(int c) => (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
+        var (land, sea) = (At(path[^2]), At(path[^1]));
+        LandformSample SampleSeaward(double km, LandformSampler? from = null)
+        {
+            // 河那格與海那格的中點（海岸）往海的方向走 km 公里，再往側邊偏 2 公里避開主河道
+            var t = 0.5 + km * 1000 / (Math.Sqrt(Math.Pow(sea.X - land.X, 2) + Math.Pow(sea.Y - land.Y, 2) + Math.Pow(sea.Z - land.Z, 2)) * Grid.PlanetRadiusMeters);
+            var p = (X: land.X + (sea.X - land.X) * t, Y: land.Y + (sea.Y - land.Y) * t, Z: land.Z + (sea.Z - land.Z) * t);
+            var side = (X: land.Y * sea.Z - land.Z * sea.Y, Y: land.Z * sea.X - land.X * sea.Z, Z: land.X * sea.Y - land.Y * sea.X);
+            var sideLength = Math.Sqrt(side.X * side.X + side.Y * side.Y + side.Z * side.Z);
+            var offset = 2_000 / Grid.PlanetRadiusMeters / sideLength;
+            p = (p.X + side.X * offset, p.Y + side.Y * offset, p.Z + side.Z * offset);
+            var length = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+            return (from ?? sampler).Sample(Math.Asin(p.Z / length) * 180 / Math.PI, Math.Atan2(p.Y, p.X) * 180 / Math.PI);
+        }
+
+        var nearShore = SampleSeaward(3);
+        Assert.NotEqual(TerrainType.Seawater, nearShore.Terrain);
+        Assert.True(nearShore.ElevationMeters > -5, $"{nearShore.ElevationMeters:F1}");
+        Assert.Equal(TerrainType.Seawater, SampleSeaward(3, withoutDelta).Terrain); // 沒有三角洲那裡是海
+    }
+
     [Fact]
     public void RiverIntoAHighLakeStaysAboveTheLakeSurface()
     {
