@@ -22,6 +22,15 @@ public class ConstructionRepository : IConstructionRepository
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<Construction>> GetByIdsAsync(IReadOnlyCollection<long> subTileIds, CancellationToken ct = default)
+    {
+        if (subTileIds.Count == 0) return [];
+        return await _db.Constructions.AsNoTracking()
+            .Where(c => subTileIds.Contains(c.SubTileId))
+            .ToListAsync(ct);
+    }
+
+    /// <inheritdoc />
     public Task<Construction?> GetAsync(long subTileId, CancellationToken ct = default) =>
         _db.Constructions.AsNoTracking().FirstOrDefaultAsync(c => c.SubTileId == subTileId, ct);
 

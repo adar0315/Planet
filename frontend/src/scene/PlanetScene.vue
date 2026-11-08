@@ -144,7 +144,14 @@ onMounted(async () => {
     () => renderer === null,
     seasonData,
   )
-  const subTiles = createSubTileManager(scene, meshOptions, patchManager, seasonData, () => renderer === null)
+  const subTiles = createSubTileManager(
+    scene,
+    meshOptions,
+    patchManager,
+    seasonData,
+    () => renderer === null,
+    () => gameState.gameTime,
+  )
   const controller = createPlayerController(
     gameState,
     patchManager,

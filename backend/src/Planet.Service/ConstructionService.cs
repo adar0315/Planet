@@ -1,5 +1,6 @@
 using Planet.Data;
 using Planet.Domain;
+using Planet.Generation;
 using Planet.Shared;
 
 namespace Planet.Service;
@@ -9,6 +10,7 @@ public sealed class ConstructionService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly SubTileService _subTiles;
+    private readonly SubTileGrid _grid = new(GoldbergPlanetGenerator.SubdivisionFrequency);
 
     /// <summary>同一時間只處理一個修改：讀出目前狀態、檢查、寫回之間不能被別的請求插隊。</summary>
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -55,6 +57,18 @@ public sealed class ConstructionService
                 if (currentStructure == kind) return (null, "這裡已經有一樣的建築物了。", false);
                 if (!ConstructionRules.CanPlace(ConstructionRules.Apply(surface, currentEdit), kind, out var reason))
                     return (null, reason, false);
+                if (kind == StructureKind.Castle)
+                {
+                    var size = await ConstructionRules.CastleSizeAfterPlacingAsync(
+                        request.SubTileId,
+                        _grid.NeighborIdsOf,
+                        async ids => (await repository.GetByIdsAsync(ids, ct))
+                            .Where(c => c.Structure == StructureKind.Castle)
+                            .Select(c => c.SubTileId)
+                            .ToHashSet());
+                    if (size > ConstructionRules.MaxCastleCells)
+                        return (null, $"一座城堡最多 {ConstructionRules.MaxCastleCells} 格；這一格會跟旁邊的城堡連起來，超過了。", false);
+                }
                 nextStructure = kind;
             }
             else if (!ConstructionRules.TryEditTerrain(surface, currentEdit, currentStructure, terrainEdit!.Value, out nextEdit, out var reason))

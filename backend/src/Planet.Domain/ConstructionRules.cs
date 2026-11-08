@@ -42,6 +42,9 @@ public static class ConstructionRules
     /// <summary>挖出來的河道水面比原地面低幾級：水面略低於兩岸，看得出是挖下去的。</summary>
     public const int ChannelWaterDepthLevels = 1;
 
+    /// <summary>一座城堡最多幾格：中心加一圈剛好 7 格。</summary>
+    public const int MaxCastleCells = 7;
+
     /// <summary>
     /// 這一格是不是水：湖、海、珊瑚礁、水面高過地面的格子，以及畫成河的那一帶。
     /// 河的寬度會隨季節變，這裡用平均寬度判斷：乾季露出的河床也算河，不能蓋房子。
@@ -68,9 +71,35 @@ public static class ConstructionRules
             StructureKind.House when water => "房子只能蓋在陸地上。",
             StructureKind.Castle when water => "城堡只能蓋在陸地上。",
             StructureKind.Road when water => "路只能蓋在陸地上；水上請用橋。",
+            StructureKind.Farm when water => "農田只能蓋在陸地上。",
+            StructureKind.Orchard when water => "果園只能蓋在陸地上。",
+            StructureKind.Pasture when water => "牧場只能蓋在陸地上。",
             _ => null,
         };
         return reason is null;
+    }
+
+    /// <summary>
+    /// 在 <paramref name="start"/> 蓋一格城堡之後，它所在的那座城有幾格（相鄰的城堡格連成一座）。
+    /// 數到超過 <see cref="MaxCastleCells"/> 就停，不必走完整座城。
+    /// </summary>
+    /// <param name="start">要蓋的小格。</param>
+    /// <param name="neighbours">小格的鄰居編號。</param>
+    /// <param name="castlesAmong">這些小格裡哪些已經是城堡（一層一層批次查，查資料庫時一層一次）。</param>
+    public static async Task<int> CastleSizeAfterPlacingAsync(
+        long start, Func<long, IReadOnlyList<long>> neighbours, Func<IReadOnlyCollection<long>, Task<ISet<long>>> castlesAmong)
+    {
+        var visited = new HashSet<long> { start };
+        var frontier = new List<long> { start };
+        while (frontier.Count > 0 && visited.Count <= MaxCastleCells)
+        {
+            var candidates = frontier.SelectMany(neighbours).Where(id => !visited.Contains(id)).Distinct().ToList();
+            if (candidates.Count == 0) break;
+            var castles = await castlesAmong(candidates);
+            frontier = candidates.Where(castles.Contains).ToList();
+            foreach (var id in frontier) visited.Add(id);
+        }
+        return visited.Count;
     }
 
     /// <summary>

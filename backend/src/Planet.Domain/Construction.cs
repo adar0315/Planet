@@ -33,7 +33,10 @@ public enum StructureKind
     /// <summary>房子：只能蓋在陸地。</summary>
     House = 1,
 
-    /// <summary>城堡：只能蓋在陸地，佔滿一個小格。</summary>
+    /// <summary>
+    /// 城堡：只能蓋在陸地。相鄰的城堡格連成同一座城（最多 <see cref="ConstructionRules.MaxCastleCells"/> 格），
+    /// 城牆沿整座城的外緣畫。
+    /// </summary>
     Castle = 2,
 
     /// <summary>橋：只能蓋在水上（河、湖、海、挖出來的河道）。</summary>
@@ -41,6 +44,15 @@ public enum StructureKind
 
     /// <summary>道路：只能蓋在陸地，會跟相鄰的路、橋、房子、城堡接起來。</summary>
     Road = 4,
+
+    /// <summary>農田：只能蓋在陸地，隨季節變色（春綠、夏深綠、秋金黃、冬天空田）。</summary>
+    Farm = 5,
+
+    /// <summary>果園：只能蓋在陸地，春天開花、秋天結果、冬天落葉。</summary>
+    Orchard = 6,
+
+    /// <summary>牧場：只能蓋在陸地，有圍欄與牲畜，冬天草枯黃。</summary>
+    Pasture = 7,
 }
 
 /// <summary>小格的地形修改（只改畫面，不重算水系：下游的河不會跟著變）。</summary>

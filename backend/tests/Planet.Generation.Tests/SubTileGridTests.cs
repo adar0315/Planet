@@ -65,4 +65,23 @@ public class SubTileGridTests
             foreach (var nb in neighbors[i])
                 Assert.Contains(children[i].SubTileId, neighbors[index[nb!.Value]].Select(x => x!.Value));
     }
+
+    [Fact]
+    public void NeighborIdsOf_MatchesWholePlanetNeighbors()
+    {
+        var grid = new SubTileGrid(ParentFrequency);
+        var (children, neighbors) = grid.ChildrenOf(Parents);
+        for (var i = 0; i < children.Count; i++)
+        {
+            var expected = neighbors[i].Select(x => x!.Value).OrderBy(x => x);
+            Assert.Equal(expected, grid.NeighborIdsOf(children[i].SubTileId).OrderBy(x => x));
+        }
+    }
+
+    [Fact]
+    public void NeighborIdsOf_RejectsNonSubTileIds()
+    {
+        var grid = new SubTileGrid(ParentFrequency);
+        Assert.Throws<ArgumentOutOfRangeException>(() => grid.NeighborIdsOf(5));
+    }
 }

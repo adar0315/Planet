@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import type { SubTileDto } from '@/types/tile'
 import {
+  castleGroups,
   BRIDGE_CLEARANCE_METERS,
   bridgeDeckRadius,
   buildConstructionLayer,
@@ -77,8 +78,19 @@ describe('constructionModels', () => {
 
   it('faces wind outward (the local frame is not mirrored)', () => {
     // 鏡射的變換會讓三角形的繞向反過來，但法向量照樣朝外：畫出來是內側（背面被剔除）
-    const subs = [sub(1, 0, { structure: 'House' }), sub(2, STEP, { structure: 'Road' })]
-    const layer = buildConstructionLayer(subs, (s) => subs.filter((o) => o !== s), options)
+    const subs = [
+      sub(1, 0, { structure: 'House' }),
+      sub(2, STEP, { structure: 'Road' }),
+      sub(3, 2 * STEP, { structure: 'Castle' }),
+      sub(4, 3 * STEP, { structure: 'Castle' }),
+      sub(5, 4 * STEP, { structure: 'Farm' }),
+      sub(6, 5 * STEP, { structure: 'Orchard' }),
+      sub(7, 6 * STEP, { structure: 'Pasture' }),
+    ]
+    const layer = buildConstructionLayer(subs, (s) => subs.filter((o) => Math.abs(o.tileId - s.tileId) === 1), options, () => ({
+      season: '秋',
+      snow: false,
+    }))
     const a = new THREE.Vector3()
     const b = new THREE.Vector3()
     const c = new THREE.Vector3()
@@ -87,9 +99,10 @@ describe('constructionModels', () => {
       const geometry = (child as THREE.Mesh).geometry
       const position = geometry.getAttribute('position')
       const normal = geometry.getAttribute('normal')
-      const index = geometry.getIndex()!
-      for (let t = 0; t < index.count; t += 3) {
-        const [i, j, k] = [index.getX(t), index.getX(t + 1), index.getX(t + 2)]
+      const index = geometry.getIndex()
+      const count = index ? index.count : position.count
+      for (let t = 0; t < count; t += 3) {
+        const [i, j, k] = index ? [index.getX(t), index.getX(t + 1), index.getX(t + 2)] : [t, t + 1, t + 2]
         a.fromBufferAttribute(position, i)
         b.fromBufferAttribute(position, j)
         c.fromBufferAttribute(position, k)
@@ -99,6 +112,33 @@ describe('constructionModels', () => {
         expect(face.dot(n)).toBeGreaterThan(0)
       }
     }
+  })
+
+  it('adjacent castle cells form one castle, keep in the best-connected cell', () => {
+    const line = [1, 2, 3, 4].map((id) => sub(id, id * STEP, { structure: 'Castle' }))
+    const apart = sub(9, 20 * STEP, { structure: 'Castle' })
+    const all = [...line, apart, sub(5, 5 * STEP)]
+    const neighbours = (s: SubTileDto) => all.filter((o) => Math.abs(o.tileId - s.tileId) === 1)
+    const groups = castleGroups(all, neighbours)
+    expect(groups.map((g) => g.map((s) => s.tileId).sort())).toEqual([[1, 2, 3, 4], [9]])
+    expect(groups[0]![0]!.tileId).toBe(2) // 2 與 3 都有兩個城堡鄰居，取編號小的
+  })
+
+  it('farm, orchard and pasture change with the season', () => {
+    const subs = [sub(1, 0, { structure: 'Farm' }), sub(2, 3 * STEP, { structure: 'Orchard' })]
+    const colours = (season: '春' | '夏' | '秋' | '冬', snow = false) => {
+      const layer = buildConstructionLayer(subs, () => [], options, () => ({ season, snow }))
+      const result = layer.group.children
+        .map((c) => ((c as THREE.Mesh).material as THREE.MeshLambertMaterial).color.getHex())
+        .sort()
+      layer.dispose()
+      return result
+    }
+    expect(colours('春')).not.toEqual(colours('秋'))
+    // 冬天果樹落葉：少了樹冠那一種顏色；秋天多了果子
+    expect(colours('冬').length).toBeLessThan(colours('夏').length)
+    expect(colours('秋').length).toBeGreaterThan(colours('夏').length)
+    expect(colours('冬', true)).toContain(0xeef2f5)
   })
 
   it('a lone sub without structures builds nothing', () => {

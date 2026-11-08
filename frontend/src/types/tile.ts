@@ -72,7 +72,7 @@ export interface SubTileDto extends TileDto {
 }
 
 /** 小格上的建築物（後端 Planet.Domain.StructureKind）。 */
-export type StructureKind = 'House' | 'Castle' | 'Bridge' | 'Road'
+export type StructureKind = 'House' | 'Castle' | 'Bridge' | 'Road' | 'Farm' | 'Orchard' | 'Pasture'
 
 /** 小格的地形修改（後端 Planet.Domain.TerrainEditKind）：挖河道、填平。 */
 export type TerrainEditKind = 'Channel' | 'Fill'

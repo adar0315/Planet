@@ -10,6 +10,11 @@ public interface IConstructionRepository
     /// <param name="ct">取消權杖。</param>
     Task<IReadOnlyList<Construction>> GetByParentsAsync(IReadOnlyCollection<long> parentTileIds, CancellationToken ct = default);
 
+    /// <summary>這些小格裡被修改過的（沒改過的不會出現）。</summary>
+    /// <param name="subTileIds">小格編號。</param>
+    /// <param name="ct">取消權杖。</param>
+    Task<IReadOnlyList<Construction>> GetByIdsAsync(IReadOnlyCollection<long> subTileIds, CancellationToken ct = default);
+
     /// <summary>一個小格的修改；沒改過回傳 null。</summary>
     /// <param name="subTileId">小格編號。</param>
     /// <param name="ct">取消權杖。</param>

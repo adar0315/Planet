@@ -104,6 +104,36 @@ public sealed class SubTileGrid
         }
     }
 
+    /// <summary>
+    /// 一個小格的所有鄰居編號（五角 5 個、六角 6 個），不必先列舉它所屬的地塊。
+    /// 編輯模式算「相連的城堡有幾格」時用：相連的格子可能跨到別的地塊底下。
+    /// </summary>
+    /// <param name="subTileId">小格編號。</param>
+    /// <exception cref="ArgumentOutOfRangeException">不是合法的小格編號。</exception>
+    public IReadOnlyList<long> NeighborIdsOf(long subTileId)
+    {
+        var (face, row, col) = CoordinateOf(subTileId);
+        var isPentagon = (row == 0 && col == 0) || (row == _subN && col == 0) || (row == 0 && col == _subN);
+        var coordinates = _subResolver.GetNeighborCoordinates(new Tile
+        {
+            FaceIndex = face, Row = row, Col = col, Shape = isPentagon ? TileShape.Pentagon : TileShape.Hexagon,
+        });
+        return coordinates.Select(c => IdOf(_subResolver.Canonicalize(c.FaceIndex, c.Row, c.Col))).ToList();
+    }
+
+    /// <summary>編號解回正規化座標（<see cref="IdOf"/> 的反函數）。</summary>
+    private (int FaceIndex, int Row, int Col) CoordinateOf(long subTileId)
+    {
+        var code = subTileId - IdOffset;
+        var side = (long)_subN + 1;
+        if (code < 0 || code >= 20 * side * side) throw new ArgumentOutOfRangeException(nameof(subTileId));
+        var col = (int)(code % side);
+        var row = (int)(code / side % side);
+        var face = (int)(code / side / side);
+        if (row + col > _subN) throw new ArgumentOutOfRangeException(nameof(subTileId));
+        return (face, row, col);
+    }
+
     /// <summary>小格的編號（正規化座標的編碼加上 <see cref="IdOffset"/>）。</summary>
     private long IdOf((int FaceIndex, int Row, int Col) c) => IdOffset + ((long)c.FaceIndex * (_subN + 1) + c.Row) * (_subN + 1) + c.Col;
 

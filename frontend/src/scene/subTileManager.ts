@@ -13,7 +13,13 @@ import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
 import { withSphereClip, type SphereClip } from '@/map/sphereClipMaterial'
 import type { StructureKind, SubTileDto, TerrainEditKind, TileDto } from '@/types/tile'
-import { buildConstructionLayer, type ConstructionLayer } from '@/map/constructionModels'
+import {
+  buildConstructionLayer,
+  SEASONAL_STRUCTURES,
+  type ConstructionLayer,
+  type SeasonState,
+} from '@/map/constructionModels'
+import { monthFlag, monthPosition, seasonName } from '@/map/seasons'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
 import {
@@ -86,6 +92,7 @@ export function createSubTileManager(
   patchManager: PatchManager,
   seasonData: SeasonData,
   isCancelled: () => boolean,
+  gameTime: () => Date,
 ): SubTileManager {
   const subOptions: TileMeshOptions = { ...meshOptions, edgeLengthMeters: SUBTILE_EDGE_METERS }
   /** 地塊的邊長＝外接圓半徑（公尺）。 */
@@ -196,6 +203,29 @@ export function createSubTileManager(
     return nearest ? nearest.point : null
   }
 
+  /** 農田、果園、牧場當下的季節與積雪（跟地形一樣看這一格的緯度與粗格的積雪月份）。 */
+  function seasonOf(sub: SubTileDto): SeasonState {
+    const time = gameTime()
+    const cell = sub.sourceCellId !== undefined ? seasonData.seasonsOf(sub.sourceCellId) : undefined
+    return {
+      season: seasonName(sub.latitude, time),
+      snow: cell ? monthFlag(cell.snowMonths, monthPosition(time)) : false,
+    }
+  }
+
+  /** 目前這批農田、果園、牧場的季節；變了才重建建築物（遊戲時間每變一次都會呼叫 recolor）。 */
+  function seasonalSignature(): string {
+    if (!subPatch) return ''
+    let signature = ''
+    for (const sub of subPatch.tiles as SubTileDto[]) {
+      if (!sub.structure || !SEASONAL_STRUCTURES.has(sub.structure)) continue
+      const state = seasonOf(sub)
+      signature += `${sub.tileId}:${state.season}${state.snow ? '*' : ''};`
+    }
+    return signature
+  }
+  let builtSignature = ''
+
   function rebuildConstructions() {
     if (constructions) {
       group.remove(constructions.group)
@@ -205,7 +235,8 @@ export function createSubTileManager(
     if (!subPatch) return
     const built = subPatch.tiles as SubTileDto[]
     if (!built.some((sub) => sub.structure)) return
-    constructions = buildConstructionLayer(built, subNeighbours, subOptions)
+    builtSignature = seasonalSignature()
+    constructions = buildConstructionLayer(built, subNeighbours, subOptions, seasonOf)
     group.add(constructions.group)
   }
 
@@ -375,6 +406,7 @@ export function createSubTileManager(
 
     recolor() {
       subMesh?.recolorAll((tile) => shadedColor(tile, brightness))
+      if (constructions && seasonalSignature() !== builtSignature) rebuildConstructions()
     },
 
     get ready() {
