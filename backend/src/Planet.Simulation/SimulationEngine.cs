@@ -168,7 +168,9 @@ public sealed class SimulationEngine
             _climate.OrographyAboveWater = true; // v2 P7：地形抬升從水面算起
             _climate.BaselineRainReferenceKm = 200; // v2 P7：基礎降水是每 200 公里 6%，不是每格
             _climate.WindSpeedScaledAdvection = true; // v2 P9：風弱的地方水氣搬得慢，赤道不再有一排降水尖峰
-            _climate.GlobalTemperatureOffsetC = 4f; // v2 P8：全球暖 4°C，冰蓋才壓得到陸地的 10% 以下（2026-10-20 使用者選定）
+            // v2 P8：全球暖 4°C，冰蓋才壓得到陸地的 10% 以下（2026-10-20 使用者選定）。2026-11-08 冷冰河的侵蝕從 3 倍改成 1 倍之後，
+            // 極地的陸地比較高、冰佔陸地升到 14%；+5/+6/+8/+9 是 12.6/11.8/9.8/8.9%，使用者選 +9（淨輸出到海 130 m/Myr）
+            _climate.GlobalTemperatureOffsetC = 9f;
             // 海岸破碎度不算大陸內部的水（湖），見 ContinentCriteria.InlandWaterIsCoast
             // 大島的下限 1% → 0.8%（2026-10-20 使用者決定）：P7 的侵蝕把劇本的第二座大島削到陸地的 0.84~0.89%
             StopCriteria = ContinentCriteria.Default with { InlandWaterIsCoast = false, MinBigIslandShare = 0.008 };
@@ -354,6 +356,7 @@ public sealed class SimulationEngine
         {
             _climate.Solve(State);
             _yearsSinceClimateSolve = 0;
+            RefreshDischarge();
             // 四季（水文地貌規劃 H3/H4）：只用來更新洪峰係數，季節差越大侵蝕越強。演化用 4 季就夠（每季一個代表），
             // 放大時才解 12 個月（見 SolveSeasons）
             if (_hydrology is not null) UpdateFloodFactor(EvolutionSeasons);
@@ -362,6 +365,7 @@ public sealed class SimulationEngine
         {
             // v2：溫度每一步更新（便宜），降水才照舊每 200 萬年解一次
             _climate.UpdateTemperatureOnly(State);
+            RefreshDischarge();
         }
         Timings.Mark("氣候");
 
@@ -377,6 +381,13 @@ public sealed class SimulationEngine
         Timings.Mark("停止條件");
         Timings.EndStep();
     }
+
+    /// <summary>
+    /// 氣候改了之後重算年平均水系的流量。逕流係數看氣溫（降雪的比例），而流量是在「均衡＋注水」裡、氣溫更新之前算的；
+    /// 不重算的話，年平均水系跟四季水文（用當下的氣溫）對不上——0°C 附近的一格逕流係數從 0.39 變 0.50，
+    /// 四季的平均流量比年平均多 28%（2026-11-08，SeasonsTests 抓到）。湖的水量收支照舊用注水時的值。
+    /// </summary>
+    private void RefreshDischarge() => _hydrology?.ComputeDischarge(State, State.SeaLevelMeters);
 
     /// <summary>演化中重解氣候時，四季的水文分幾個時段（每季一個）。</summary>
     private const int EvolutionSeasons = 4;

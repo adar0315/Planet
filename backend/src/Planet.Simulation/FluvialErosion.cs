@@ -27,6 +27,9 @@ namespace Planet.Simulation;
 /// 8. **河口三角洲**：河口附近的淺海每步最多墊高 <see cref="MaxDeltaFillPerStepMeters"/>，可以墊出海面幾公尺，
 ///    陸地慢慢往海裡長；其餘照舊沿大陸棚往外鋪。速率限制是必要的：大河一步的泥沙可以填平上百格大陸棚，
 ///    不限速的話三角洲一步就往外長幾百公里。
+///
+/// 淨輸出到海偏高（2026-11-08，約 160 m/Myr，地球約 50）修掉的三件事，見 <see cref="GroundAt"/>、
+/// <see cref="GlacialErosionMultiplier"/>、<see cref="WeatheringFullSlope"/>。
 /// </summary>
 public sealed class FluvialErosion
 {
@@ -44,11 +47,20 @@ public sealed class FluvialErosion
     /// <summary>量坡度用的參考長度（公尺），跟 <see cref="Erosion"/> 一樣，與解析度無關。</summary>
     private const double SlopeReferenceLengthMeters = 15_000.0;
 
-    /// <summary>風化：到處都有的背景剝蝕（公尺地表／百萬年）。</summary>
+    /// <summary>風化：坡面上的背景剝蝕（公尺地表／百萬年），坡度不到 <see cref="WeatheringFullSlope"/> 時按比例減少。</summary>
     private const double BaseWeatheringMetersPerMyr = 5.0;
 
-    /// <summary>冰川刨蝕相對於流水的倍率。</summary>
-    private const double GlacialErosionMultiplier = 3.0;
+    /// <summary>
+    /// 風化全額的坡度（每 15 公里落差 30 公尺）。風化把岩石變成碎屑，要有坡度才搬得走（潛移、片流）；平原上的風化層留在原地。
+    /// 以前不看坡度，平原上的鬆散沉積物每百萬年被搬走二、三十公尺（2026-11-08）。
+    /// </summary>
+    private const double WeatheringFullSlope = 30.0 / SlopeReferenceLengthMeters;
+
+    /// <summary>
+    /// 冰川刨蝕相對於流水的倍率。冰川的門檻是年均溫低於 <see cref="GlacialTemperatureC"/>，這種冷冰的底部凍在岩床上、幾乎不滑動，
+    /// 刨蝕不比流水強；以前是 3 倍，冰只蓋一成陸地卻佔了三分之一的剝蝕（2026-11-08，從存檔接著跑量的）。
+    /// </summary>
+    private const double GlacialErosionMultiplier = 1.0;
 
     /// <summary>結冰的溫度門檻（攝氏），低於這個算冰川。</summary>
     private const float GlacialTemperatureC = -5f;
@@ -272,13 +284,13 @@ public sealed class FluvialErosion
             // 岩性：硬岩的風化、浪蝕、河蝕都慢（H2）
             var erodibility = Lithology.Erodibility(Lithology.ExposedAt(state, c));
             var flood = state.FloodFactor[c];
-            var lowering = erodibility * (BaseWeatheringMetersPerMyr
+            // 坡度以水面為基準：流進海或湖的那一格，落差算到水面。冰不算（見 GroundAt）
+            var drop = p >= 0 ? GroundAt(state, c) - (_waterSurface[p] - state.IceThickness[p]) : 0f;
+            var weathering = BaseWeatheringMetersPerMyr * Math.Clamp(drop / SlopeReferenceLengthMeters / WeatheringFullSlope, 0.0, 1.0);
+            var lowering = erodibility * (weathering
                 + WaveErosionMetersPerMyr * SeaNeighborCount(state, lakeOf, c)) * deltaMyr;
-            var drop = 0f;
             if (p >= 0)
             {
-                // 坡度以水面為基準：流進海或湖的那一格，落差算到水面
-                drop = _surface[c] - _waterSurface[p];
                 if (drop > 0f)
                 {
                     var stream = StreamPowerCoefficient * erodibility * flood
@@ -297,7 +309,7 @@ public sealed class FluvialErosion
             lowering = Math.Min(lowering, MaxSurfaceLoweringPerStepMeters);
             // 基準面：什麼營力都刨不到海平面以下（海浪只削出海面附近的海蝕平台）。少了這一條，海浪與風化把低平原
             // 一路刨到海面下，40 Myr 時 A 北、C 北的平原整片變成淺海、一座大島沉掉（P7，2026-10-20）
-            lowering = Math.Min(lowering, Math.Max(0.0, _surface[c] - seaLevel));
+            lowering = Math.Min(lowering, Math.Max(0.0, GroundAt(state, c) - seaLevel));
             if (lowering > 0)
             {
                 var (removed, fromRelief) = RemoveMaterial(state, c, lowering);
@@ -677,6 +689,12 @@ public sealed class FluvialErosion
 
     /// <summary>找最近的海最多看幾格。</summary>
     private const int MaxNearestSeaSearch = 5000;
+
+    /// <summary>
+    /// 不含冰的地面高度（公尺）。侵蝕的坡度與基準面都用它：冰蓋有一兩公里厚，算進去的話極地海岸對海面的落差很大，
+    /// 冰下的基岩刨掉了落差也不會變小、永遠刨不完——臨海格只佔陸地 7.7%，卻佔了 43% 的剝蝕（2026-11-08）。
+    /// </summary>
+    private float GroundAt(SimulationState state, int cell) => _surface[cell] - state.IceThickness[cell];
 
     /// <summary>
     /// 拿掉相當於地表降低 <paramref name="surfaceLoweringMeters"/> 公尺的物質：先沉積物（換算均衡反彈）、再凸起的褶皺（1:1，褶皺沒有均衡補償），
