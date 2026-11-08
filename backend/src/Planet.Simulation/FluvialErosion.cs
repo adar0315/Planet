@@ -163,6 +163,21 @@ public sealed class FluvialErosion
     /// <summary>大陸棚都墊滿了之後，第二輪最多墊到海平面下這個深度（公尺）——沉積物不會自己長出海面。</summary>
     private const float FilledSeaDepthMeters = 5f;
 
+    /// <summary>
+    /// 進海的泥沙裡細粒（泥）的比例：泥由懸浮與濁流帶過大陸棚、鋪在深海，只有砂（其餘）沿大陸棚由近到遠墊（見 <see cref="SpreadMud"/>）。
+    /// 地球河流的懸浮載量約佔總載量的七到九成。
+    /// </summary>
+    private const double MudFraction = 0.7;
+
+    /// <summary>泥在深海的分布隨距離河口指數遞減的特徵距離（公尺）；鋪到 <see cref="MudSpreadCutoff"/> 倍遠為止。</summary>
+    private const double MudSpreadLengthMeters = 300_000.0;
+
+    /// <summary>泥最遠鋪到特徵距離的幾倍（外面的份量併回裡面）。三倍時 n=150 每步侵蝕慢 2 秒以上。</summary>
+    private const double MudSpreadCutoff = 2.0;
+
+    /// <summary>平行鋪泥時入海口分成幾份（固定，不看執行緒數，結果才會一模一樣）。</summary>
+    private const int MudChunks = 16;
+
     private readonly SimulationGrid _grid;
     private readonly float[] _surface;
     private readonly float[] _waterSurface;
@@ -175,6 +190,11 @@ public sealed class FluvialErosion
     private int _stamp;
     private readonly int _maxSeaHops;
     private readonly int _deltaHops;
+    private readonly int _mudHops;
+    private readonly double[] _mudLoad;
+    private readonly List<int> _mudEntries = [];
+    private readonly MudChunk?[] _mudChunks = new MudChunk?[MudChunks];
+    private double[] _unplacedMud = [];
     private readonly float[] _incision;
     private readonly float[] _aggradation;
     private readonly float[] _glacial;
@@ -223,6 +243,8 @@ public sealed class FluvialErosion
         LastRequestedLowering = new float[n];
         _maxSeaHops = Math.Max(1, (int)Math.Round(MaxSeaTransportMeters / grid.AverageCellSpacingMeters));
         _deltaHops = Math.Max(0, (int)Math.Round(DeltaRadiusMeters / grid.AverageCellSpacingMeters));
+        _mudHops = Math.Max(1, (int)Math.Round(MudSpreadCutoff * MudSpreadLengthMeters / grid.AverageCellSpacingMeters));
+        _mudLoad = new double[n];
         _incision = new float[n];
         _aggradation = new float[n];
         _glacial = new float[n];
@@ -418,6 +440,7 @@ public sealed class FluvialErosion
             lake += add;
         }
 
+        FlushMud(state, lakeOf);
         if (SlumpEnabled) SlumpSteepSediment(state, lakeOf);
 
         // 診斷量的移動平均（約 100 萬年）：放大時決定河谷、平原、三角洲的樣子
@@ -486,7 +509,7 @@ public sealed class FluvialErosion
             var take = Math.Min(Math.Min(sediment, excess / 2), MaxAggradationPerStepMeters);
             state.SedimentThickness[c] = (float)(sediment - take);
             _surface[c] -= (float)take;
-            if (IsSea(state, lakeOf, lowest)) DepositInSea(state, lakeOf, lowest, take);
+            if (IsSea(state, lakeOf, lowest)) DepositOnShelf(state, lakeOf, lowest, take);
             else
             {
                 state.SedimentThickness[lowest] += (float)take;
@@ -559,13 +582,145 @@ public sealed class FluvialErosion
     private static bool IsSea(SimulationState state, int[] lakeOf, int c) => state.WaterDepth[c] > 0f && lakeOf[c] < 0;
 
     /// <summary>
-    /// 進海的沉積物：從河口一圈一圈往外（陸地也走過去、但只填海格），把每一格墊到 <see cref="ShelfDepthMeters"/>——堆出來的是往外長的大陸棚。
+    /// 進海的沉積物：細粒的 <see cref="MudFraction"/> 鋪到深海（<see cref="SpreadMud"/>），其餘（與深海裝不下的）交給 <see cref="DepositOnShelf"/>。
+    /// 回傳堆下去的量（等於 <paramref name="amount"/>）。
+    ///
+    /// 以前全部走大陸棚：河口外最近的深海格一步收 3~4.5 公里，沉下去再墊，直到撐滿約 2.9 倍水深；
+    /// 41 Myr 時全部沉積有 74.5% 擠在 4,989 格超過 10 公里的沉積柱裡（最厚 22 公里），深海格的沉積中位數是 0（2026-11-08）。
+    /// </summary>
+    private double DepositInSea(SimulationState state, int[] lakeOf, int start, double amount)
+    {
+        if (!IsSea(state, lakeOf, start)) return DepositOnShelf(state, lakeOf, start, amount);
+        // 泥先記在入海那一格，這一步的泥沙都送完之後才一起鋪（FlushMud）：同一個入海口一步只走一次，不然 n=150 每步慢好幾秒
+        if (_mudLoad[start] == 0)
+        {
+            _mudEntries.Add(start);
+            if (_unplacedMud.Length < _mudEntries.Count) Array.Resize(ref _unplacedMud, Math.Max(1024, _mudEntries.Count * 2));
+        }
+        _mudLoad[start] += amount * MudFraction;
+        DepositOnShelf(state, lakeOf, start, amount * (1 - MudFraction));
+        return amount;
+    }
+
+    /// <summary>
+    /// 把這一步記下的泥鋪到深海：每個入海口沿著海格一圈一圈往外（不越過陸地），鋪在比大陸棚深的海格上，
+    /// 份量隨距離指數遞減（<see cref="MudSpreadLengthMeters"/>）。每格最多墊到大陸棚深度，裝不下的、附近沒有深海的交給 <see cref="DepositOnShelf"/>。
+    ///
+    /// 入海口分成固定的 <see cref="MudChunks"/> 份平行算，各自加到自己的暫存、再依份的順序加總：
+    /// 加總順序跟執行緒怎麼排無關，同種子的結果才會一模一樣。一個一個做的話 n=150 每步侵蝕從 0.1 秒變 0.9 秒。
+    /// </summary>
+    private void FlushMud(SimulationState state, int[] lakeOf)
+    {
+        var entries = _mudEntries.Count;
+        if (entries == 0) return;
+        var n = state.CellCount;
+        var shelf = state.SeaLevelMeters - ShelfDepthMeters;
+        var decayPerRing = Math.Exp(-_grid.AverageCellSpacingMeters / MudSpreadLengthMeters);
+        Parallel.For(0, MudChunks, k =>
+        {
+            var chunk = _mudChunks[k] ??= new MudChunk(n);
+            Array.Clear(chunk.Deposit);
+            for (var e = entries * k / MudChunks; e < entries * (k + 1) / MudChunks; e++)
+            {
+                var start = _mudEntries[e];
+                _unplacedMud[e] = SpreadMud(state, lakeOf, chunk, start, _mudLoad[start], shelf, decayPerRing) ? 0 : _mudLoad[start];
+            }
+        });
+        for (var c = 0; c < n; c++)
+        {
+            var add = 0.0;
+            for (var k = 0; k < MudChunks; k++) add += _mudChunks[k]!.Deposit[c];
+            if (add <= 0) continue;
+            var put = Math.Min(add, Math.Max(0.0, shelf - _surface[c]));
+            state.SedimentThickness[c] += (float)put;
+            _surface[c] += (float)put;
+            if (add - put > 0) DepositOnShelf(state, lakeOf, c, add - put);
+        }
+        for (var e = 0; e < entries; e++)
+        {
+            var start = _mudEntries[e];
+            if (_unplacedMud[e] > 0) DepositOnShelf(state, lakeOf, start, _unplacedMud[e]);
+            _mudLoad[start] = 0;
+        }
+        _mudEntries.Clear();
+    }
+
+    /// <summary>
+    /// 一個入海口的泥按距離分給附近的深海格，加到 <paramref name="chunk"/> 的暫存（只讀不寫模擬狀態，可以平行）。
+    /// 附近沒有比大陸棚深的海格就回傳 false。
+    /// </summary>
+    private bool SpreadMud(SimulationState state, int[] lakeOf, MudChunk chunk, int start, double amount, float shelf, double decayPerRing)
+    {
+        var visited = chunk.Visited;
+        var stamp = ++chunk.Stamp;
+        visited.Clear();
+        visited.Add(start);
+        chunk.VisitStamp[start] = stamp;
+        chunk.Cells.Clear();
+        chunk.Weights.Clear();
+        var weight = 1.0;
+        var totalWeight = 0.0;
+        var ringStart = 0;
+        for (var ring = 0; ring <= _mudHops && ringStart < visited.Count; ring++, weight *= decayPerRing)
+        {
+            var ringEnd = visited.Count;
+            for (var i = ringStart; i < ringEnd; i++)
+            {
+                var cur = visited[i];
+                if (_surface[cur] < shelf)
+                {
+                    chunk.Cells.Add(cur);
+                    chunk.Weights.Add(weight);
+                    totalWeight += weight;
+                }
+                if (ring == _mudHops) continue;
+                var baseIndex = cur * SimulationGrid.MaxNeighborsPerCell;
+                for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+                {
+                    var nb = _grid.Neighbors[baseIndex + k];
+                    if (nb == SimulationGrid.NoNeighbor || chunk.VisitStamp[nb] == stamp) continue;
+                    chunk.VisitStamp[nb] = stamp;
+                    if (IsSea(state, lakeOf, nb)) visited.Add(nb);
+                }
+            }
+            ringStart = ringEnd;
+        }
+        if (totalWeight <= 0) return false;
+        var scale = amount / totalWeight;
+        for (var i = 0; i < chunk.Cells.Count; i++) chunk.Deposit[chunk.Cells[i]] += scale * chunk.Weights[i];
+        return true;
+    }
+
+    /// <summary>平行鋪泥時一份入海口用的暫存。</summary>
+    private sealed class MudChunk(int cellCount)
+    {
+        /// <summary>這一份的入海口鋪下的泥（公尺，每格）。</summary>
+        public double[] Deposit { get; } = new double[cellCount];
+
+        /// <summary>走訪標記。</summary>
+        public int[] VisitStamp { get; } = new int[cellCount];
+
+        /// <summary>目前的走訪標記值。</summary>
+        public int Stamp { get; set; }
+
+        /// <summary>一圈一圈走過的海格。</summary>
+        public List<int> Visited { get; } = [];
+
+        /// <summary>收泥的深海格。</summary>
+        public List<int> Cells { get; } = [];
+
+        /// <summary>收泥的深海格各自的權重。</summary>
+        public List<double> Weights { get; } = [];
+    }
+
+    /// <summary>
+    /// 進海的砂：從河口一圈一圈往外（陸地也走過去、但只填海格），把每一格墊到 <see cref="ShelfDepthMeters"/>——堆出來的是往外長的大陸棚。
     /// 走到 <see cref="_maxSeaHops"/> 圈還有剩，第二輪把走過的格子墊到接近海面，再有剩才平均鋪上去。回傳堆下去的量（等於 <paramref name="amount"/>）。
     ///
     /// 第一版是「往最深的海鄰居一格一格走，走不下去就整包倒在那裡」：碰到封閉的海溝或走到上限就倒在一格，
     /// 40 Myr 時最高的 300 格陸地平均有 5.9 公里的沉積物（P7，2026-10-19）。
     /// </summary>
-    private double DepositInSea(SimulationState state, int[] lakeOf, int start, double amount)
+    private double DepositOnShelf(SimulationState state, int[] lakeOf, int start, double amount)
     {
         var shelf = state.SeaLevelMeters - ShelfDepthMeters;
         var remaining = amount;
