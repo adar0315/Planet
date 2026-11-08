@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import type { SubTileDto } from '@/types/tile'
 import {
-  HOUSE_STYLES,
-  hashId,
+  HOUSE_MAX_RADIUS_METERS,
+  HOUSE_ROOF_REDS,
+  HOUSE_WALL_COLOR,
+  houseDesign,
+  houseCluster,
   castleGroups,
   BRIDGE_CLEARANCE_METERS,
   bridgeDeckRadius,
@@ -143,48 +146,90 @@ describe('constructionModels', () => {
     expect(colours('冬', true)).toContain(0xeef2f5)
   })
 
-  it('has ten house styles, each inside the cell and facing outward', () => {
-    expect(HOUSE_STYLES).toHaveLength(10)
+  it('houses stay inside the cell, face outward, and only use cream walls and red roofs', () => {
     const v = new THREE.Vector3()
     const a = new THREE.Vector3()
     const b = new THREE.Vector3()
     const c = new THREE.Vector3()
-    for (const style of HOUSE_STYLES) {
-      for (const part of style.parts((meters) => meters)) {
-        const geometry = part.geometry.clone()
-        geometry.rotateY(part.rotation ?? 0)
-        geometry.translate(part.x ?? 0, part.y, -(part.z ?? 0))
-        const position = geometry.getAttribute('position')
+    const base = 1_000_237_225_700
+    let maxReach = 0
+    let minY = Infinity
+    let maxY = -Infinity
+    const inward: string[] = []
+    for (let id = base; id < base + 200; id++) {
+      const design = houseDesign(id)
+      for (const part of design.parts((meters: number) => meters)) {
+        expect([HOUSE_WALL_COLOR, ...HOUSE_ROOF_REDS]).toContain(part.color)
+        const geometry = part.geometry.clone().translate(part.x ?? 0, part.y, -(part.z ?? 0))
+        const flat = geometry.index ? geometry.toNonIndexed() : geometry
+        const position = flat.getAttribute('position')
+        const normal = flat.getAttribute('normal')
         for (let i = 0; i < position.count; i++) {
           v.fromBufferAttribute(position, i)
-          // 收在小格內切圓（約 216 公尺）裡、不低於地面、不高過 200 公尺
-          expect(Math.hypot(v.x, v.z), style.name).toBeLessThan(200)
-          expect(v.y, style.name).toBeGreaterThan(-1e-6)
-          expect(v.y, style.name).toBeLessThan(200)
+          maxReach = Math.max(maxReach, Math.hypot(v.x, v.z))
+          minY = Math.min(minY, v.y)
+          maxY = Math.max(maxY, v.y)
         }
-        const flat = geometry.index ? geometry.toNonIndexed() : geometry
-        const p = flat.getAttribute('position')
-        const n = flat.getAttribute('normal')
-        for (let t = 0; t < p.count; t += 3) {
-          a.fromBufferAttribute(p, t)
-          b.fromBufferAttribute(p, t + 1)
-          c.fromBufferAttribute(p, t + 2)
+        for (let t = 0; t < position.count; t += 3) {
+          a.fromBufferAttribute(position, t)
+          b.fromBufferAttribute(position, t + 1)
+          c.fromBufferAttribute(position, t + 2)
           const face = b.sub(a).cross(c.sub(a))
           if (face.lengthSq() < 1e-12) continue
-          v.fromBufferAttribute(n, t)
-          expect(face.dot(v), style.name).toBeGreaterThan(0)
+          v.fromBufferAttribute(normal, t)
+          if (face.dot(v) <= 0) inward.push(`${design.shape} ${id}`)
         }
       }
     }
+    expect(maxReach).toBeLessThanOrEqual(HOUSE_MAX_RADIUS_METERS + 1e-6)
+    expect(minY).toBeGreaterThan(-1e-6)
+    expect(maxY).toBeLessThan(110) // 2026-11-08 高度降一半：兩層樓加塔也不到 110 公尺
+    expect(inward).toEqual([])
   })
 
-  it('consecutive cell ids spread over all house styles', () => {
-    const pick = (id: number) => Math.floor((((hashId(id) % 2147483647 || 1) * 48271) % 2147483647) / 2147483647 * 10)
+  it('a house cell holds 3 to 5 houses that do not overlap and stay inside the cell', () => {
     const base = 1_000_237_225_700
-    const styles = Array.from({ length: 200 }, (_, i) => pick(base + i))
-    expect(new Set(styles).size).toBe(10)
-    const sameAsNext = styles.filter((s, i) => i > 0 && s === styles[i - 1]).length
-    expect(sameAsNext).toBeLessThan(50) // 相鄰的格子大多不同（隨機的話約 1/10）
+    const counts = new Set<number>()
+    for (let id = base; id < base + 150; id++) {
+      const houses = houseCluster(id)
+      counts.add(houses.length)
+      const reach = houses.map((h) => {
+        let r = 0
+        for (const part of h.design.parts((meters: number) => meters)) {
+          const position = part.geometry.getAttribute('position')
+          for (let i = 0; i < position.count; i++) {
+            const x = position.getX(i) + (part.x ?? 0)
+            const z = -position.getZ(i) + (part.z ?? 0)
+            r = Math.max(r, Math.hypot(x, z))
+          }
+        }
+        return r
+      })
+      houses.forEach((h, i) => {
+        // 整棟（含轉向）落在小格裡
+        expect(Math.hypot(h.x, h.z) + reach[i]!).toBeLessThanOrEqual(HOUSE_MAX_RADIUS_METERS + 1e-6)
+        for (let j = i + 1; j < houses.length; j++) {
+          const gap = Math.hypot(h.x - houses[j]!.x, h.z - houses[j]!.z)
+          expect(gap).toBeGreaterThanOrEqual(reach[i]! + reach[j]! - 1e-6)
+        }
+      })
+    }
+    expect(counts).toEqual(new Set([3, 4, 5]))
+  })
+
+  it('houses vary in shape, floors, tower and roof shade, but a cell always gets the same house', () => {
+    const base = 1_000_237_225_700
+    const designs = Array.from({ length: 300 }, (_, i) => houseDesign(base + i))
+    expect(new Set(designs.map((d) => d.shape))).toEqual(new Set(['I', 'L', 'T', 'H', 'O', '多間']))
+    expect(new Set(designs.map((d) => d.floors))).toEqual(new Set([1, 2]))
+    expect(new Set(designs.map((d) => d.tower))).toEqual(new Set([true, false]))
+    expect(new Set(designs.map((d) => d.roofColor)).size).toBe(HOUSE_ROOF_REDS.length)
+    // 相鄰的格子大多長得不一樣
+    const sameAsNext = designs.filter((d, i) => i > 0 && d.shape === designs[i - 1]!.shape).length
+    expect(sameAsNext).toBeLessThan(100)
+    const again = houseDesign(base + 7)
+    expect(again.shape).toBe(designs[7]!.shape)
+    expect(again.turn).toBe(designs[7]!.turn)
   })
 
   it('a lone sub without structures builds nothing', () => {

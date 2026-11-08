@@ -32,9 +32,6 @@ const BRIDGE_THICKNESS_METERS = 8
 export const BRIDGE_CLEARANCE_METERS = 50
 const BRIDGE_PIER_RADIUS_METERS = 12
 
-const HOUSE_SIZE_METERS = 140
-const HOUSE_WALL_METERS = 70
-const HOUSE_ROOF_METERS = 60
 
 /** 城牆：沿整座城的外緣（相鄰的城堡格之間不畫）。 */
 const CASTLE_WALL_HEIGHT_METERS = 80
@@ -77,8 +74,6 @@ export interface SeasonState {
 }
 
 const COLORS = {
-  houseWall: 0xe6d8b8,
-  houseRoof: 0xa2452e,
   castleStone: 0x9c9a90,
   castleRoof: 0x47587a,
   road: 0x9a8a70,
@@ -284,20 +279,20 @@ export function buildConstructionLayer(
 
     switch (sub.structure) {
       case 'House': {
-        // 十種造型之一，由小格編號決定（同一格每次都一樣），朝向也隨機
-        const random = seededRandom(hashId(sub.tileId))
-        const style = HOUSE_STYLES[Math.floor(random() * HOUSE_STYLES.length)]!
-        const turn = random() * Math.PI * 2
-        const cos = Math.cos(turn)
-        const sin = Math.sin(turn)
-        for (const part of style.parts(m)) {
-          const x = part.x ?? 0
-          const z = part.z ?? 0
-          add(
-            part.color,
-            part.geometry,
-            at(surface + m(part.y), x * cos - z * sin, x * sin + z * cos, turn + (part.rotation ?? 0)),
-          )
+        // 3~5 棟的聚落，每棟依小格編號設計（同一格每次都一樣）：平面、寬瘦、層數、塔、屋頂的紅色、朝向
+        for (const house of houseCluster(sub.tileId)) {
+          const { design } = house
+          const cos = Math.cos(design.turn)
+          const sin = Math.sin(design.turn)
+          for (const part of design.parts(m)) {
+            const x = part.x ?? 0
+            const z = part.z ?? 0
+            add(
+              part.color,
+              part.geometry,
+              at(surface + m(part.y), house.x + x * cos - z * sin, house.z + x * sin + z * cos, design.turn),
+            )
+          }
         }
         break
       }
@@ -587,120 +582,261 @@ function seededRandom(seed: number): () => number {
   }
 }
 
-/** 房子的一個零件：位置是公尺（往東 x、往北 z、離地 y＝零件的底部，或方塊、柱體的中心見各造型）。 */
-interface HousePart {
+/** 房子的一個零件：位置是公尺（往東 x、往北 z）。 */
+export interface HousePart {
   color: number
   geometry: THREE.BufferGeometry
-  /** 零件中心（方塊、柱體、錐）或底部（人字屋頂、圓頂）離地面的高度（公尺）。 */
+  /** 零件中心（方塊）或底部（屋頂）離地面的高度（公尺）。 */
   y: number
   x?: number
   z?: number
-  /** 繞上方再轉多少（弧度），疊在整棟房子的朝向上。 */
-  rotation?: number
 }
 
-/** 一種房子造型。 */
-export interface HouseStyle {
-  name: string
-  /** 零件（`m` 把公尺換算成場景單位）。都收在半徑約 190 公尺內，轉任何角度都不會伸進鄰格。 */
+/** 房子的平面形狀。 */
+export type HouseShape = 'I' | 'L' | 'T' | 'H' | 'O' | '多間'
+
+/** 一棟房子的設計（由小格編號決定）。 */
+export interface HouseDesign {
+  shape: HouseShape
+  floors: 1 | 2
+  tower: boolean
+  /** 屋頂的紅色（每棟深淺不同）。 */
+  roofColor: number
+  /** 朝向（弧度）。 */
+  turn: number
+  /** 零件（`m` 把公尺換算成場景單位）。都收在半徑 {@link HOUSE_MAX_RADIUS_METERS} 內，轉任何角度都不會伸進鄰格。 */
   parts(m: (meters: number) => number): HousePart[]
 }
 
-/** 方塊：`y` 傳底部高度，回傳的零件 y 是中心。 */
-const block = (m: (v: number) => number, color: number, w: number, h: number, d: number, base = 0, x = 0, z = 0, rotation = 0): HousePart => ({
-  color,
-  geometry: box(m(w), m(h), m(d)),
-  y: base + h / 2,
-  x,
-  z,
-  rotation,
-})
+/** 房子的所有零件都收在這個半徑（公尺）裡：小格的內切圓約 216 公尺。 */
+export const HOUSE_MAX_RADIUS_METERS = 190
+
+const HOUSE_SHAPES: readonly HouseShape[] = ['I', 'L', 'T', 'H', 'O', '多間']
+/** 米白牆；屋頂是紅色，每棟從這幾種深淺裡挑一種（2026-11-08 使用者要求「紅色有深淺色差」）。 */
+export const HOUSE_WALL_COLOR = 0xe6d8b8
+export const HOUSE_ROOF_REDS: readonly number[] = [0xa2452e, 0xb8503a, 0x8c3424, 0xc4604a, 0x963c2a, 0xae3a2c]
+/** 一層樓高（畫面上的公尺）。2026-11-08 使用者要求房屋高度降一半（原本 55）。 */
+const FLOOR_HEIGHT_METERS = 27.5
+const ROOF_OVERHANG_METERS = 8
+const TOWER_SIZE_METERS = 40
+const TOWER_EXTRA_METERS = 35
+
+/** 一翼：牆是軸對齊的長方體（中心 cx, cz，東西寬 w、南北深 d），上面一個四坡屋頂。 */
+interface Wing {
+  cx: number
+  cz: number
+  w: number
+  d: number
+}
 
 /**
- * 十種房子（2026-11-08 使用者要求「10 個房子的造型隨機畫出」）。高度一樣是畫面上的公尺數，不乘地形的 8 倍。
+ * 依小格編號設計一棟房子（2026-11-08 使用者要求）：一律米白牆、紅色四坡屋頂（深淺不同），
+ * 變化在平面（I、L、T、H、O 形或好幾間）、寬瘦、一層或兩層、有沒有塔。同一格每次都一樣。
  */
-export const HOUSE_STYLES: readonly HouseStyle[] = [
-  {
-    name: '紅瓦方屋',
-    parts: (m) => [
-      block(m, COLORS.houseWall, HOUSE_SIZE_METERS, HOUSE_WALL_METERS, HOUSE_SIZE_METERS),
-      { color: COLORS.houseRoof, geometry: pyramid(m(HOUSE_SIZE_METERS * 0.78), m(HOUSE_ROOF_METERS)), y: HOUSE_WALL_METERS + HOUSE_ROOF_METERS / 2 },
-    ],
-  },
-  {
-    name: '長屋',
-    parts: (m) => [
-      block(m, 0xd4d0c8, 190, 55, 90),
-      { color: 0x6a4630, geometry: gable(m(196), m(45), m(96)), y: 55 },
-      block(m, 0x8a4a3a, 14, 50, 14, 50, 55, 20),
-    ],
-  },
-  {
-    name: '兩層樓',
-    parts: (m) => [
-      block(m, 0xf4f1ea, 120, 110, 110),
-      block(m, 0x6a4a32, 124, 6, 114, 52),
-      { color: 0x4a5560, geometry: gable(m(126), m(50), m(116)), y: 110 },
-    ],
-  },
-  {
-    name: 'L 形屋',
-    parts: (m) => [
-      block(m, 0xd9b47a, 150, 60, 70, 0, 0, -35),
-      block(m, 0xd9b47a, 70, 60, 80, 0, 40, 40),
-      { color: 0xb0442e, geometry: gable(m(156), m(40), m(76)), y: 60, z: -35 },
-      { color: 0xb0442e, geometry: gable(m(86), m(40), m(76)), y: 60, x: 40, z: 40, rotation: Math.PI / 2 },
-    ],
-  },
-  {
-    name: '平頂土屋',
-    parts: (m) => [
-      block(m, 0xc9a27a, 150, 55, 130),
-      block(m, 0xb08a62, 156, 8, 136, 55),
-      { color: 0x9a9a9a, geometry: cylinder(m(12), m(18), 10), y: 63 + 9, x: 40, z: 30 },
-    ],
-  },
-  {
-    name: '茅草圓屋',
-    parts: (m) => [
-      { color: 0xd8c8a0, geometry: cylinder(m(70), m(55), 16), y: 55 / 2 },
-      { color: 0xb89a4a, geometry: cone(m(88), m(70)), y: 55 + 35 },
-    ],
-  },
-  {
-    name: '塔樓屋',
-    parts: (m) => [
-      block(m, 0xe0d6c4, 120, 65, 120),
-      { color: 0x7a3a2a, geometry: pyramid(m(94), m(50)), y: 65 + 25 },
-      { color: 0xe0d6c4, geometry: cylinder(m(28), m(120), 12), y: 60, x: 60, z: 60 },
-      { color: 0x7a3a2a, geometry: cone(m(34), m(50)), y: 120 + 25, x: 60, z: 60 },
-    ],
-  },
-  {
-    name: '木屋',
-    parts: (m) => [
-      block(m, 0x7a5232, 130, 60, 100),
-      { color: 0x3f6b3a, geometry: gable(m(140), m(75), m(108)), y: 60 },
-      block(m, 0x777777, 16, 110, 16, 0, -45, 0),
-    ],
-  },
-  {
-    name: '雙併屋',
-    parts: (m) => [
-      block(m, 0xf0e6d0, 90, 60, 90, 0, -55, 0),
-      { color: 0xa2452e, geometry: gable(m(94), m(40), m(94)), y: 60, x: -55 },
-      block(m, 0xd8e0e8, 90, 70, 90, 0, 55, 0),
-      { color: 0x3d5a80, geometry: gable(m(94), m(40), m(94)), y: 70, x: 55 },
-    ],
-  },
-  {
-    name: '圓頂屋',
-    parts: (m) => [
-      block(m, 0xf2f2ee, 130, 60, 130),
-      { color: 0x3a6ea8, geometry: dome(m(62)), y: 60 },
-    ],
-  },
-]
+export function houseDesign(id: number, maxRadius = HOUSE_MAX_RADIUS_METERS, salt = 0): HouseDesign {
+  const random = seededRandom(hashId(hashId(id) + salt * 7919))
+  const between = (low: number, high: number) => low + random() * (high - low)
+  const shape = HOUSE_SHAPES[Math.floor(random() * HOUSE_SHAPES.length)]!
+  const floors: 1 | 2 = random() < 0.5 ? 1 : 2
+  const tower = random() < 0.35
+  const roofColor = HOUSE_ROOF_REDS[Math.floor(random() * HOUSE_ROOF_REDS.length)]!
+  const turn = random() * Math.PI * 2
+  // 翼的深度（寬瘦）：瘦的 45 公尺、寬的 100 公尺
+  const depth = between(45, 100)
+  const wings: Wing[] = []
+  switch (shape) {
+    case 'I':
+      wings.push({ cx: 0, cz: 0, w: between(depth * 1.2, 240), d: depth })
+      break
+    case 'L': {
+      const a = between(140, 230)
+      const b = between(110, 200)
+      wings.push({ cx: 0, cz: -b / 2 + depth / 2, w: a, d: depth })
+      wings.push({ cx: -a / 2 + depth / 2, cz: 0, w: depth, d: b })
+      break
+    }
+    case 'T': {
+      const a = between(150, 240)
+      const b = between(100, 180)
+      wings.push({ cx: 0, cz: b / 2 - depth / 2, w: a, d: depth })
+      wings.push({ cx: 0, cz: 0, w: depth, d: b })
+      break
+    }
+    case 'H': {
+      const span = between(130, 210)
+      const length = between(130, 220)
+      const side = Math.min(depth, span / 3)
+      wings.push({ cx: -span / 2 + side / 2, cz: 0, w: side, d: length })
+      wings.push({ cx: span / 2 - side / 2, cz: 0, w: side, d: length })
+      wings.push({ cx: 0, cz: 0, w: span, d: Math.min(depth, length / 3) })
+      break
+    }
+    case 'O': {
+      const size = between(150, 230)
+      const t = Math.min(depth, size / 3.2)
+      wings.push({ cx: 0, cz: size / 2 - t / 2, w: size, d: t })
+      wings.push({ cx: 0, cz: -size / 2 + t / 2, w: size, d: t })
+      wings.push({ cx: size / 2 - t / 2, cz: 0, w: t, d: size - 2 * t })
+      wings.push({ cx: -size / 2 + t / 2, cz: 0, w: t, d: size - 2 * t })
+      break
+    }
+    case '多間': {
+      const count = 2 + Math.floor(random() * 3)
+      const start = random() * Math.PI * 2
+      for (let k = 0; k < count; k++) {
+        const angle = start + (k / count) * Math.PI * 2 + between(-0.3, 0.3)
+        const radius = between(70, 105)
+        const long = between(60, 110)
+        const short = between(45, Math.min(80, long))
+        const [w, d] = random() < 0.5 ? [long, short] : [short, long]
+        wings.push({ cx: Math.cos(angle) * radius, cz: Math.sin(angle) * radius, w, d })
+      }
+      break
+    }
+  }
+  // 塔：放在第一翼的一個角上
+  const first = wings[0]!
+  const towerAt = {
+    cx: first.cx + (random() < 0.5 ? -1 : 1) * (first.w / 2 - TOWER_SIZE_METERS / 2),
+    cz: first.cz + (random() < 0.5 ? -1 : 1) * (first.d / 2 - TOWER_SIZE_METERS / 2),
+  }
+
+  // 太大的話整棟水平縮小，收進小格裡
+  let reach = 0
+  for (const wing of wings) {
+    reach = Math.max(
+      reach,
+      Math.hypot(Math.abs(wing.cx) + wing.w / 2, Math.abs(wing.cz) + wing.d / 2),
+    )
+  }
+  if (tower) {
+    const half = TOWER_SIZE_METERS / 2
+    reach = Math.max(reach, Math.hypot(Math.abs(towerAt.cx) + half, Math.abs(towerAt.cz) + half))
+  }
+  // 屋簷不跟著縮（固定伸出 ROOF_OVERHANG_METERS），所以縮放的是牆，牆加屋簷要收在 maxRadius 裡
+  const fit = maxRadius - ROOF_OVERHANG_METERS * Math.SQRT2
+  const scale = reach > fit ? fit / reach : 1
+  const wallHeight = FLOOR_HEIGHT_METERS * floors
+
+  return {
+    shape,
+    floors,
+    tower,
+    roofColor,
+    turn,
+    parts(m) {
+      const parts: HousePart[] = []
+      for (const wing of wings) {
+        const w = wing.w * scale
+        const d = wing.d * scale
+        const x = wing.cx * scale
+        const z = wing.cz * scale
+        parts.push({ color: HOUSE_WALL_COLOR, geometry: box(m(w), m(wallHeight), m(d)), y: wallHeight / 2, x, z })
+        parts.push({
+          color: roofColor,
+          geometry: hipRoof(m(w + 2 * ROOF_OVERHANG_METERS), m(Math.min(w, d) * 0.225 + 5), m(d + 2 * ROOF_OVERHANG_METERS)),
+          y: wallHeight,
+          x,
+          z,
+        })
+      }
+      if (tower) {
+        const height = wallHeight + TOWER_EXTRA_METERS
+        const size = TOWER_SIZE_METERS * scale
+        const x = towerAt.cx * scale
+        const z = towerAt.cz * scale
+        parts.push({ color: HOUSE_WALL_COLOR, geometry: box(m(size), m(height), m(size)), y: height / 2, x, z })
+        parts.push({
+          color: roofColor,
+          geometry: hipRoof(m(size + 2 * ROOF_OVERHANG_METERS), m(size * 0.45), m(size + 2 * ROOF_OVERHANG_METERS)),
+          y: height,
+          x,
+          z,
+        })
+      }
+      return parts
+    },
+  }
+}
+
+/** 聚落裡的一棟房子：設計與它在小格裡的位置（公尺，往東 x、往北 z）。 */
+export interface PlacedHouse {
+  design: HouseDesign
+  x: number
+  z: number
+}
+
+/**
+ * 每個房子小格的位置配置：幾棟、各自離中心多遠、每棟最大半徑（公尺）。相鄰兩棟的距離大於兩倍半徑，
+ * 最外圈不超過 {@link HOUSE_MAX_RADIUS_METERS}，所以彼此不重疊、也不伸進鄰格。
+ */
+const CLUSTER_LAYOUTS: Record<number, { slots: [number, number][]; radius: number }> = {
+  3: { slots: [0, 1, 2].map((k) => polar(100, (k * 2 * Math.PI) / 3)), radius: 85 },
+  4: { slots: [0, 1, 2, 3].map((k) => polar(105, (k * Math.PI) / 2)), radius: 72 },
+  5: { slots: [[0, 0], ...[0, 1, 2, 3].map((k) => polar(120, (k * Math.PI) / 2))], radius: 58 },
+}
+
+function polar(radius: number, angle: number): [number, number] {
+  return [Math.cos(angle) * radius, Math.sin(angle) * radius]
+}
+
+/**
+ * 一個房子小格上的聚落（2026-11-08 使用者要求「房屋數量增約 3~5 倍」）：3~5 棟各自不同的房子，
+ * 整個配置再隨機轉一個角度。由小格編號決定，同一格每次都一樣。
+ */
+export function houseCluster(id: number): PlacedHouse[] {
+  const random = seededRandom(hashId(id))
+  const count = 3 + Math.floor(random() * 3)
+  const layout = CLUSTER_LAYOUTS[count]!
+  const spin = random() * Math.PI * 2
+  const cos = Math.cos(spin)
+  const sin = Math.sin(spin)
+  return layout.slots.map(([x, z], k) => ({
+    design: houseDesign(id, layout.radius, k + 1),
+    x: x * cos - z * sin,
+    z: x * sin + z * cos,
+  }))
+}
+
+/**
+ * 四坡屋頂（hip roof），底面中心在原點、底面 w×d、高 h。長的那一邊有屋脊，正方形就是四角錐。
+ * 三角形的繞向朝外，法向量是每一面自己的（沒有索引）。
+ */
+export function hipRoof(w: number, h: number, d: number): THREE.BufferGeometry {
+  if (d > w) return hipRoof(d, h, w).rotateY(Math.PI / 2)
+  const r = (w - d) / 2
+  const a = new THREE.Vector3(-w / 2, 0, -d / 2)
+  const b = new THREE.Vector3(w / 2, 0, -d / 2)
+  const c = new THREE.Vector3(w / 2, 0, d / 2)
+  const e = new THREE.Vector3(-w / 2, 0, d / 2)
+  const r1 = new THREE.Vector3(-r, h, 0)
+  const r2 = new THREE.Vector3(r, h, 0)
+  const triangles: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
+    [a, b, r2],
+    [a, r2, r1],
+    [c, e, r1],
+    [c, r1, r2],
+    [b, c, r2],
+    [e, a, r1],
+  ]
+  const inside = new THREE.Vector3(0, h / 3, 0)
+  const positions: number[] = []
+  const normal = new THREE.Vector3()
+  const edge = new THREE.Vector3()
+  for (const [p, q0, t0] of triangles) {
+    let q = q0
+    let t = t0
+    normal.subVectors(q, p).cross(edge.subVectors(t, p))
+    if (normal.lengthSq() === 0) continue // 正方形時屋脊縮成一點，南北坡各有一個三角形退化
+    const centroid = p.clone().add(q).add(t).divideScalar(3)
+    if (normal.dot(centroid.sub(inside)) < 0) [q, t] = [t, q]
+    positions.push(p.x, p.y, p.z, q.x, q.y, q.z, t.x, t.y, t.z)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.computeVertexNormals()
+  return geometry
+}
 
 function box(width: number, height: number, depth: number): THREE.BufferGeometry {
   return new THREE.BoxGeometry(width, height, depth)
