@@ -72,12 +72,14 @@ const LOOK_RECENTER_RATE = 3
  * @param domElement 綁定滑鼠事件的元素（renderer.domElement）。
  * @param defaultDistance resetToDefaultView 回到的距離（場景單位）。
  * @param onTurnDrag 右鍵拖曳時呼叫，參數是要轉的角度（正值＝右轉）。
+ * @param leftDragLooks 左鍵拖曳要不要環顧；編輯模式時左鍵拖曳是連續畫（editController），回傳 false。
  */
 export function createCameraRig(
   camera: THREE.PerspectiveCamera,
   domElement: HTMLElement,
   defaultDistance: number,
   onTurnDrag: (deltaDeg: number) => void,
+  leftDragLooks: () => boolean = () => true,
 ): CameraRig {
   const target = new THREE.Vector3()
   let minDistance = defaultDistance * 0.05
@@ -101,6 +103,7 @@ export function createCameraRig(
 
   function onPointerDown(event: PointerEvent) {
     if (event.button !== 0 && event.button !== 2) return
+    if (event.button === 0 && !leftDragLooks()) return
     dragButton = event.button
     lastPointerX = event.clientX
     lastPointerY = event.clientY

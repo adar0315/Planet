@@ -9,6 +9,7 @@ import { useGameStateStore } from '@/stores/gameState'
 import { useKeyBindingsStore } from '@/stores/keyBindings'
 import { useTerrainStyleStore } from '@/stores/terrainStyles'
 import { usePlanetInfoStore } from '@/stores/planetInfo'
+import { useEditModeStore } from '@/stores/editMode'
 import { createCameraRig } from './cameraRig'
 import { createPatchManager } from './patchManager'
 import { createPlanetBase } from './planetBase'
@@ -77,6 +78,7 @@ const gameState = useGameStateStore()
 const keyBindings = useKeyBindingsStore()
 const terrainStyleStore = useTerrainStyleStore()
 const planetInfoStore = usePlanetInfoStore()
+const editMode = useEditModeStore()
 
 onMounted(async () => {
   if (!canvasContainer.value) return
@@ -133,6 +135,7 @@ onMounted(async () => {
     renderer.domElement,
     DEFAULT_CAMERA_DISTANCE_METERS / sceneToMeters,
     (deltaDeg) => turnByDrag(deltaDeg),
+    () => !editMode.active, // 編輯模式：左鍵拖曳是連續畫，不環顧
   )
   const seasonData = createSeasonData()
   gameState.seasonsOf = seasonData.seasonsOf

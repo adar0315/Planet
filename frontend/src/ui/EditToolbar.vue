@@ -16,7 +16,7 @@ const currentHint = computed(() => EDIT_TOOLS.find((t) => t.action === edit.tool
     <div v-if="edit.active" class="status">
       <span v-if="!edit.subTilesReady" class="warn">鏡頭拉近一點（看得到細格子時）才能編輯</span>
       <span v-else-if="edit.message" :class="{ warn: edit.messageIsError }">{{ edit.message }}</span>
-      <span v-else>點一下小格：{{ currentHint }}</span>
+      <span v-else>點一下或按著左鍵拖曳（右鍵拖曳轉鏡頭）：{{ currentHint }}</span>
     </div>
     <div class="row">
       <button

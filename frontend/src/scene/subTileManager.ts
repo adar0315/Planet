@@ -83,6 +83,10 @@ export interface SubTileManager {
    * 編輯模式改了一個小格：建築物變了就重畫建築物，地形變了就重新向後端要一次小格（高度、顏色、水面都要重算）。
    */
   applyEdit(subTileId: number, structure: StructureKind | undefined, terrainEdit: TerrainEditKind | undefined, terrainChanged: boolean): void
+  /**
+   * 暫緩重新要小格：拖曳連續挖河道時，每一格都改了地形，每一格都重載一次會一直重建 mesh。放開之後才重載一次。
+   */
+  holdRefresh(held: boolean): void
   dispose(): void
 }
 
@@ -107,6 +111,7 @@ export function createSubTileManager(
   let constructions: ConstructionLayer | null = null
   /** 地形改過了，下一次 update 要重新要一批（就算正在載入也要：那一批可能是改之前要的）。 */
   let refreshRequested = false
+  let refreshHeld = false
   /** 目前這批小格的亮度倍率（依高低與編號，見 subTileShading），重新上色時要再乘一次。 */
   let brightness = new Map<number, number>()
   /** 目前這批小格依地塊分組，格心是單位向量（站立高度用）。 */
@@ -365,7 +370,7 @@ export function createSubTileManager(
       }
       if (loading) return
       focusUnit.copy(focus).normalize()
-      if (refreshRequested && lastCenter) {
+      if (refreshRequested && !refreshHeld && lastCenter) {
         refreshRequested = false
         void load(focusUnit.clone())
         return
@@ -444,6 +449,10 @@ export function createSubTileManager(
     },
 
     neighboursOf: subNeighbours,
+
+    holdRefresh(held) {
+      refreshHeld = held
+    },
 
     applyEdit(subTileId, structure, terrainEdit, terrainChanged) {
       const index = subPatch?.indexByTileId.get(subTileId)

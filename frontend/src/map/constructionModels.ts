@@ -516,8 +516,14 @@ function fieldPlate(
   const polygon = computeTilePolygon(sub, options, neighbours)
   const lift = (FIELD_LIFT_METERS / options.planetRadiusMeters) * options.renderRadius
   const center = polygon.center.clone().addScaledVector(polygon.normal, lift)
-  const ring = polygon.ring.map((p) =>
-    center.clone().lerp(p.clone().addScaledVector(polygon.normal, lift), FIELD_SHRINK),
+  // 縮一圈留田埂，但跟同一種田相鄰的角不縮：相鄰的農田、牧場連成一整片，中間不夾一條草
+  const count = polygon.ring.length
+  const sameKind = (i: number) =>
+    (polygon.edgeNeighbours[(i + count) % count] as SubTileDto | null)?.structure === sub.structure
+  const ring = polygon.ring.map((p, i) =>
+    center
+      .clone()
+      .lerp(p.clone().addScaledVector(polygon.normal, lift), sameKind(i) || sameKind(i - 1) ? 1 : FIELD_SHRINK),
   )
   const positions: number[] = []
   const normals: number[] = []
