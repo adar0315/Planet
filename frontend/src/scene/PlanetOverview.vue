@@ -2,8 +2,14 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { fetchOverviewTexture } from '@/network/apiClient'
+import { fetchOverviewTexture, fetchTilesNear } from '@/network/apiClient'
 import { usePlanetInfoStore } from '@/stores/planetInfo'
+import { useGameStateStore } from '@/stores/gameState'
+import { useTerrainStyleStore } from '@/stores/terrainStyles'
+import { findNearestTile } from '@/map/tilePatch'
+import { CLICK_MAX_MOVE_PX, uvToLatLon } from '@/map/overviewPicking'
+import { METERS_PER_ELEVATION_LEVEL } from '@/map/tileMeshBuilder'
+import type { TileDto } from '@/types/tile'
 
 /**
  * 全星球總覽：跟走動視角（PlanetScene.vue）是完全獨立的Three.js場景/render loop，不共用任何狀態
@@ -18,6 +24,65 @@ import { usePlanetInfoStore } from '@/stores/planetInfo'
 const SPHERE_RADIUS = 50
 
 const planetInfoStore = usePlanetInfoStore()
+const gameState = useGameStateStore()
+const terrainStyleStore = useTerrainStyleStore()
+void terrainStyleStore.load()
+
+/**
+ * 點選的起始位置：點一下星球，選出離那一點最近的地塊，按「從這裡開始走動」就換成走動視角、站在那一格。
+ * 走動視角啟動時優先用 gameState.currentTile（原本是 localStorage 的存檔），所以這裡只要換掉它再切視角。
+ */
+interface PickedSpot {
+  latitude: number
+  longitude: number
+  tile: TileDto | null
+  loading: boolean
+  error: string | null
+}
+const picked = ref<PickedSpot | null>(null)
+/** 每次點選加一：連點兩次時，先發的查詢晚回來不能蓋掉後面那次。 */
+let pickSerial = 0
+
+function formatLatLon(latitude: number, longitude: number): string {
+  const ns = latitude >= 0 ? '北緯' : '南緯'
+  const ew = longitude >= 0 ? '東經' : '西經'
+  return `${ns} ${Math.abs(latitude).toFixed(2)}°、${ew} ${Math.abs(longitude).toFixed(2)}°`
+}
+
+function describeTile(tile: TileDto): string {
+  const name = terrainStyleStore.getDisplayName(tile.terrain)
+  const meters = tile.elevationLevel * METERS_PER_ELEVATION_LEVEL
+  const underwater = tile.elevationLevel < tile.seaLevel
+  return `${name}，海拔 ${meters.toLocaleString('zh-TW')} 公尺${underwater ? '（水下）' : ''}`
+}
+
+async function pickAt(latitude: number, longitude: number) {
+  const serial = ++pickSerial
+  picked.value = { latitude, longitude, tile: null, loading: true, error: null }
+  try {
+    const tiles = await fetchTilesNear(latitude, longitude, 50)
+    if (serial !== pickSerial) return
+    const tile = findNearestTile(tiles, latitude, longitude)
+    picked.value = { latitude, longitude, tile, loading: false, error: tile ? null : '這附近查不到地塊' }
+  } catch (err) {
+    if (serial !== pickSerial) return
+    const error = err instanceof Error ? err.message : '查詢地塊失敗'
+    picked.value = { latitude, longitude, tile: null, loading: false, error }
+  }
+}
+
+function startWalkingHere() {
+  const tile = picked.value?.tile
+  if (!tile) return
+  gameState.currentTile = tile
+  gameState.setViewMode('walk')
+}
+
+function cancelPick() {
+  pickSerial++
+  picked.value = null
+  hideMarker?.()
+}
 
 const canvasContainer = ref<HTMLDivElement | null>(null)
 const loadError = ref<string | null>(null)
@@ -28,6 +93,10 @@ let animationHandle = 0
 let resizeObserver: ResizeObserver | null = null
 // 由 onMounted 建立（需要用到那裡的區域變數），onUnmounted 呼叫。
 let disposeScene: (() => void) | null = null
+/** 貼了總覽貼圖的球體，點選時拿來做射線檢測（貼圖載入成功才有）。 */
+let planetSphere: THREE.Mesh | null = null
+/** 取消點選時把標記藏起來（標記是 onMounted 裡的區域變數）。 */
+let hideMarker: (() => void) | null = null
 
 onMounted(async () => {
   if (!canvasContainer.value) return
@@ -77,11 +146,48 @@ onMounted(async () => {
       new THREE.MeshStandardMaterial({ map: texture, roughness: 1 }),
     )
     scene.add(sphere)
+    planetSphere = sphere
     isLoading.value = false
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '載入星球總覽貼圖失敗'
     isLoading.value = false
   }
+
+  // 點選位置的標記：小紅球，貼在點到的地方稍微浮起來一點
+  const marker = new THREE.Mesh(
+    new THREE.SphereGeometry(SPHERE_RADIUS * 0.012, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30 }),
+  )
+  marker.visible = false
+  scene.add(marker)
+  hideMarker = () => {
+    marker.visible = false
+  }
+
+  // 按下與放開之間移動超過幾個像素就是拖曳（OrbitControls 在轉星球），不當成點選
+  const raycaster = new THREE.Raycaster()
+  const pointer = new THREE.Vector2()
+  let downX = 0
+  let downY = 0
+  const onPointerDown = (event: PointerEvent) => {
+    downX = event.clientX
+    downY = event.clientY
+  }
+  const onPointerUp = (event: PointerEvent) => {
+    if (event.button !== 0 || !planetSphere || !renderer) return
+    if (Math.hypot(event.clientX - downX, event.clientY - downY) > CLICK_MAX_MOVE_PX) return
+    const rect = renderer.domElement.getBoundingClientRect()
+    pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
+    raycaster.setFromCamera(pointer, camera)
+    const hit = raycaster.intersectObject(planetSphere, false)[0]
+    if (!hit?.uv) return
+    marker.position.copy(hit.point).multiplyScalar(1.004)
+    marker.visible = true
+    const { latitude, longitude } = uvToLatLon(hit.uv.x, hit.uv.y)
+    void pickAt(latitude, longitude)
+  }
+  renderer.domElement.addEventListener('pointerdown', onPointerDown)
+  renderer.domElement.addEventListener('pointerup', onPointerUp)
 
   const animate = () => {
     animationHandle = requestAnimationFrame(animate)
@@ -104,10 +210,14 @@ onMounted(async () => {
 
   // 釋放邏輯建在這裡，因為 scene/controls 都是這個閉包的區域變數，onUnmounted 取不到。
   disposeScene = () => {
+    renderer?.domElement.removeEventListener('pointerdown', onPointerDown)
+    renderer?.domElement.removeEventListener('pointerup', onPointerUp)
+    planetSphere = null
+    hideMarker = null
     scene.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return
       obj.geometry.dispose()
-      const material = obj.material as THREE.MeshStandardMaterial
+      const material = obj.material as THREE.MeshStandardMaterial | THREE.MeshBasicMaterial
       material.map?.dispose() // 這張是1024×512的DataTexture（2MB），不釋放會一直留在GPU記憶體
       material.dispose()
     })
@@ -135,6 +245,18 @@ onUnmounted(() => {
   <div ref="canvasContainer" class="planet-overview"></div>
   <div v-if="isLoading" class="loading-hint">載入星球總覽貼圖中…</div>
   <div v-if="loadError" class="load-error">{{ loadError }}</div>
+  <div v-if="!isLoading && !loadError && !picked" class="pick-hint">點一下星球，選擇走動的起始位置（拖曳可以旋轉）</div>
+  <div v-if="picked" class="pick-panel">
+    <div class="pick-title">起始位置</div>
+    <div>{{ formatLatLon(picked.latitude, picked.longitude) }}</div>
+    <div v-if="picked.loading">查詢最近的地塊中…</div>
+    <div v-else-if="picked.error" class="pick-error">{{ picked.error }}</div>
+    <div v-else-if="picked.tile">Tile {{ picked.tile.tileId }}：{{ describeTile(picked.tile) }}</div>
+    <div class="pick-actions">
+      <button type="button" :disabled="!picked.tile" @click="startWalkingHere">從這裡開始走動</button>
+      <button type="button" class="secondary" @click="cancelPick">取消</button>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -154,6 +276,74 @@ onUnmounted(() => {
   color: #ccc;
   font-family: monospace;
   border-radius: 4px;
+}
+
+.pick-hint {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #ccc;
+  font-family: monospace;
+  font-size: 12px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.pick-panel {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #ddd;
+  font-family: monospace;
+  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+}
+
+.pick-title {
+  color: #fff;
+  font-weight: bold;
+}
+
+.pick-error {
+  color: #ff8a80;
+}
+
+.pick-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pick-actions button {
+  padding: 5px 10px;
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(60, 140, 220, 0.85);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pick-actions button.secondary {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pick-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .load-error {
