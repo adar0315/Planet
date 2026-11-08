@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import type { SubTileDto } from '@/types/tile'
 import {
+  HOUSE_STYLES,
+  hashId,
   castleGroups,
   BRIDGE_CLEARANCE_METERS,
   bridgeDeckRadius,
@@ -53,8 +55,8 @@ describe('constructionModels', () => {
   it('builds one mesh per material, sitting on the tile', () => {
     const subs = [sub(1, 0, { structure: 'Castle' }), sub(2, STEP, { structure: 'House' }), sub(3, 2 * STEP)]
     const layer = buildConstructionLayer(subs, () => [], options)
-    // 城堡：石牆、屋頂；房子：牆、屋頂
-    expect(layer.group.children).toHaveLength(4)
+    // 城堡：石牆、屋頂；房子依造型至少牆、屋頂兩種顏色
+    expect(layer.group.children.length).toBeGreaterThanOrEqual(4)
     const surface = tileSurfaceRadius(subs[0]!, options)
     for (const child of layer.group.children) {
       const geometry = (child as THREE.Mesh).geometry
@@ -139,6 +141,50 @@ describe('constructionModels', () => {
     expect(colours('冬').length).toBeLessThan(colours('夏').length)
     expect(colours('秋').length).toBeGreaterThan(colours('夏').length)
     expect(colours('冬', true)).toContain(0xeef2f5)
+  })
+
+  it('has ten house styles, each inside the cell and facing outward', () => {
+    expect(HOUSE_STYLES).toHaveLength(10)
+    const v = new THREE.Vector3()
+    const a = new THREE.Vector3()
+    const b = new THREE.Vector3()
+    const c = new THREE.Vector3()
+    for (const style of HOUSE_STYLES) {
+      for (const part of style.parts((meters) => meters)) {
+        const geometry = part.geometry.clone()
+        geometry.rotateY(part.rotation ?? 0)
+        geometry.translate(part.x ?? 0, part.y, -(part.z ?? 0))
+        const position = geometry.getAttribute('position')
+        for (let i = 0; i < position.count; i++) {
+          v.fromBufferAttribute(position, i)
+          // 收在小格內切圓（約 216 公尺）裡、不低於地面、不高過 200 公尺
+          expect(Math.hypot(v.x, v.z), style.name).toBeLessThan(200)
+          expect(v.y, style.name).toBeGreaterThan(-1e-6)
+          expect(v.y, style.name).toBeLessThan(200)
+        }
+        const flat = geometry.index ? geometry.toNonIndexed() : geometry
+        const p = flat.getAttribute('position')
+        const n = flat.getAttribute('normal')
+        for (let t = 0; t < p.count; t += 3) {
+          a.fromBufferAttribute(p, t)
+          b.fromBufferAttribute(p, t + 1)
+          c.fromBufferAttribute(p, t + 2)
+          const face = b.sub(a).cross(c.sub(a))
+          if (face.lengthSq() < 1e-12) continue
+          v.fromBufferAttribute(n, t)
+          expect(face.dot(v), style.name).toBeGreaterThan(0)
+        }
+      }
+    }
+  })
+
+  it('consecutive cell ids spread over all house styles', () => {
+    const pick = (id: number) => Math.floor((((hashId(id) % 2147483647 || 1) * 48271) % 2147483647) / 2147483647 * 10)
+    const base = 1_000_237_225_700
+    const styles = Array.from({ length: 200 }, (_, i) => pick(base + i))
+    expect(new Set(styles).size).toBe(10)
+    const sameAsNext = styles.filter((s, i) => i > 0 && s === styles[i - 1]).length
+    expect(sameAsNext).toBeLessThan(50) // 相鄰的格子大多不同（隨機的話約 1/10）
   })
 
   it('a lone sub without structures builds nothing', () => {

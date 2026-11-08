@@ -284,12 +284,21 @@ export function buildConstructionLayer(
 
     switch (sub.structure) {
       case 'House': {
-        add(COLORS.houseWall, box(m(HOUSE_SIZE_METERS), m(HOUSE_WALL_METERS), m(HOUSE_SIZE_METERS)), at(surface + m(HOUSE_WALL_METERS / 2)))
-        add(
-          COLORS.houseRoof,
-          pyramid(m(HOUSE_SIZE_METERS * 0.78), m(HOUSE_ROOF_METERS)),
-          at(surface + m(HOUSE_WALL_METERS + HOUSE_ROOF_METERS / 2)),
-        )
+        // 十種造型之一，由小格編號決定（同一格每次都一樣），朝向也隨機
+        const random = seededRandom(hashId(sub.tileId))
+        const style = HOUSE_STYLES[Math.floor(random() * HOUSE_STYLES.length)]!
+        const turn = random() * Math.PI * 2
+        const cos = Math.cos(turn)
+        const sin = Math.sin(turn)
+        for (const part of style.parts(m)) {
+          const x = part.x ?? 0
+          const z = part.z ?? 0
+          add(
+            part.color,
+            part.geometry,
+            at(surface + m(part.y), x * cos - z * sin, x * sin + z * cos, turn + (part.rotation ?? 0)),
+          )
+        }
         break
       }
       case 'Road':
@@ -400,7 +409,7 @@ export function buildConstructionLayer(
           }
         }
         // 牲畜：位置由小格編號決定，每次重建都在同一個地方
-        const random = seededRandom(sub.tileId)
+        const random = seededRandom(hashId(sub.tileId))
         for (let k = 0; k < SHEEP_PER_PASTURE; k++) {
           const radius = Math.sqrt(random()) * 130
           const angle = random() * Math.PI * 2
@@ -558,14 +567,140 @@ function gridInCircle(spacing: number, radius: number): [number, number][] {
   return points
 }
 
+/**
+ * 小格編號打散成 32 位元的雜湊。編號是連號的，直接拿來當亂數種子的話，相鄰的格子第一個亂數幾乎一樣
+ * （十棟相鄰的房子會長成同一個樣子）。編號超過 2³²，高低兩半分開混。
+ */
+export function hashId(id: number): number {
+  let h = (id >>> 0) ^ Math.imul(Math.floor(id / 4294967296), 0x9e3779b1)
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return (h ^ (h >>> 16)) >>> 0
+}
+
 /** 由編號決定的亂數（每次重建同一格都一樣）。 */
 function seededRandom(seed: number): () => number {
-  let state = (seed % 2147483647) || 1
+  let state = seed % 2147483647 || 1
   return () => {
     state = (state * 48271) % 2147483647
     return state / 2147483647
   }
 }
+
+/** 房子的一個零件：位置是公尺（往東 x、往北 z、離地 y＝零件的底部，或方塊、柱體的中心見各造型）。 */
+interface HousePart {
+  color: number
+  geometry: THREE.BufferGeometry
+  /** 零件中心（方塊、柱體、錐）或底部（人字屋頂、圓頂）離地面的高度（公尺）。 */
+  y: number
+  x?: number
+  z?: number
+  /** 繞上方再轉多少（弧度），疊在整棟房子的朝向上。 */
+  rotation?: number
+}
+
+/** 一種房子造型。 */
+export interface HouseStyle {
+  name: string
+  /** 零件（`m` 把公尺換算成場景單位）。都收在半徑約 190 公尺內，轉任何角度都不會伸進鄰格。 */
+  parts(m: (meters: number) => number): HousePart[]
+}
+
+/** 方塊：`y` 傳底部高度，回傳的零件 y 是中心。 */
+const block = (m: (v: number) => number, color: number, w: number, h: number, d: number, base = 0, x = 0, z = 0, rotation = 0): HousePart => ({
+  color,
+  geometry: box(m(w), m(h), m(d)),
+  y: base + h / 2,
+  x,
+  z,
+  rotation,
+})
+
+/**
+ * 十種房子（2026-11-08 使用者要求「10 個房子的造型隨機畫出」）。高度一樣是畫面上的公尺數，不乘地形的 8 倍。
+ */
+export const HOUSE_STYLES: readonly HouseStyle[] = [
+  {
+    name: '紅瓦方屋',
+    parts: (m) => [
+      block(m, COLORS.houseWall, HOUSE_SIZE_METERS, HOUSE_WALL_METERS, HOUSE_SIZE_METERS),
+      { color: COLORS.houseRoof, geometry: pyramid(m(HOUSE_SIZE_METERS * 0.78), m(HOUSE_ROOF_METERS)), y: HOUSE_WALL_METERS + HOUSE_ROOF_METERS / 2 },
+    ],
+  },
+  {
+    name: '長屋',
+    parts: (m) => [
+      block(m, 0xd4d0c8, 190, 55, 90),
+      { color: 0x6a4630, geometry: gable(m(196), m(45), m(96)), y: 55 },
+      block(m, 0x8a4a3a, 14, 50, 14, 50, 55, 20),
+    ],
+  },
+  {
+    name: '兩層樓',
+    parts: (m) => [
+      block(m, 0xf4f1ea, 120, 110, 110),
+      block(m, 0x6a4a32, 124, 6, 114, 52),
+      { color: 0x4a5560, geometry: gable(m(126), m(50), m(116)), y: 110 },
+    ],
+  },
+  {
+    name: 'L 形屋',
+    parts: (m) => [
+      block(m, 0xd9b47a, 150, 60, 70, 0, 0, -35),
+      block(m, 0xd9b47a, 70, 60, 80, 0, 40, 40),
+      { color: 0xb0442e, geometry: gable(m(156), m(40), m(76)), y: 60, z: -35 },
+      { color: 0xb0442e, geometry: gable(m(86), m(40), m(76)), y: 60, x: 40, z: 40, rotation: Math.PI / 2 },
+    ],
+  },
+  {
+    name: '平頂土屋',
+    parts: (m) => [
+      block(m, 0xc9a27a, 150, 55, 130),
+      block(m, 0xb08a62, 156, 8, 136, 55),
+      { color: 0x9a9a9a, geometry: cylinder(m(12), m(18), 10), y: 63 + 9, x: 40, z: 30 },
+    ],
+  },
+  {
+    name: '茅草圓屋',
+    parts: (m) => [
+      { color: 0xd8c8a0, geometry: cylinder(m(70), m(55), 16), y: 55 / 2 },
+      { color: 0xb89a4a, geometry: cone(m(88), m(70)), y: 55 + 35 },
+    ],
+  },
+  {
+    name: '塔樓屋',
+    parts: (m) => [
+      block(m, 0xe0d6c4, 120, 65, 120),
+      { color: 0x7a3a2a, geometry: pyramid(m(94), m(50)), y: 65 + 25 },
+      { color: 0xe0d6c4, geometry: cylinder(m(28), m(120), 12), y: 60, x: 60, z: 60 },
+      { color: 0x7a3a2a, geometry: cone(m(34), m(50)), y: 120 + 25, x: 60, z: 60 },
+    ],
+  },
+  {
+    name: '木屋',
+    parts: (m) => [
+      block(m, 0x7a5232, 130, 60, 100),
+      { color: 0x3f6b3a, geometry: gable(m(140), m(75), m(108)), y: 60 },
+      block(m, 0x777777, 16, 110, 16, 0, -45, 0),
+    ],
+  },
+  {
+    name: '雙併屋',
+    parts: (m) => [
+      block(m, 0xf0e6d0, 90, 60, 90, 0, -55, 0),
+      { color: 0xa2452e, geometry: gable(m(94), m(40), m(94)), y: 60, x: -55 },
+      block(m, 0xd8e0e8, 90, 70, 90, 0, 55, 0),
+      { color: 0x3d5a80, geometry: gable(m(94), m(40), m(94)), y: 70, x: 55 },
+    ],
+  },
+  {
+    name: '圓頂屋',
+    parts: (m) => [
+      block(m, 0xf2f2ee, 130, 60, 130),
+      { color: 0x3a6ea8, geometry: dome(m(62)), y: 60 },
+    ],
+  },
+]
 
 function box(width: number, height: number, depth: number): THREE.BufferGeometry {
   return new THREE.BoxGeometry(width, height, depth)
@@ -582,6 +717,11 @@ function cone(radius: number, height: number): THREE.BufferGeometry {
 /** 樹冠、果子：低面數的球。 */
 function blob(radius: number): THREE.BufferGeometry {
   return new THREE.IcosahedronGeometry(radius, 0)
+}
+
+/** 半球屋頂，底面中心在原點。 */
+function dome(radius: number): THREE.BufferGeometry {
+  return new THREE.SphereGeometry(radius, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2)
 }
 
 /** 四角錐屋頂：底面的四個角對齊方塊的四個角。 */
