@@ -53,14 +53,24 @@ public sealed class SubTileService
 
         var indexById = new Dictionary<long, int>(subs.Count);
         for (var i = 0; i < subs.Count; i++) indexById[subs[i].SubTileId] = i;
-        var surfaces = raw.ToArray();
+        // 河道從水源往低處挖（不高過兩岸、不往高處流），玩家的地形修改再疊在挖好的河道上
+        var neighbourIndices = new IReadOnlyList<int>[subs.Count];
+        for (var i = 0; i < subs.Count; i++)
+        {
+            var list = new List<int>(6);
+            foreach (var id in neighbors[i])
+                if (id is { } neighbourId && indexById.TryGetValue(neighbourId, out var j)) list.Add(j);
+            neighbourIndices[i] = list;
+        }
+        var shaped = RiverChannelShaping.Shape(raw, neighbourIndices);
+        var surfaces = shaped.ToArray();
         var edits = new Dictionary<int, Construction>();
         foreach (var construction in constructions)
         {
             if (!indexById.TryGetValue(construction.SubTileId, out var i)) continue;
             edits[i] = construction;
             if (construction.TerrainEdit is { } edit)
-                surfaces[i] = ConstructionRules.Apply(raw[i], edit, LandNeighbourLevel(i, neighbors, raw, indexById));
+                surfaces[i] = ConstructionRules.Apply(shaped[i], edit, LandNeighbourLevel(i, neighbors, raw, indexById));
         }
 
         var result = new SubTileDto[subs.Count];

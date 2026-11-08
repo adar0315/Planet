@@ -157,6 +157,34 @@ public class RiverProfileTests
         Assert.Equal(TerrainType.Seawater, SampleSeaward(3, withoutDelta).Terrain); // 沒有三角洲那裡是海
     }
 
+    /// <summary>
+    /// 小格的海岸線會被雜訊扭曲、跟著等高線走，可能跑到三角洲頂點的後面（內陸）：那裡的海也要填成三角洲，
+    /// 不然三角洲跟陸地之間夾一條海，變成離岸的島（2026-11-08 實測：半徑 5.9 公里的三角洲，頂點後面 1 公里還是海）。
+    /// </summary>
+    [Fact]
+    public void DeltaStaysAttachedWhenTheCoastIsPulledBehindTheApex()
+    {
+        // 供砂 38.7 → 半徑約 5.9 公里，頂點在海岸往內陸約 1.8 公里
+        var (cells, path) = River([300, 200, 100, 50, 20], sea => sea.DeltaSupply = 38.7f);
+        var sampler = new LandformSampler(Grid, cells);
+        var u = Grid.UnitVector;
+        (double X, double Y, double Z) At(int c) => (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
+        var (land, sea) = (At(path[^2]), At(path[^1]));
+        var seaCell = path[^1];
+        // 海岸（兩格中點）往內陸 km 公里，但當成海那一格（模擬被扭到內陸的海岸線）
+        LandformSample InlandButSea(double km)
+        {
+            var spacing = Math.Sqrt(Math.Pow(sea.X - land.X, 2) + Math.Pow(sea.Y - land.Y, 2) + Math.Pow(sea.Z - land.Z, 2)) * Grid.PlanetRadiusMeters;
+            var t = 0.5 - km * 1000 / spacing;
+            var p = (X: land.X + (sea.X - land.X) * t, Y: land.Y + (sea.Y - land.Y) * t, Z: land.Z + (sea.Z - land.Z) * t);
+            var length = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+            return sampler.Sample(Math.Asin(p.Z / length) * 180 / Math.PI, Math.Atan2(p.Y, p.X) * 180 / Math.PI, seaCell);
+        }
+
+        Assert.NotEqual(TerrainType.Seawater, InlandButSea(2.5).Terrain); // 頂點後面 0.7 公里：填成三角洲
+        Assert.Equal(TerrainType.Seawater, InlandButSea(10).Terrain); // 遠離三角洲的海照舊是海
+    }
+
     [Fact]
     public void RiverIntoAHighLakeStaysAboveTheLakeSurface()
     {

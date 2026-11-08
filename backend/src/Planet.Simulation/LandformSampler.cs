@@ -116,6 +116,14 @@ public sealed class LandformSampler
     /// <summary>扇面的頂點在海岸往內陸半徑的這個比例：扇面大部分（其餘的 70%）往海裡長出去，三角洲是填海長出來的陸地。</summary>
     private const double DeltaInlandShare = 0.3;
 
+    /// <summary>
+    /// 三角洲的根：頂點周圍這麼大（頂點到海岸的距離＋這個值，公尺）以內的海都填成三角洲。
+    /// 小格的海岸線會被雜訊扭曲、而且跟著平滑後的等高線走（SimulatedTerrainSampler），可以比粗格的分界往內陸好幾公里；
+    /// 扇面只從頂點往海裡長，海岸線跑到頂點後面時，三角洲跟陸地之間會夾一條海，變成離岸的島（2026-11-08 使用者回報，
+    /// 實測一個半徑 5.9 公里的三角洲，頂點後面 1 公里還是海）。
+    /// </summary>
+    private const double DeltaRootMarginMeters = 2_500;
+
     /// <summary>三角洲最高點（頂點）的高度（公尺），往外降到海平面上 0.5 公尺。</summary>
     private const double DeltaTopMeters = 3.5;
 
@@ -308,12 +316,16 @@ public sealed class LandformSampler
         return Math.Abs(angle) <= DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
     }
 
-    /// <summary>點在不在任何三角洲的扇面裡。</summary>
+    /// <summary>點在不在任何三角洲的扇面或根（見 <see cref="DeltaRootMarginMeters"/>）裡：這些地方的海填成三角洲。</summary>
     private bool InAnyFan((double, double, double) p, int nearest)
     {
         if (_deltasNear[nearest] is not { } list) return false;
         foreach (var d in list)
-            if (InFan(p, _deltas[d], out _, out _, out _, out _)) return true;
+        {
+            var delta = _deltas[d];
+            if (InFan(p, delta, out _, out _, out _, out _)) return true;
+            if (Length(Sub(p, delta.Apex)) * _radius <= DeltaInlandShare * delta.Radius + DeltaRootMarginMeters) return true;
+        }
         return false;
     }
 
