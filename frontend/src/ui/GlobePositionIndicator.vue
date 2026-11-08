@@ -116,7 +116,7 @@ function renderGlobe() {
 }
 
 // 只在「玩家位置」或「遊戲時間」變動時重畫——不是每幀。
-// 即時模式每3秒一次、移動模式每步一次，約8千個像素的成本可以忽略。
+// 即時模式每秒一次、移動模式每步一次，約8千個像素的成本可以忽略。
 const renderKey = computed(() => {
   const tile = gameState.currentTile
   return `${tile?.latitude ?? 0}|${tile?.longitude ?? 0}|${gameState.gameTime.getTime()}|${planetInfoStore.waterMask ? 1 : 0}`

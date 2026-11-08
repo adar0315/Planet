@@ -1,8 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useGameStateStore, type GameMode } from '@/stores/gameState'
+import { REALTIME_HOURS_PER_SECOND_OPTIONS, STEPPED_HOURS_PER_TILE_OPTIONS } from '@/map/timeRates'
 
 const gameState = useGameStateStore()
+
+/** 時間流逝的速度：移動模式選每格多久、即時模式選每秒多久；時間靜止時不顯示。 */
+const rateOptions = computed(() =>
+  gameState.mode === 'stepped'
+    ? STEPPED_HOURS_PER_TILE_OPTIONS
+    : gameState.mode === 'realtime'
+      ? REALTIME_HOURS_PER_SECOND_OPTIONS
+      : null,
+)
+const currentRate = computed(() =>
+  gameState.mode === 'stepped' ? gameState.steppedHoursPerTile : gameState.realtimeHoursPerSecond,
+)
+
+function onRateChange(event: Event) {
+  const hours = Number((event.target as HTMLSelectElement).value)
+  if (gameState.mode === 'stepped') gameState.setSteppedHoursPerTile(hours)
+  else if (gameState.mode === 'realtime') gameState.setRealtimeHoursPerSecond(hours)
+}
 
 const options: { mode: GameMode; label: string }[] = [
   { mode: 'observe', label: '① 時間靜止' },
@@ -29,6 +48,9 @@ const isExpanded = ref(false)
       >
         {{ option.label }}
       </button>
+      <select v-if="rateOptions" :value="currentRate" title="時間流逝的速度" @change="onRateChange">
+        <option v-for="option in rateOptions" :key="option.hours" :value="option.hours">{{ option.label }}</option>
+      </select>
     </template>
   </div>
 </template>
@@ -49,6 +71,17 @@ button {
   background: rgba(0, 0, 0, 0.5);
   color: #ccc;
   border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+select {
+  padding: 5px 6px;
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 4px;
   cursor: pointer;
 }

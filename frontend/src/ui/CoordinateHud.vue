@@ -7,17 +7,23 @@ import { useTerrainStyleStore } from '@/stores/terrainStyles'
 import { ELEVATION_EXAGGERATION, METERS_PER_ELEVATION_LEVEL } from '@/map/tileMeshBuilder'
 import { FLIGHT_TIERS, SPEED_OF_SOUND_MPS } from '@/map/flightMotion'
 import { interpolateMonthly, monthPosition, seasonName } from '@/map/seasons'
+import { REALTIME_HOURS_PER_SECOND_OPTIONS, STEPPED_HOURS_PER_TILE_OPTIONS, labelOf } from '@/map/timeRates'
 
 const gameState = useGameStateStore()
 const keyBindings = useKeyBindingsStore()
 const terrainStyleStore = useTerrainStyleStore()
 void terrainStyleStore.load()
 
-const modeLabel: Record<string, string> = {
-  observe: '時間靜止（自由觀看）',
-  stepped: '移動模式（走路每跨一格+1小時，飛行依速度換算）',
-  realtime: '即時模式（每3秒+1小時）',
-}
+const modeLabel = computed(() => {
+  switch (gameState.mode) {
+    case 'stepped':
+      return `移動模式（走路${labelOf(gameState.steppedHoursPerTile, STEPPED_HOURS_PER_TILE_OPTIONS)}，飛行依速度換算）`
+    case 'realtime':
+      return `即時模式（${labelOf(gameState.realtimeHoursPerSecond, REALTIME_HOURS_PER_SECOND_OPTIONS)}）`
+    default:
+      return '時間靜止（自由觀看）'
+  }
+})
 
 const formattedTime = computed(() => {
   const t = gameState.gameTime
@@ -108,7 +114,7 @@ const flightLabel = computed(() => {
     </div>
     <div>時間：{{ formattedTime }}</div>
     <div v-if="seasonLabel">季節：{{ seasonLabel }}</div>
-    <div>模式：{{ modeLabel[gameState.mode] }}</div>
+    <div>模式：{{ modeLabel }}</div>
     <div v-if="gameState.isGodView" class="god-view">
       上帝視角（時間暫停、角色留在原地）：{{ keys.forward }}{{ keys.left }}{{ keys.back }}{{ keys.right }}
       移動、{{ keys.ascend }}{{ keys.descend }}／滾輪升降、{{ keys.godView }} 回到角色

@@ -24,9 +24,9 @@ import {
   DEFAULT_CAMERA_DISTANCE_METERS,
   MAX_PIXEL_RATIO,
   MIN_DISTANCE_EDGE_MULTIPLE,
-  REALTIME_TICK_MS,
   RENDER_RADIUS,
 } from './planetSceneConstants'
+import { REALTIME_TICK_MS } from '@/map/timeRates'
 
 /**
  * 走動視角的主場景。這個檔案只負責**組裝**：建立 THREE 的 scene/camera/renderer，
@@ -371,7 +371,8 @@ onMounted(async () => {
   resizeObserver.observe(container)
 })
 
-// 即時模式：每3秒自動+1小時，跟移動無關；切換模式時要開/關這個計時器。
+// 即時模式：每秒推進 gameState.realtimeHoursPerSecond（預設 20 分鐘，跟以前的「每 3 秒 +1 小時」一樣），
+// 跟移動無關；切換模式時要開/關這個計時器。速度是每次推進時才讀，改設定不用重開計時器。
 watch(
   () => gameState.mode,
   (mode) => {
@@ -382,7 +383,7 @@ watch(
     if (mode === 'realtime') {
       // 上帝視角期間時間不動
       realtimeTimer = setInterval(() => {
-        if (!gameState.isGodView) gameState.advanceTime(1)
+        if (!gameState.isGodView) gameState.advanceTime((gameState.realtimeHoursPerSecond * REALTIME_TICK_MS) / 1000)
       }, REALTIME_TICK_MS)
     }
   },

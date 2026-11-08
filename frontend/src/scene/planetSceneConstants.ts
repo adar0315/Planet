@@ -6,8 +6,6 @@
 /** 場景中星球的顯示半徑（場景單位，與公尺無關），Tile大小依此比例換算。 */
 export const RENDER_RADIUS = 50
 
-export const REALTIME_TICK_MS = 3000
-
 /** 預設視角：從正上方往「玩家背後」偏斜的俯角，比純垂直俯視更有立體感、看得到地形起伏。 */
 export const DEFAULT_TILT_DEG = 60
 

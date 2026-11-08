@@ -301,7 +301,8 @@ export function createPlayerController(
     enterTile(to)
     if (gameState.mode === 'stepped') {
       gameState.advanceTime(
-        steppedHoursPerCrossing(flying, Math.hypot(forwardSpeed, rightSpeed), WALK_SPEED_MPS),
+        steppedHoursPerCrossing(flying, Math.hypot(forwardSpeed, rightSpeed), WALK_SPEED_MPS) *
+          gameState.steppedHoursPerTile,
       )
     }
     void ensurePatchAroundPlayer()

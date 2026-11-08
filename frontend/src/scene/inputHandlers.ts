@@ -82,7 +82,7 @@ export function createInputHandlers(
 
     switch (action) {
       case 'wait':
-        if (gameState.mode === 'stepped') gameState.advanceTime(1)
+        if (gameState.mode === 'stepped') gameState.advanceTime(gameState.steppedHoursPerTile)
         break
       case 'toggleFlight':
         controller.toggleFlight()

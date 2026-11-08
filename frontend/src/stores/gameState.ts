@@ -2,6 +2,13 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef, watch } from 'vue'
 import type { TileDto } from '@/types/tile'
 import type { SeasonsLookup } from '@/map/seasons'
+import {
+  DEFAULT_REALTIME_HOURS_PER_SECOND,
+  DEFAULT_STEPPED_HOURS_PER_TILE,
+  REALTIME_HOURS_PER_SECOND_OPTIONS,
+  STEPPED_HOURS_PER_TILE_OPTIONS,
+  snapToOption,
+} from '@/map/timeRates'
 
 export type GameMode = 'observe' | 'stepped' | 'realtime'
 
@@ -72,6 +79,10 @@ interface PersistedState {
   gameTimeIso: string
   /** 後來才加的欄位，舊存檔沒有——讀不到就當成面向正北，不需要換 STORAGE_KEY 版本。 */
   facingDeg?: number
+  /** 移動模式每格過幾小時（見 map/timeRates.ts）。舊存檔沒有就用預設。 */
+  steppedHoursPerTile?: number
+  /** 即時模式現實每秒過幾小時（見 map/timeRates.ts）。舊存檔沒有就用預設。 */
+  realtimeHoursPerSecond?: number
 }
 
 function loadPersisted(): PersistedState | null {
@@ -110,6 +121,16 @@ export const useGameStateStore = defineStore('gameState', () => {
    */
   const mode = ref<GameMode>(persisted?.mode ?? 'observe')
   const gameTime = ref(persisted ? new Date(persisted.gameTimeIso) : new Date(GAME_START_UTC))
+
+  /** 移動模式：每跨一格（或原地等待一次）過幾小時。只能是 map/timeRates.ts 的預設檔。 */
+  const steppedHoursPerTile = ref(
+    snapToOption(persisted?.steppedHoursPerTile, STEPPED_HOURS_PER_TILE_OPTIONS, DEFAULT_STEPPED_HOURS_PER_TILE),
+  )
+
+  /** 即時模式：現實每秒過幾小時。只能是 map/timeRates.ts 的預設檔。 */
+  const realtimeHoursPerSecond = ref(
+    snapToOption(persisted?.realtimeHoursPerSecond, REALTIME_HOURS_PER_SECOND_OPTIONS, DEFAULT_REALTIME_HOURS_PER_SECOND),
+  )
 
   /** 目前鏡頭畫面中，「正北」方向相對螢幕正上方要順時針轉幾度（給指北針UI用，PlanetScene每幀更新）。 */
   const compassAngleDeg = ref(0)
@@ -189,6 +210,8 @@ export const useGameStateStore = defineStore('gameState', () => {
         mode: mode.value,
         gameTimeIso: gameTime.value.toISOString(),
         facingDeg: facingDeg.value,
+        steppedHoursPerTile: steppedHoursPerTile.value,
+        realtimeHoursPerSecond: realtimeHoursPerSecond.value,
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
     } catch {
@@ -207,7 +230,17 @@ export const useGameStateStore = defineStore('gameState', () => {
       persist()
     }, 500)
   }
-  watch([currentTile, mode, gameTime, facingDeg], schedulePersist)
+  watch([currentTile, mode, gameTime, facingDeg, steppedHoursPerTile, realtimeHoursPerSecond], schedulePersist)
+
+  /** 設定移動模式每格過幾小時；不在預設檔裡的值不接受。 */
+  function setSteppedHoursPerTile(hours: number) {
+    steppedHoursPerTile.value = snapToOption(hours, STEPPED_HOURS_PER_TILE_OPTIONS, steppedHoursPerTile.value)
+  }
+
+  /** 設定即時模式每秒過幾小時；不在預設檔裡的值不接受。 */
+  function setRealtimeHoursPerSecond(hours: number) {
+    realtimeHoursPerSecond.value = snapToOption(hours, REALTIME_HOURS_PER_SECOND_OPTIONS, realtimeHoursPerSecond.value)
+  }
 
   /** 設定面向（任意角度，會正規化到 [0, 360)）。 */
   function setFacing(deg: number) {
@@ -240,6 +273,10 @@ export const useGameStateStore = defineStore('gameState', () => {
     visibleTiles,
     mode,
     gameTime,
+    steppedHoursPerTile,
+    realtimeHoursPerSecond,
+    setSteppedHoursPerTile,
+    setRealtimeHoursPerSecond,
     compassAngleDeg,
     facingDeg,
     cameraTiltDeg,
