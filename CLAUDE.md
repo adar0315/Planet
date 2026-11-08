@@ -372,6 +372,17 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
   `keyup` 永遠收不到，角色會一直走下去。`keyup` 刻意不檢查輸入欄位與 `isCapturing`——
   放開的那一刻焦點可能剛好移到輸入框上，擋掉它角色就停不下來。
 
+## 編輯模式（2026-11-08）：修改疊在即時產生的小格上
+
+小格不存資料庫，玩家的修改存在 `Constructions` 表（以小格編號為鍵），`SubTileService` 產生小格時再疊上去：
+地形修改（挖河道、填平）直接改掉地表欄位，建築物放在 `SubTileDto.Structure`。規則在 `Planet.Domain/ConstructionRules.cs`（有測試）。
+
+- **部署順序：先套 `AddConstructions` 遷移、再 publish**——新的 `SubTileService` 每次都會查這張表，順序反了，拉近鏡頭就全部 500。
+- 建築物模型（`map/constructionModels.ts`）的區域座標是 (東, 上, **南**)：(東, 上, 北) 是左手系，模型被鏡射、面朝內，
+  畫出來是發暗的內側，而且統計上看不出來（`constructionModels.spec.ts` 檢查三角形繞向）。
+- 水面 mesh 不接受點選，但編輯時要點得到水：凹下去的河道在傾斜視角下，射線會穿過水面打到對岸側壁，選到對岸那一格。
+  `subTileManager.pick` 先看水面是不是在地形前面。
+
 ## ⚠️ 星球的尺寸與地形參數只有一個權威來源
 
 前端**不要**再寫死星球半徑、Tile邊長、總覽貼圖寬高之類的值——這些後端是從細分頻率推導的，

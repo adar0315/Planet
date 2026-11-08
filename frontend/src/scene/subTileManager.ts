@@ -1,17 +1,19 @@
 import * as THREE from 'three'
 import { fetchSubTiles } from '@/network/apiClient'
 import { latLonToVector3 } from '@/map/sphereCoordinates'
-import { createTilePatch, neighborsOf } from '@/map/tilePatch'
+import { createTilePatch, neighborsOf, type TilePatch } from '@/map/tilePatch'
 import {
   buildTilePatchMeshSliced,
   EDGE_LINES_NAME,
+  hasWaterSurface,
   LAKE_MESH_NAME,
   type TilePatchMesh,
 } from '@/map/tilePatchMesh'
 import { tileSurfaceRadius, type TileMeshOptions } from '@/map/tileMeshBuilder'
 import { scaleColorHex, subTileBrightness } from '@/map/subTileShading'
 import { withSphereClip, type SphereClip } from '@/map/sphereClipMaterial'
-import type { SubTileDto, TileDto } from '@/types/tile'
+import type { StructureKind, SubTileDto, TerrainEditKind, TileDto } from '@/types/tile'
+import { buildConstructionLayer, type ConstructionLayer } from '@/map/constructionModels'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
 import {
@@ -60,6 +62,21 @@ export interface SubTileManager {
   surfaceRadiusAt(unit: THREE.Vector3, tile: TileDto): number | null
   /** 遊戲時間變了（時段、季節）：小格重新上色。 */
   recolor(): void
+  /** 小格載好了（鏡頭夠近）：編輯模式只能在這時候用。 */
+  readonly ready: boolean
+  /** 小格 mesh 用的尺寸換算（編輯模式畫外框用）。 */
+  readonly subOptions: TileMeshOptions
+  /**
+   * 射線打到的小格；只算裁切圓裡面（畫面上看得到小格的地方），圓外是地塊、回傳 null。
+   * @param raycaster 已經設好方向的射線。
+   */
+  pick(raycaster: THREE.Raycaster): SubTileDto | null
+  /** 同一批裡的鄰居。 */
+  neighboursOf(sub: SubTileDto): SubTileDto[]
+  /**
+   * 編輯模式改了一個小格：建築物變了就重畫建築物，地形變了就重新向後端要一次小格（高度、顏色、水面都要重算）。
+   */
+  applyEdit(subTileId: number, structure: StructureKind | undefined, terrainEdit: TerrainEditKind | undefined, terrainChanged: boolean): void
   dispose(): void
 }
 
@@ -77,6 +94,12 @@ export function createSubTileManager(
   scene.add(group)
 
   let subMesh: TilePatchMesh | null = null
+  /** 目前這批小格（編輯模式查鄰居、改建築物用）。 */
+  let subPatch: TilePatch | null = null
+  /** 這批小格上的建築物。 */
+  let constructions: ConstructionLayer | null = null
+  /** 地形改過了，下一次 update 要重新要一批（就算正在載入也要：那一批可能是改之前要的）。 */
+  let refreshRequested = false
   /** 目前這批小格的亮度倍率（依高低與編號，見 subTileShading），重新上色時要再乘一次。 */
   let brightness = new Map<number, number>()
   /** 目前這批小格依地塊分組，格心是單位向量（站立高度用）。 */
@@ -157,8 +180,39 @@ export function createSubTileManager(
     }
   }
 
+  function subNeighbours(sub: SubTileDto): SubTileDto[] {
+    return subPatch ? (neighborsOf(subPatch, sub.tileId) as SubTileDto[]) : []
+  }
+
+  /** 射線在 `before` 之前打到水面的話，回傳那一點。 */
+  function waterHitBefore(raycaster: THREE.Raycaster, before: number): THREE.Vector3 | null {
+    const lakes = subMesh?.mesh.getObjectByName(LAKE_MESH_NAME) as THREE.Mesh | undefined
+    if (!lakes) return null
+    const hits: THREE.Intersection[] = []
+    // 水面 mesh 把 raycast 關掉了（平常點選要點到水底那一格），這裡直接呼叫原本的實作
+    THREE.Mesh.prototype.raycast.call(lakes, raycaster, hits)
+    let nearest: THREE.Intersection | null = null
+    for (const h of hits) if (h.distance < before && (!nearest || h.distance < nearest.distance)) nearest = h
+    return nearest ? nearest.point : null
+  }
+
+  function rebuildConstructions() {
+    if (constructions) {
+      group.remove(constructions.group)
+      constructions.dispose()
+      constructions = null
+    }
+    if (!subPatch) return
+    const built = subPatch.tiles as SubTileDto[]
+    if (!built.some((sub) => sub.structure)) return
+    constructions = buildConstructionLayer(built, subNeighbours, subOptions)
+    group.add(constructions.group)
+  }
+
   function clear() {
     generation++ // 還在路上的那一批作廢
+    subPatch = null
+    rebuildConstructions()
     if (subMesh) {
       group.remove(subMesh.mesh)
       subMesh.dispose()
@@ -208,15 +262,15 @@ export function createSubTileManager(
       await seasonData.ensure(subs)
       if (myGeneration !== generation) return
 
-      const subPatch = createTilePatch(subs)
+      const nextPatch = createTilePatch(subs)
       const nextBrightness = new Map<number, number>()
       for (const sub of subs)
-        nextBrightness.set(sub.tileId, subTileBrightness(sub, neighborsOf(subPatch, sub.tileId)))
+        nextBrightness.set(sub.tileId, subTileBrightness(sub, neighborsOf(nextPatch, sub.tileId)))
       const built = await buildTilePatchMeshSliced(
         subs,
         subOptions,
         (tile) => shadedColor(tile, nextBrightness),
-        (tile) => neighborsOf(subPatch, tile.tileId),
+        (tile) => neighborsOf(nextPatch, tile.tileId),
         {
           isCancelled: () => isCancelled() || myGeneration !== generation,
           slopeShading: true,
@@ -232,6 +286,8 @@ export function createSubTileManager(
         subMesh.dispose()
       }
       subMesh = built
+      subPatch = nextPatch
+      rebuildConstructions()
       clipCenter = center.clone()
       clipAngle = radiusMeters / planetRadius
       applySubClip(built.mesh)
@@ -278,6 +334,11 @@ export function createSubTileManager(
       }
       if (loading) return
       focusUnit.copy(focus).normalize()
+      if (refreshRequested && lastCenter) {
+        refreshRequested = false
+        void load(focusUnit.clone())
+        return
+      }
       if (
         lastCenter &&
         focusUnit.angleTo(lastCenter) * meshOptions.planetRadiusMeters < SUBTILE_REFRESH_METERS
@@ -314,6 +375,53 @@ export function createSubTileManager(
 
     recolor() {
       subMesh?.recolorAll((tile) => shadedColor(tile, brightness))
+    },
+
+    get ready() {
+      return subMesh !== null && subPatch !== null
+    },
+
+    subOptions,
+
+    pick(raycaster) {
+      if (!subMesh || !subPatch) return null
+      const hit = raycaster.intersectObject(subMesh.mesh, false)[0]
+      if (!hit || hit.faceIndex == null) return null
+      if (hit.point.clone().normalize().angleTo(clipCenter) >= clipAngle) return null
+      const id = subMesh.tileIdAtFace(hit.faceIndex)
+      if (id === undefined) return null
+      const index = subPatch.indexByTileId.get(id)
+      if (index === undefined) return null
+      const owner = subPatch.tiles[index] as SubTileDto
+      // 水面是半透明的、本身不接受點選：射線穿過水面打到水底，或穿過凹下去的河道打到對岸的側壁
+      // （傾斜視角下 160 公尺深的河道會偏掉超過半格）。先看水面在不在地形前面，在的話選水面底下那一格
+      const water = waterHitBefore(raycaster, hit.distance)
+      if (!water) return owner
+      const unit = water.clone().normalize()
+      let best: SubTileDto | null = null
+      let bestDot = -Infinity
+      for (const candidate of [owner, ...subNeighbours(owner)]) {
+        if (!hasWaterSurface(candidate)) continue
+        const dot = latLonToVector3(candidate.latitude, candidate.longitude, 1).dot(unit)
+        if (dot > bestDot) {
+          bestDot = dot
+          best = candidate
+        }
+      }
+      return best ?? owner
+    },
+
+    neighboursOf: subNeighbours,
+
+    applyEdit(subTileId, structure, terrainEdit, terrainChanged) {
+      const index = subPatch?.indexByTileId.get(subTileId)
+      const sub = index === undefined ? undefined : (subPatch!.tiles[index] as SubTileDto)
+      if (sub) {
+        sub.structure = structure
+        sub.terrainEdit = terrainEdit
+      }
+      if (terrainChanged) refreshRequested = true
+      else rebuildConstructions()
     },
 
     dispose() {

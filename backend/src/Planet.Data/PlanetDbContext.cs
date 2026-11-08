@@ -23,6 +23,9 @@ public class PlanetDbContext : DbContext
     /// <summary>模擬粗格的完整狀態（地形來自地質模擬時才有資料，見 <see cref="PlanetCell"/>）。</summary>
     public DbSet<PlanetCell> PlanetCells => Set<PlanetCell>();
 
+    /// <summary>玩家在小格上蓋的東西與改過的地形（編輯模式）。</summary>
+    public DbSet<Construction> Constructions => Set<Construction>();
+
     /// <summary>設定 Tile／TerrainStyle／PlanetMetadata 的主鍵、索引。</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -57,6 +60,14 @@ public class PlanetDbContext : DbContext
         {
             entity.HasKey(c => c.CellId);
             entity.Property(c => c.CellId).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<Construction>(entity =>
+        {
+            entity.HasKey(c => c.SubTileId);
+            entity.Property(c => c.SubTileId).ValueGeneratedNever();
+            // 產生小格時依地塊一批查
+            entity.HasIndex(c => c.ParentTileId);
         });
     }
 }

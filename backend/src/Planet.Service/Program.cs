@@ -50,6 +50,7 @@ builder.Services.Configure<NearbyQueryOptions>(builder.Configuration.GetSection(
 builder.Services.AddScoped<ITileRepository, TileRepository>();
 builder.Services.AddScoped<ITerrainStyleRepository, TerrainStyleRepository>();
 builder.Services.AddScoped<IPlanetMetadataRepository, PlanetMetadataRepository>();
+builder.Services.AddScoped<IConstructionRepository, ConstructionRepository>();
 builder.Services.AddSingleton<ITileNeighborResolver, TileNeighborResolver>();
 builder.Services.AddSingleton<OverviewTextureGenerator>();
 builder.Services.AddSingleton<SeedingStatus>();
@@ -60,6 +61,7 @@ builder.Services.AddSingleton<SimulationService>();
 builder.Services.AddSingleton<PlanetRegenerationService>();
 builder.Services.AddSingleton<PlanetMaterializationService>();
 builder.Services.AddSingleton<SubTileService>();
+builder.Services.AddSingleton<ConstructionService>();
 // 注意：這裡沒有註冊 IPlanetGenerator／ITerrainGenerator 的DI singleton——地形參數現在可以透過
 // RegenerationController在執行期間改變，不能只在服務啟動時建構一次就固定死。需要生成器的地方
 // （PlanetRegenerationService、OverviewTextureGenerator）都是要用的當下才依目前的TerrainOptionsStore

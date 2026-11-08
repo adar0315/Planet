@@ -22,6 +22,30 @@ namespace Planet.Data.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("Planet.Domain.Construction", b =>
+                {
+                    b.Property<long>("SubTileId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ParentTileId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("Structure")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("TerrainEdit")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("SubTileId");
+
+                    b.HasIndex("ParentTileId");
+
+                    b.ToTable("Constructions");
+                });
+
             modelBuilder.Entity("Planet.Domain.PlanetCell", b =>
                 {
                     b.Property<int>("CellId")

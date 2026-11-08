@@ -5,6 +5,7 @@ import PlanetEvolution from './scene/PlanetEvolution.vue'
 import EvolutionControls from './ui/EvolutionControls.vue'
 import CoordinateHud from './ui/CoordinateHud.vue'
 import ModeSwitcher from './ui/ModeSwitcher.vue'
+import EditToolbar from './ui/EditToolbar.vue'
 import Compass from './ui/Compass.vue'
 import GlobePositionIndicator from './ui/GlobePositionIndicator.vue'
 import ViewModeToggle from './ui/ViewModeToggle.vue'
@@ -24,6 +25,7 @@ const gameState = useGameStateStore()
     <template v-if="gameState.viewMode === 'walk'">
       <CoordinateHud />
       <ModeSwitcher />
+      <EditToolbar />
       <Compass />
       <GlobePositionIndicator />
     </template>

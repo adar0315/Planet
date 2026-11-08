@@ -1,4 +1,10 @@
-import type { CellSeasonsDto, SubTileDto, TileDto } from '@/types/tile'
+import type {
+  CellSeasonsDto,
+  ConstructionAction,
+  ConstructionResultDto,
+  SubTileDto,
+  TileDto,
+} from '@/types/tile'
 import type { TerrainStyleDto } from '@/types/terrainStyle'
 import type { TerrainGenerationOptionsDto } from '@/types/terrainOptions'
 
@@ -36,6 +42,38 @@ export async function fetchSubTiles(tileIds: readonly number[]): Promise<SubTile
   // 鄰居一個都查不到，每格都退回固定半徑的近似畫法，六角形互相重疊（2026-10-26 使用者回報「顯示有問題」）
   const raw: (Omit<SubTileDto, 'tileId'> & { subTileId: number })[] = await response.json()
   return raw.map(({ subTileId, ...rest }) => ({ ...rest, tileId: subTileId }))
+}
+
+/**
+ * 編輯模式：對一個小格做一件事。不符合規則時丟出的錯誤訊息就是後端給玩家看的原因。
+ */
+export async function postConstruction(
+  subTileId: number,
+  parentTileId: number,
+  action: ConstructionAction,
+): Promise<ConstructionResultDto> {
+  const response = await fetch(new URL('/api/constructions', API_BASE_URL), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subTileId, parentTileId, action }),
+  })
+  if (!response.ok) {
+    const text = (await response.text().catch(() => '')).trim()
+    throw new Error(text && text.length < 200 ? stripQuotes(text) : `修改失敗: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** ASP.NET Core 回傳字串時會序列化成 JSON 字串（帶引號）。 */
+function stripQuotes(text: string): string {
+  if (text.startsWith('"') && text.endsWith('"')) {
+    try {
+      return JSON.parse(text) as string
+    } catch {
+      return text
+    }
+  }
+  return text
 }
 
 /** 模擬粗格的四季（水文地貌規劃 H8）。程序化的星球回傳空陣列。 */

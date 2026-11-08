@@ -21,6 +21,8 @@ namespace Planet.Shared;
 /// <param name="RiverDistanceMeters">到那條河中心線的距離（公尺）。</param>
 /// <param name="RiverWidthMeters">那條河的平均河寬（公尺）。</param>
 /// <param name="Floodplain">在泛濫平原上：洪峰時會淹水。</param>
+/// <param name="Structure">玩家蓋在上面的建築物（House、Castle、Bridge、Road）；沒有是 null。</param>
+/// <param name="TerrainEdit">玩家改過的地形（Channel、Fill）；地表欄位已經是改過之後的樣子。沒改過是 null。</param>
 public record SubTileDto(
     long SubTileId,
     long ParentTileId,
@@ -41,7 +43,11 @@ public record SubTileDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     float RiverWidthMeters = 0f,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    bool Floodplain = false
+    bool Floodplain = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Structure = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TerrainEdit = null
 );
 
 /// <summary>

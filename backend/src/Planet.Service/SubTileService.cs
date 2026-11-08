@@ -33,51 +33,129 @@ public sealed class SubTileService
         _metadata = metadata;
     }
 
-    /// <summary>這些地塊底下的小格（含彼此的鄰居）。</summary>
+    /// <summary>
+    /// 這些地塊底下的小格（含彼此的鄰居），已經疊上玩家的修改（編輯模式）：
+    /// 地形修改直接改掉地表欄位，建築物放在 <see cref="SubTileDto.Structure"/>。
+    /// </summary>
     /// <param name="parentIds">地塊編號。</param>
     /// <param name="ct">取消權杖。</param>
     public async Task<IReadOnlyList<SubTileDto>> GetSubTilesAsync(IReadOnlyCollection<long> parentIds, CancellationToken ct)
     {
         IReadOnlyList<Tile> parents;
+        IReadOnlyList<Construction> constructions;
         using (var scope = _scopeFactory.CreateScope())
         {
             parents = await scope.ServiceProvider.GetRequiredService<ITileRepository>().GetByIdsAsync(parentIds, ct);
+            constructions = await scope.ServiceProvider.GetRequiredService<IConstructionRepository>()
+                .GetByParentsAsync(parents.Select(p => p.TileId).ToList(), ct);
         }
+        var (subs, neighbors, raw) = await SampleAsync(parents, ct);
+
+        var indexById = new Dictionary<long, int>(subs.Count);
+        for (var i = 0; i < subs.Count; i++) indexById[subs[i].SubTileId] = i;
+        var surfaces = raw.ToArray();
+        var edits = new Dictionary<int, Construction>();
+        foreach (var construction in constructions)
+        {
+            if (!indexById.TryGetValue(construction.SubTileId, out var i)) continue;
+            edits[i] = construction;
+            if (construction.TerrainEdit is { } edit)
+                surfaces[i] = ConstructionRules.Apply(raw[i], edit, LandNeighbourLevel(i, neighbors, raw, indexById));
+        }
+
+        var result = new SubTileDto[subs.Count];
+        for (var i = 0; i < subs.Count; i++)
+        {
+            edits.TryGetValue(i, out var construction);
+            result[i] = ToDto(subs[i], neighbors[i], surfaces[i], construction);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 一個小格原本（沒有玩家修改）的地表，給編輯規則判斷能不能蓋；不屬於這個地塊時回傳 null。
+    /// 相鄰陸地的平均高度只看同一個地塊底下的鄰居（判斷能不能蓋用不到它）。
+    /// </summary>
+    /// <param name="parentTileId">地塊編號。</param>
+    /// <param name="subTileId">小格編號。</param>
+    /// <param name="ct">取消權杖。</param>
+    public async Task<SubTileSurface?> GetRawSurfaceAsync(long parentTileId, long subTileId, CancellationToken ct)
+    {
+        IReadOnlyList<Tile> parents;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            parents = await scope.ServiceProvider.GetRequiredService<ITileRepository>().GetByIdsAsync([parentTileId], ct);
+        }
+        if (parents.Count == 0) return null;
+        var (subs, _, raw) = await SampleAsync(parents, ct);
+        for (var i = 0; i < subs.Count; i++)
+            if (subs[i].SubTileId == subTileId) return raw[i];
+        return null;
+    }
+
+    /// <summary>小格的幾何與原本的地表（模擬取樣，或程序化星球照抄地塊）。</summary>
+    private async Task<(IReadOnlyList<SubTile> Subs, IReadOnlyList<long?[]> Neighbors, SubTileSurface[] Raw)> SampleAsync(
+        IReadOnlyList<Tile> parents, CancellationToken ct)
+    {
         var source = await _metadata.GetAppliedTerrainSourceAsync(ct);
         var (subs, neighbors) = _grid.ChildrenOf(parents);
         var parentById = parents.ToDictionary(t => t.TileId);
-        var result = new SubTileDto[subs.Count];
-
+        var raw = new SubTileSurface[subs.Count];
         Parallel.For(0, subs.Count, new ParallelOptions { CancellationToken = ct }, i =>
         {
             var sub = subs[i];
-            var latitude = Math.Round(sub.Latitude, 6);
-            var longitude = Math.Round(sub.Longitude, 6);
             if (source is SimulatedTerrainSampler simulated)
             {
                 var sample = simulated.SampleDetailed(sub.Latitude, sub.Longitude);
                 var (level, water) = SimulatedTerrainSampler.Levels(sample);
                 var nearRiver = sample.RiverCellId >= 0 && sample.RiverDistanceMeters <= RiverReportMeters + sample.RiverWidthMeters / 2;
-                result[i] = new SubTileDto(
-                    sub.SubTileId, sub.ParentTileId, sub.Shape.ToString(), latitude, longitude,
-                    sample.Terrain.ToString(), sample.HeightCategory, level, water ?? 0, neighbors[i],
-                    sample.SourceCellId,
+                raw[i] = new SubTileSurface(
+                    sample.Terrain, sample.HeightCategory, level, water ?? 0,
                     nearRiver ? sample.RiverCellId : null,
                     nearRiver ? (float)sample.RiverDistanceMeters : 0f,
                     nearRiver ? (float)sample.RiverWidthMeters : 0f,
-                    sample.Floodplain);
+                    sample.Floodplain,
+                    sample.SourceCellId);
             }
             else
             {
                 // 程序化的星球沒有比一格更細的資料：小格照抄地塊
                 var parent = parentById[sub.ParentTileId];
-                result[i] = new SubTileDto(
-                    sub.SubTileId, sub.ParentTileId, sub.Shape.ToString(), latitude, longitude,
-                    parent.Terrain.ToString(), parent.HeightCategory, parent.ElevationLevel, parent.SeaLevel, neighbors[i]);
+                raw[i] = new SubTileSurface(parent.Terrain, parent.HeightCategory, parent.ElevationLevel, parent.SeaLevel,
+                    null, 0f, 0f, false);
             }
         });
-        return result;
+        return (subs, neighbors, raw);
     }
+
+    /// <summary>相鄰陸地小格（同一批、原本的地表）的平均海拔等級；沒有相鄰陸地時是 null。</summary>
+    private static int? LandNeighbourLevel(
+        int index, IReadOnlyList<long?[]> neighbors, SubTileSurface[] raw, Dictionary<long, int> indexById)
+    {
+        var sum = 0;
+        var count = 0;
+        foreach (var id in neighbors[index])
+        {
+            if (id is not { } neighbourId || !indexById.TryGetValue(neighbourId, out var j)) continue;
+            if (ConstructionRules.IsWater(raw[j])) continue;
+            sum += raw[j].ElevationLevel;
+            count++;
+        }
+        return count == 0 ? null : (int)Math.Round((double)sum / count);
+    }
+
+    private static SubTileDto ToDto(SubTile sub, long?[] neighbors, SubTileSurface surface, Construction? construction) =>
+        new(
+            sub.SubTileId, sub.ParentTileId, sub.Shape.ToString(),
+            Math.Round(sub.Latitude, 6), Math.Round(sub.Longitude, 6),
+            surface.Terrain.ToString(), surface.HeightCategory, surface.ElevationLevel, surface.SeaLevel, neighbors,
+            surface.SourceCellId,
+            surface.RiverCellId,
+            surface.RiverDistanceMeters,
+            surface.RiverWidthMeters,
+            surface.Floodplain,
+            construction?.Structure?.ToString(),
+            construction?.TerrainEdit?.ToString());
 
     /// <summary>這些粗格的四季（程序化的星球沒有，回傳空的）。</summary>
     /// <param name="cellIds">粗格編號。</param>

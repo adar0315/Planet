@@ -65,6 +65,28 @@ export interface SubTileDto extends TileDto {
   riverDistanceMeters?: number
   /** 在泛濫平原上：洪峰時會淹水。 */
   floodplain?: boolean
+  /** 玩家蓋在上面的建築物（編輯模式）；沒有就省略。 */
+  structure?: StructureKind
+  /** 玩家改過的地形；地表欄位已經是改過之後的樣子。沒改過就省略。 */
+  terrainEdit?: TerrainEditKind
+}
+
+/** 小格上的建築物（後端 Planet.Domain.StructureKind）。 */
+export type StructureKind = 'House' | 'Castle' | 'Bridge' | 'Road'
+
+/** 小格的地形修改（後端 Planet.Domain.TerrainEditKind）：挖河道、填平。 */
+export type TerrainEditKind = 'Channel' | 'Fill'
+
+/** 編輯模式對一個小格做的事：蓋建築物、改地形或拆除。 */
+export type ConstructionAction = StructureKind | TerrainEditKind | 'Demolish'
+
+/** 修改之後這個小格的狀態（後端 ConstructionResultDto）。 */
+export interface ConstructionResultDto {
+  subTileId: number
+  structure?: StructureKind | null
+  terrainEdit?: TerrainEditKind | null
+  /** 地形變了：要重新要一次小格。 */
+  terrainChanged: boolean
 }
 
 /** 一個模擬粗格的四季（水文地貌規劃 H8）。陣列都是 12 個月，0 是 1 月。 */
