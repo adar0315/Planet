@@ -19,55 +19,82 @@ namespace Planet.Generation;
 /// </summary>
 public class TerrainGenerator : ITerrainGenerator
 {
-    // 海拔等級範圍：-500~+500，每級5公尺（見 docs/architecture.md 的推導）。
+    /// <summary>海拔等級範圍：-500~+500，每級5公尺（見 docs/architecture.md 的推導）。</summary>
     private const int MaxElevationLevel = 500;
 
+    /// <summary>大陸核心半徑（度）：此範圍內 falloff 為 1，必定是陸地。</summary>
     private const double ContinentCoreRadiusDegrees = 35.0;
+    /// <summary>大陸邊緣半徑（度）：falloff 在核心到這裡之間由 1 降到 0。</summary>
     private const double ContinentEdgeRadiusDegrees = 70.0;
     // 大陸南北拉長注意事項：把falloff半徑依方位角橢圓縮放時，南北方向的縮放倍率不能設太大——
     // 球面上falloff半徑一旦接近90度，覆蓋面積會非線性暴增（球冠面積∝1-cos(半徑)，超過90度就蓋過半顆星球），
     // 實測南北倍率設1.6時兩塊大陸直接融合成橫跨170度緯度、359度經度的單一巨大陸塊，完全不是預期的
     // 「兩塊獨立大陸」。南北方向倍率建議維持接近1.0（安全，不會比原始圓形falloff更容易融合），
     // 東西方向倍率可以自由調小做出瘦長外觀、調大做出寬闊外觀（純粹縮放面積，沒有球面幾何的暴增風險）。
+    /// <summary>海岸線 noise 的取樣頻率，越高海岸越破碎。</summary>
     private const double CoastNoiseFrequency = 2.2;
+    /// <summary>海岸線 noise 疊加到大陸 falloff 上的振幅。</summary>
     private const double CoastNoiseAmplitude = 0.4;
+    /// <summary>falloff＋海岸 noise 的分數超過這個門檻才算陸地。</summary>
     private const double LandThreshold = 0.5;
 
     // 海中小島：獨立於大陸之外，用顯式的島嶼中心點（而非noise門檻）確保數量大致可控，
     // 一部分單獨散布、一部分群聚成類似群島的效果（見 GenerateIslands）。
+    /// <summary>小島半徑下限（度）。</summary>
     private const double IslandMinRadiusDegrees = 0.15;
+    /// <summary>小島半徑上限（度）。</summary>
     private const double IslandMaxRadiusDegrees = 0.5;
+    /// <summary>一個群島最少幾座小島（含中心那座）。</summary>
     private const int IslandClusterMinSize = 2;
+    /// <summary>一個群島最多幾座小島（含中心那座）。</summary>
     private const int IslandClusterMaxSize = 6;
-    private const double IslandClusterSpreadDegrees = 3.0; // 群聚裡的衛星小島，離群聚中心最多幾度
-    // 小島峰頂海拔等級。注意：SampleIsland用線性半徑衰減（中心=peak、邊緣=海平面附近），對一個圓盤而言
-    // 面積加權平均高度只有peak的1/3左右（大部分面積集中在半徑外側、海拔較低處），所以這個常數要設得
-    // 比「島嶼平均海拔的目標值」高2~3倍，不能只看峰頂數字直覺覺得「這樣是不是太高了」。
-    // 實測踩過的坑：一開始設220（約1100公尺），單元測試Sample_RockLikeTerrain_HasHigherElevationThanVegetatedLand
-    // 開始失敗——島嶼的低海拔Rock/VolcanicRock樣本把「岩性地形平均海拔」拉到低於「植被地形平均海拔」，
-    // 因為這個測試假設所有岩性地形都是大陸山地等級的高海拔。改到480（火山島特別陡峭陡升，現實中像夏威夷
-    // 這類火山島從海床量起本來就非常高，這個數字對「火山地形」來說有敘事上的合理性）。
+    /// <summary>群聚裡的衛星小島，離群聚中心最多幾度。</summary>
+    private const double IslandClusterSpreadDegrees = 3.0;
+    /// <summary>
+    /// 小島峰頂海拔等級。注意：SampleIsland用線性半徑衰減（中心=peak、邊緣=海平面附近），對一個圓盤而言
+    /// 面積加權平均高度只有peak的1/3左右（大部分面積集中在半徑外側、海拔較低處），所以這個常數要設得
+    /// 比「島嶼平均海拔的目標值」高2~3倍，不能只看峰頂數字直覺覺得「這樣是不是太高了」。
+    /// 實測踩過的坑：一開始設220（約1100公尺），單元測試Sample_RockLikeTerrain_HasHigherElevationThanVegetatedLand
+    /// 開始失敗——島嶼的低海拔Rock/VolcanicRock樣本把「岩性地形平均海拔」拉到低於「植被地形平均海拔」，
+    /// 因為這個測試假設所有岩性地形都是大陸山地等級的高海拔。改到480（火山島特別陡峭陡升，現實中像夏威夷
+    /// 這類火山島從海床量起本來就非常高，這個數字對「火山地形」來說有敘事上的合理性）。
+    /// </summary>
     private const int IslandPeakElevationLevel = 480;
-    private const double IslandMinDistanceFromContinentFalloff = 0.02; // 大陸falloff值低於這個門檻才算「夠遠離大陸」
-    private const double IslandGridCellDegrees = 10.0; // 空間索引網格大小，島嶼半徑遠小於這個值，查詢時查3x3鄰近格就夠
-    private const int IslandGridLonCellCount = 36; // = 360 / IslandGridCellDegrees，經度網格要處理±180接縫wrap-around
+    /// <summary>大陸falloff值低於這個門檻才算「夠遠離大陸」。</summary>
+    private const double IslandMinDistanceFromContinentFalloff = 0.02;
+    /// <summary>空間索引網格大小，島嶼半徑遠小於這個值，查詢時查3x3鄰近格就夠。</summary>
+    private const double IslandGridCellDegrees = 10.0;
+    /// <summary>經度方向的網格數（= 360 / IslandGridCellDegrees），經度網格要處理±180接縫wrap-around。</summary>
+    private const int IslandGridLonCellCount = 36;
 
+    /// <summary>海拔 noise 的取樣頻率。</summary>
     private const double ElevationFrequency = 3.0;
 
+    /// <summary>河流 noise 的取樣頻率。</summary>
     private const double RiverFrequency = 6.0;
+    /// <summary>河流 noise 的絕對值小於這個值的帶狀區域畫成淡水（河道）。</summary>
     private const double RiverBandHalfWidth = 0.012;
 
+    /// <summary>湖泊 noise 的取樣頻率。</summary>
     private const double LakeFrequency = 9.0;
+    /// <summary>湖泊 noise 超過這個門檻畫成淡水（湖）。</summary>
     private const double LakeThreshold = 0.82;
 
+    /// <summary>濕度 noise 的取樣頻率（決定沙漠／沼澤／植被）。</summary>
     private const double MoistureFrequency = 2.6;
+    /// <summary>岩性 noise 的取樣頻率（決定礫灘／懸崖）。</summary>
     private const double RockFrequency = 5.0;
+    /// <summary>稀有特徵 noise 的取樣頻率（火山岩／鹽鹼地／珊瑚礁）。</summary>
     private const double SpecialFrequency = 12.0;
+    /// <summary>表面覆蓋高度 noise 的取樣頻率（決定 HeightCategory）。</summary>
     private const double CoverFrequency = 8.0;
 
     // 緯度分帶（度）。
-    private const double GlacierLatitude = 82.0;   // 更靠近極點：冰原/冰河（陸地或海面都算）
-    private const double SnowFieldLatitude = 70.0;  // 雪線以上緯度：雪地
+    /// <summary>更靠近極點：冰原/冰河（陸地或海面都算）</summary>
+    private const double GlacierLatitude = 82.0;
+    /// <summary>雪線以上緯度：雪地。</summary>
+    private const double SnowFieldLatitude = 70.0;
+    /// <summary>苔原的緯度下限（度），上限是 <see cref="SnowFieldLatitude"/>。</summary>
     private const double TundraLatitudeMin = 55.0;  // 55~70度：苔原
 
     // 海拔分界（等級，5公尺/級）。
@@ -75,40 +102,66 @@ public class TerrainGenerator : ITerrainGenerator
     // （實測seed=42時，中位數落在約220~240級，<=80級的只占陸地約0.2%）。低地地形的門檻要照這個實際
     // 分布校準，不能直接假設0~500是均勻分布，不然LowLandMaxLevel設太低（例如原本的80）會讓沼澤/鹽鹼地
     // 幾乎不可能出現（2000萬格全星球生成後實測是完全0筆，才發現這個問題）。
-    private const int SnowLineElevationLevel = 400;   // 陸地海拔夠高，不分緯度都算雪線以上
-    private const int RockElevationLevel = 320;       // 岩地/懸崖/火山岩地的海拔下限（實測約佔陸地14.7%，還算合理）
-    private const int LowLandMaxLevel = 190;          // 沼澤/鹽鹼地/礫灘等低地地形的海拔上限（實測約佔陸地22~30%）
-    private const int MudMaxElevationLevel = 260;     // 泥地門檻較寬鬆（約佔陸地55%），跟LowLandMaxLevel分開設定
+    /// <summary>陸地海拔夠高，不分緯度都算雪線以上。</summary>
+    private const int SnowLineElevationLevel = 400;
+    /// <summary>岩地/懸崖/火山岩地的海拔下限（實測約佔陸地14.7%，還算合理）</summary>
+    private const int RockElevationLevel = 320;
+    /// <summary>沼澤/鹽鹼地/礫灘等低地地形的海拔上限（實測約佔陸地22~30%）</summary>
+    private const int LowLandMaxLevel = 190;
+    /// <summary>泥地門檻較寬鬆（約佔陸地55%），跟LowLandMaxLevel分開設定。</summary>
+    private const int MudMaxElevationLevel = 260;
 
+    /// <summary>濕度低於此值為沙漠（沙地）。</summary>
     private const double DesertMoistureThreshold = -0.35;
+    /// <summary>濕度高於此值、且在低地時為沼澤。</summary>
     private const double SwampMoistureThreshold = 0.55;
+    /// <summary>濕度高於此值、且海拔不超過 <see cref="MudMaxElevationLevel"/> 時可能為泥地。</summary>
     private const double MudMoistureThreshold = 0.30;
+    /// <summary>濕度高於此值為林地。</summary>
     private const double ForestMoistureThreshold = 0.15;
+    /// <summary>濕度高於此值為灌木叢（再低就是草地）。</summary>
     private const double ShrublandMoistureThreshold = -0.05;
 
+    /// <summary>珊瑚礁出現的最高緯度（度）。</summary>
     private const double CoralReefLatitudeMax = 28.0;
-    private const double CoralReefDepthFraction = 0.22; // 淺海才有珊瑚礁
+    /// <summary>淺海才有珊瑚礁。</summary>
+    private const double CoralReefDepthFraction = 0.22;
 
+    /// <summary>產生這顆星球的地形參數。</summary>
     private readonly TerrainGenerationOptions _options;
 
+    /// <summary>海岸線 noise（種子＋0）。</summary>
     private readonly SimplexNoise3D _coastNoise;
+    /// <summary>海拔 noise（種子＋1）。</summary>
     private readonly SimplexNoise3D _elevationNoise;
+    /// <summary>河流 noise（種子＋2）。</summary>
     private readonly SimplexNoise3D _riverNoise;
+    /// <summary>湖泊 noise（種子＋3）。</summary>
     private readonly SimplexNoise3D _lakeNoise;
+    /// <summary>濕度 noise（種子＋4）。</summary>
     private readonly SimplexNoise3D _moistureNoise;
+    /// <summary>岩性 noise（種子＋5）。</summary>
     private readonly SimplexNoise3D _rockNoise;
+    /// <summary>稀有特徵 noise（種子＋6）。</summary>
     private readonly SimplexNoise3D _specialNoise;
+    /// <summary>表面覆蓋高度 noise（種子＋7）。</summary>
     private readonly SimplexNoise3D _coverNoise;
 
+    /// <summary>第一塊大陸的中心方向（單位向量）。</summary>
     private readonly Vec3 _continentCenterA;
+    /// <summary>第二塊大陸的中心方向（單位向量）。</summary>
     private readonly Vec3 _continentCenterB;
+    /// <summary>第一塊大陸中心的切平面基底，供南北／東西各自縮放 falloff 半徑。</summary>
     private readonly (Vec3 North, Vec3 East) _continentBasisA;
+    /// <summary>第二塊大陸中心的切平面基底。</summary>
     private readonly (Vec3 North, Vec3 East) _continentBasisB;
 
     /// <summary>單一島嶼：中心點、半徑（度）、是否為火山地形（否則為一般岩地）。</summary>
     private readonly record struct Island(Vec3 Center, double RadiusDegrees, bool IsVolcanic);
 
+    /// <summary>所有小島。</summary>
     private readonly Island[] _islands;
+    /// <summary>小島的空間索引：(緯度格, 經度格) → 落在該格的小島索引，見 <see cref="BuildIslandGrid"/>。</summary>
     private readonly Dictionary<(int LatCell, int LonCell), List<int>> _islandGrid;
 
     /// <summary>用預設參數＋指定種子建立地形生成器（供既有呼叫端／測試沿用，等同於 <c>TerrainGenerationOptions.Default with { Seed = seed }</c>）。</summary>
@@ -485,6 +538,12 @@ public class TerrainGenerator : ITerrainGenerator
         return islands.ToArray();
     }
 
+    /// <summary>
+    /// 在指定中心建立一座小島：隨機半徑，依 <see cref="TerrainGenerationOptions.IslandVolcanicProbability"/> 決定是否為火山島。
+    /// </summary>
+    /// <param name="center">小島中心方向。</param>
+    /// <param name="rng">亂數來源。</param>
+    /// <returns>新的小島。</returns>
     private Island CreateIsland(Vec3 center, Random rng)
     {
         var radius = IslandMinRadiusDegrees + rng.NextDouble() * (IslandMaxRadiusDegrees - IslandMinRadiusDegrees);

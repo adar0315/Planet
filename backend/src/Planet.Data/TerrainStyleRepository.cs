@@ -6,6 +6,7 @@ namespace Planet.Data;
 /// <summary><see cref="ITerrainStyleRepository"/> 的 EF Core 實作。</summary>
 public class TerrainStyleRepository : ITerrainStyleRepository
 {
+    /// <summary>EF Core 資料庫內容，由 DI 以 scoped 生命週期注入。</summary>
     private readonly PlanetDbContext _db;
 
     /// <summary>建立地形樣式存取物件。</summary>

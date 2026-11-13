@@ -178,26 +178,47 @@ public sealed class FluvialErosion
     /// <summary>平行鋪泥時入海口分成幾份（固定，不看執行緒數，結果才會一模一樣）。</summary>
     private const int MudChunks = 16;
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
+    /// <summary>這一步開始時每格的地表高度（公尺）。</summary>
     private readonly float[] _surface;
+    /// <summary>這一步開始時每格的水面高度（地表＋水深）。</summary>
     private readonly float[] _waterSurface;
+    /// <summary>每格順流往下帶的沉積物量（公尺×格）。</summary>
     private readonly double[] _load;
+    /// <summary>每個湖泊（盆地）收到、要堆進湖裡的沉積物量。</summary>
     private readonly double[] _basinLoad;
+    /// <summary>每個湖泊有水的格數。</summary>
     private readonly int[] _lakeCellCount;
+    /// <summary>每個湖泊還能裝多少沉積物（湖面與湖底的高差總和）。</summary>
     private readonly double[] _lakeCapacity;
+    /// <summary>廣度搜尋的造訪標記：值等於 <see cref="_stamp"/> 表示這一輪已造訪，不必每輪清空陣列。</summary>
     private readonly int[] _visitStamp;
+    /// <summary>廣度搜尋這一輪造訪過的格子（依圈數排列）。</summary>
     private readonly List<int> _visited = [];
+    /// <summary>目前這一輪廣度搜尋的標記值，每輪加一。</summary>
     private int _stamp;
+    /// <summary>進海的沉積物最多往外走幾圈（由 <see cref="MaxSeaTransportMeters"/> 換算成格數）。</summary>
     private readonly int _maxSeaHops;
+    /// <summary>三角洲半徑換算成的圈數（由 <see cref="DeltaRadiusMeters"/> 換算）。</summary>
     private readonly int _deltaHops;
+    /// <summary>泥最遠鋪到幾圈（<see cref="MudSpreadCutoff"/> × <see cref="MudSpreadLengthMeters"/> 換算成格數）。</summary>
     private readonly int _mudHops;
+    /// <summary>每個入海口這一步收到的泥量。</summary>
     private readonly double[] _mudLoad;
+    /// <summary>這一步有泥進來的入海口（<see cref="_mudLoad"/> 非零的格子）。</summary>
     private readonly List<int> _mudEntries = [];
+    /// <summary>平行鋪泥用的分塊暫存（固定 <see cref="MudChunks"/> 份，結果與執行緒數無關）。</summary>
     private readonly MudChunk?[] _mudChunks = new MudChunk?[MudChunks];
+    /// <summary>與 <see cref="_mudEntries"/> 對齊：深海鋪不下、要改堆在大陸棚上的泥量。</summary>
     private double[] _unplacedMud = [];
+    /// <summary>每格這一步的河流下切速率（公尺／百萬年），寫回狀態供取樣器畫河谷。</summary>
     private readonly float[] _incision;
+    /// <summary>每格這一步的堆積速率（公尺／百萬年）。</summary>
     private readonly float[] _aggradation;
+    /// <summary>每格這一步的冰河侵蝕速率（公尺／百萬年）。</summary>
     private readonly float[] _glacial;
+    /// <summary>每格這一步送進三角洲的沉積物量，平滑後寫進 <see cref="SimulationState.DeltaSupply"/>。</summary>
     private readonly float[] _deltaSupply;
 
     /// <summary>診斷用：最近一步每一格要求的地表降低量（公尺，夾上限之前）。</summary>
@@ -463,6 +484,7 @@ public sealed class FluvialErosion
         LastReliefErodedKm3 = relief / 1000.0 * cellKm2;
     }
 
+    /// <summary>這一步堆進三角洲的沉積物總量（公尺×格），換算成 <see cref="LastDeltaDepositKm3"/>。</summary>
     private double _deltaDeposited;
 
     /// <summary>

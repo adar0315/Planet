@@ -118,6 +118,11 @@ public static class SimulationDiagnostics
         };
     }
 
+    /// <summary>把陣列的原始位元組依序混進 FNV-1a 雜湊。</summary>
+    /// <typeparam name="T">元素型別。</typeparam>
+    /// <param name="h">目前的雜湊值。</param>
+    /// <param name="values">要混入的陣列。</param>
+    /// <returns>更新後的雜湊值。</returns>
     private static ulong Mix<T>(ulong h, T[] values) where T : unmanaged
     {
         foreach (var b in MemoryMarshal.AsBytes<T>(values))

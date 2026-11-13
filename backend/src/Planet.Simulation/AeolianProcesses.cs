@@ -43,10 +43,15 @@ public sealed class AeolianProcesses
     /// <summary>移動平均的時間常數（百萬年）。</summary>
     private const double RateAveragingMyr = 1.0;
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
+    /// <summary>塵土最遠被吹幾格（由 <see cref="MaxDustTransportMeters"/> 換算成格數）。</summary>
     private readonly int _maxHops;
+    /// <summary>在乾燥、有風的地方，塵土每經過一格落下的比例（由格距與 <see cref="DrySettlingMeters"/> 換算）。</summary>
     private readonly double _drySettleFraction;
+    /// <summary>每格這一步被風吹走的鬆散沉積物（公尺）。</summary>
     private readonly float[] _deflation;
+    /// <summary>每格這一步被植被或水攔下來的塵土（公尺），也就是黃土的來源。</summary>
     private readonly float[] _dustArrival;
 
     /// <summary>最近一步吹走的鬆散沉積物（立方公里）。</summary>

@@ -32,9 +32,13 @@ public sealed class SubTileGrid
     /// <summary>小格編號的起點：地塊的編號最多約 2,000 萬，小格從一兆開始，兩邊不會撞號。</summary>
     public const long IdOffset = 1_000_000_000_000L;
 
+    /// <summary>地塊（父格）的細分頻率。</summary>
     private readonly int _n;
+    /// <summary>小格的細分頻率（父格頻率 × 細分倍率）。</summary>
     private readonly int _subN;
+    /// <summary>父格網格的鄰居／座標正規化解析器。</summary>
     private readonly TileNeighborResolver _parentResolver;
+    /// <summary>小格網格的鄰居／座標正規化解析器。</summary>
     private readonly TileNeighborResolver _subResolver;
 
     /// <summary>建立細分網格。</summary>
@@ -75,6 +79,13 @@ public sealed class SubTileGrid
         return (result, neighbors);
     }
 
+    /// <summary>
+    /// 列舉一個地塊範圍內的所有小格（以「最近的父格中心」判斷歸屬），加進結果清單。
+    /// 地塊在面的邊或角上時橫跨好幾個面，每個面都列舉一次，再以正規化座標去重。
+    /// </summary>
+    /// <param name="parent">要展開的地塊。</param>
+    /// <param name="result">收集小格的清單。</param>
+    /// <param name="seen">已加入過的小格正規化座標，用來避免跨面重複。</param>
     private void AddChildren(Tile parent, List<SubTile> result, HashSet<(int, int, int)> seen)
     {
         var self = _parentResolver.Canonicalize(parent.FaceIndex, parent.Row, parent.Col);

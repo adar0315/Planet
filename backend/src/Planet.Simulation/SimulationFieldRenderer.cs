@@ -105,6 +105,7 @@ public sealed class SimulationFieldRenderer
     /// <summary>每個像素對應哪一格（長度 = Width*Height）。建構時算好，之後每次renderer只查表。</summary>
     private readonly int[] _cellByPixel;
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
 
     /// <summary>建立renderer並預先算好像素→格子的對應表。</summary>
@@ -252,6 +253,11 @@ public sealed class SimulationFieldRenderer
         });
     }
 
+    /// <summary>依要畫的欄位決定一格的顏色。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="field">要畫的欄位。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>RGB 顏色。</returns>
     private static (byte R, byte G, byte B) ColorFor(SimulationState state, SimulationField field, int cell) => field switch
     {
         SimulationField.Elevation => ElevationColor(state, cell),
@@ -300,6 +306,10 @@ public sealed class SimulationFieldRenderer
         _ => (0xff, 0x00, 0xff),
     };
 
+    /// <summary>地貌欄位的顏色：水裡看三角洲供砂；陸地看黃土、堆積、下切等哪一種作用為主。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>RGB 顏色。</returns>
     private static (byte R, byte G, byte B) LandformColor(SimulationState state, int cell)
     {
         if (state.WaterDepth[cell] > 0f)
@@ -324,6 +334,10 @@ public sealed class SimulationFieldRenderer
             : ((byte)0x2a, (byte)0x2a, (byte)0x2a);
     }
 
+    /// <summary>岩性欄位的顏色：依地表露出的岩石種類上色，水格一律深藍。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>RGB 顏色。</returns>
     private static (byte R, byte G, byte B) LithologyColor(SimulationState state, int cell)
     {
         if (state.WaterDepth[cell] > 0f) return (0x10, 0x1c, 0x30);
@@ -388,6 +402,11 @@ public sealed class SimulationFieldRenderer
         return HsvToRgb(hue, 0.55, 0.95);
     }
 
+    /// <summary>HSV 轉 RGB。</summary>
+    /// <param name="h">色相（0~1）。</param>
+    /// <param name="s">飽和度（0~1）。</param>
+    /// <param name="v">明度（0~1）。</param>
+    /// <returns>RGB 顏色。</returns>
     private static (byte R, byte G, byte B) HsvToRgb(double h, double s, double v)
     {
         var i = (int)(h * 6);

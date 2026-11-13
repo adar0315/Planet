@@ -18,7 +18,9 @@ public sealed class AdminApiKeyFilter : IAsyncActionFilter
     /// <summary>呼叫端要帶的標頭名稱。</summary>
     public const string HeaderName = "X-Admin-Key";
 
+    /// <summary>管理金鑰設定（未設定時所有管理端點回 503）。</summary>
     private readonly AdminApiKeyOptions _options;
+    /// <summary>記錄器。</summary>
     private readonly ILogger<AdminApiKeyFilter> _logger;
 
     /// <summary>建立過濾器。</summary>

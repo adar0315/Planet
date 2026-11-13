@@ -22,8 +22,11 @@ public sealed class SubTileService
     /// <summary>離河中心線這麼遠以內（公尺，加上半個河寬）才把河的資訊送給前端；再遠的小格不會因為季節變成水。</summary>
     private const double RiverReportMeters = 3_000;
 
+    /// <summary>用來建立 scoped 的資料庫存取物件（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>星球記錄服務，提供地形來源。</summary>
     private readonly PlanetMetadataService _metadata;
+    /// <summary>正式細分頻率下的小格網格。</summary>
     private readonly SubTileGrid _grid = new(GoldbergPlanetGenerator.SubdivisionFrequency);
 
     /// <summary>建立服務。</summary>
@@ -154,6 +157,12 @@ public sealed class SubTileService
         return count == 0 ? null : (int)Math.Round((double)sum / count);
     }
 
+    /// <summary>把小格、鄰居、地表狀態與玩家修改組成 API 回應的 DTO。</summary>
+    /// <param name="sub">小格幾何。</param>
+    /// <param name="neighbors">鄰居小格編號（不在這批的為 <see langword="null"/>）。</param>
+    /// <param name="surface">取樣出來（並套用修改後）的地表狀態。</param>
+    /// <param name="construction">玩家在這一格的修改；沒有時為 <see langword="null"/>。</param>
+    /// <returns>小格 DTO。</returns>
     private static SubTileDto ToDto(SubTile sub, long?[] neighbors, SubTileSurface surface, Construction? construction) =>
         new(
             sub.SubTileId, sub.ParentTileId, sub.Shape.ToString(),

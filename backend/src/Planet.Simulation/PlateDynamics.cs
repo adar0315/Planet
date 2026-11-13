@@ -112,10 +112,14 @@ public sealed class PlateDynamics
     /// <summary>診斷用：每個板塊來自洋脊推力的力矩大小。</summary>
     public double[] RidgeTorqueByPlate { get; private set; } = [];
 
+    /// <summary>每個板塊來自板片拉力的力矩向量（每個板塊 3 個分量）。</summary>
     private double[] _slabTorque = [];
+    /// <summary>每個板塊來自洋脊推力的力矩向量（每個板塊 3 個分量）。</summary>
     private double[] _ridgeTorque = [];
-    private double[] _torque = [];   // 每個板塊 3 個分量
-    private double[] _inertia = [];  // 每個板塊 6 個分量（對稱矩陣的上三角）
+    /// <summary>每個板塊的總驅動力矩（每個板塊 3 個分量）。</summary>
+    private double[] _torque = [];
+    /// <summary>每個板塊的拖曳轉動慣量（每個板塊 6 個分量：對稱矩陣的上三角）。</summary>
+    private double[] _inertia = [];
 
     /// <summary>
     /// 依當下的邊界配置重新解出每個板塊的歐拉極與角速度。
@@ -180,6 +184,8 @@ public sealed class PlateDynamics
         plates.ApplyAngularVelocities(solved);
     }
 
+    /// <summary>板塊數改變時重新配置各個力矩與慣量的緩衝。</summary>
+    /// <param name="plateCount">板塊數。</param>
     private void EnsureCapacity(int plateCount)
     {
         if (_torque.Length == plateCount * 3) return;
@@ -325,6 +331,10 @@ public sealed class PlateDynamics
         }
     }
 
+    /// <summary>取出某個板塊的 3 分量向量的長度。</summary>
+    /// <param name="v">每個板塊 3 個分量攤平存放的陣列。</param>
+    /// <param name="plate">板塊編號。</param>
+    /// <returns>向量長度。</returns>
     private static double Magnitude(double[] v, int plate)
     {
         var b = plate * 3;
@@ -339,12 +349,25 @@ public sealed class PlateDynamics
     private const double CollisionResistancePerWidth =
         Isostasy.MaxLithosphereThicknessKm * 1000.0 * Isostasy.LithosphereMantleDensityExcess / Isostasy.MantleDensity;
 
+    /// <summary>這一格的岩石圈是否浮得住、不會隱沒（見 <see cref="Isostasy.ResistsSubduction"/>）。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>是否抗拒隱沒。</returns>
     private static bool ResistsSubduction(SimulationState state, int cell) =>
         Isostasy.ResistsSubduction(state.Crust[cell], state.CrustThickness[cell], state.CrustDensity[cell], state.OceanicOnly[cell]);
 
+    /// <summary>這一格岩石圈的浮力（公尺，見 <see cref="Isostasy.LithosphereBuoyancyMeters"/>）。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>浮力。</returns>
     private static float Buoyancy(SimulationState state, int cell) => Isostasy.LithosphereBuoyancyMeters(
         state.Crust[cell], state.CrustThickness[cell], state.CrustDensity[cell], state.CrustAge[cell]);
 
+    /// <summary>找出一個屬於別的板塊的鄰居格。</summary>
+    /// <param name="grid">模擬網格。</param>
+    /// <param name="plates">板塊集合（看 <see cref="PlateSet.OwnerByCell"/>）。</param>
+    /// <param name="cell">格子索引。</param>
+    /// <returns>第一個屬於別的板塊的鄰居；沒有則為 -1。</returns>
     private static int FindNeighborOnOtherPlate(SimulationGrid grid, PlateSet plates, int cell)
     {
         var mine = plates.OwnerByCell[cell];

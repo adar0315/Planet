@@ -13,7 +13,9 @@ namespace Planet.Service.Controllers;
 [Route("api/terrain-styles")]
 public class TerrainStylesController : ControllerBase
 {
+    /// <summary>地形樣式資料表的存取。</summary>
     private readonly ITerrainStyleRepository _repository;
+    /// <summary>星球總覽貼圖產生器；樣式顏色改變後要清它的快取。</summary>
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
 
     /// <summary>建立控制器。</summary>
@@ -65,6 +67,9 @@ public class TerrainStylesController : ControllerBase
         return Ok(ToDto(entity));
     }
 
+    /// <summary>把地形樣式實體轉成 API 回應的 DTO。</summary>
+    /// <param name="s">地形樣式實體。</param>
+    /// <returns>對應的 DTO。</returns>
     private static TerrainStyleDto ToDto(TerrainStyle s) =>
         new(s.Terrain.ToString(), s.NameEn, s.NameZh, s.ColorDawn, s.ColorDay, s.ColorDusk, s.ColorNight);
 }

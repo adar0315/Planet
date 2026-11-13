@@ -23,8 +23,11 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
     /// <summary>每個海拔等級代表幾公尺（同 <see cref="Tile.ElevationLevel"/>）。</summary>
     public const double MetersPerElevationLevel = 5.0;
 
+    /// <summary>模擬網格（粗格）。</summary>
     private readonly SimulationGrid _grid;
+    /// <summary>放大時分類好的粗格狀態。</summary>
     private readonly IReadOnlyList<PlanetCell> _cells;
+    /// <summary>比一格小的地貌（河道、河谷、三角洲、海岸、風成地形）取樣器。</summary>
     private readonly LandformSampler _landforms;
 
     /// <summary>建立取樣器。</summary>
@@ -171,9 +174,18 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
     /// <summary>平滑核的半徑（格距的倍數）。</summary>
     private const double KernelCells = 1.1;
 
+    /// <summary>位置扭曲用的 noise（固定種子）。</summary>
     private readonly SimplexNoise3D _warpNoise = new(9173);
+    /// <summary>細部起伏用的 noise（固定種子）。</summary>
     private readonly SimplexNoise3D _detailNoise = new(4421);
 
+    /// <summary>
+    /// 把取樣點用 noise 扭曲一點（幅度 <see cref="WarpCells"/> 格距、波長 <see cref="WarpWavelengthMeters"/>），讓粗格之間的分界變成自然的曲線。
+    /// </summary>
+    /// <param name="x">單位球上的 X。</param>
+    /// <param name="y">單位球上的 Y。</param>
+    /// <param name="z">單位球上的 Z。</param>
+    /// <returns>扭曲後再投影回單位球的點。</returns>
     private (double X, double Y, double Z) Warp(double x, double y, double z)
     {
         var f = _grid.PlanetRadiusMeters / WarpWavelengthMeters;
@@ -188,6 +200,12 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
         return (wx / length, wy / length, wz / length);
     }
 
+    /// <summary>平滑核的權重：離格心的距離（以 <see cref="KernelCells"/> 個格距為 1）越遠越小，(1−d)³，超出半徑為 0。</summary>
+    /// <param name="cell">粗格索引。</param>
+    /// <param name="x">取樣點的 X（單位球）。</param>
+    /// <param name="y">取樣點的 Y（單位球）。</param>
+    /// <param name="z">取樣點的 Z（單位球）。</param>
+    /// <returns>權重。</returns>
     private double KernelWeight(int cell, double x, double y, double z)
     {
         var u = _grid.UnitVector;
@@ -266,9 +284,26 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
         return (w0 * e0 + w1 * _cells[first].SurfaceElevationMeters + w2 * _cells[second].SurfaceElevationMeters) / sum;
     }
 
+    /// <summary>取樣點與某格格心單位向量的內積（越大越近）。</summary>
+    /// <param name="cell">粗格索引。</param>
+    /// <param name="x">取樣點的 X。</param>
+    /// <param name="y">取樣點的 Y。</param>
+    /// <param name="z">取樣點的 Z。</param>
+    /// <returns>內積。</returns>
     private double Dot(int cell, double x, double y, double z) =>
         x * _grid.UnitVector[cell * 3] + y * _grid.UnitVector[cell * 3 + 1] + z * _grid.UnitVector[cell * 3 + 2];
 
+    /// <summary>3×3 矩陣的行列式（依列排列 a~i）。</summary>
+    /// <param name="a">第 1 列第 1 欄。</param>
+    /// <param name="b">第 1 列第 2 欄。</param>
+    /// <param name="c">第 1 列第 3 欄。</param>
+    /// <param name="d">第 2 列第 1 欄。</param>
+    /// <param name="e">第 2 列第 2 欄。</param>
+    /// <param name="f">第 2 列第 3 欄。</param>
+    /// <param name="g">第 3 列第 1 欄。</param>
+    /// <param name="h">第 3 列第 2 欄。</param>
+    /// <param name="i">第 3 列第 3 欄。</param>
+    /// <returns>行列式。</returns>
     private static double Det(double a, double b, double c, double d, double e, double f, double g, double h, double i) =>
         a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 }

@@ -8,6 +8,7 @@ namespace Planet.Service.Controllers;
 [Route("api/constructions")]
 public class ConstructionsController : ControllerBase
 {
+    /// <summary>處理編輯模式修改的服務。</summary>
     private readonly ConstructionService _constructions;
 
     /// <summary>建立控制器。</summary>

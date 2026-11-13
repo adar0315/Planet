@@ -415,6 +415,11 @@ public sealed class SeasonalHydrologyResult
         Regime = new FlowRegime[cellCount];
     }
 
+    /// <summary>配置每個時段一份格數大小的陣列。</summary>
+    /// <typeparam name="T">元素型別。</typeparam>
+    /// <param name="seasons">時段數。</param>
+    /// <param name="cellCount">格數。</param>
+    /// <returns>外層長度為時段數、內層長度為格數的鋸齒陣列。</returns>
     private static T[][] Make<T>(int seasons, int cellCount)
     {
         var arrays = new T[seasons][];

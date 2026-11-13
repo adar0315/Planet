@@ -7,7 +7,9 @@ namespace Planet.Simulation.Representation;
 /// </summary>
 internal sealed class PlateFrameCarrier : ICrustCarrier
 {
+    /// <summary>被評比的板塊座標系地殼。</summary>
     private PlateFrameCrust? _crust;
+    /// <summary>評比用的完整模擬狀態（只填評比需要的欄位）。</summary>
     private SimulationState? _state;
 
     /// <inheritdoc />

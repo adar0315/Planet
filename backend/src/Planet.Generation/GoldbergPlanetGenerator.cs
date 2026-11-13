@@ -45,7 +45,9 @@ public class GoldbergPlanetGenerator : IPlanetGenerator
     /// <inheritdoc />
     public long TotalTileCount { get; }
 
+    /// <summary>細分頻率 n（每個二十面體面的邊被切成 n 段）。</summary>
     private readonly int _n;
+    /// <summary>決定每一格地形的產生器（程序化或模擬取樣）。</summary>
     private readonly ITerrainGenerator _terrainGenerator;
 
     /// <summary>以正式的細分頻率（<see cref="SubdivisionFrequency"/>，約2,002萬格）與預設地形參數建立生成器。</summary>

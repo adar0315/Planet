@@ -195,22 +195,42 @@ internal static class RepresentationBenchmark
         return interior;
     }
 
+    /// <summary>累計一種地殼搬運方式在評比過程中的統計量（翻面數、與精確解的差異、質量守恆、耗時），最後整理成 <see cref="CarrierResult"/>。</summary>
+    /// <param name="name">搬運方式的名稱。</param>
+    /// <param name="initialContinental">起始的大陸格。</param>
+    /// <param name="initialThickness">起始的地殼厚度。</param>
     private sealed class Accumulator(string name, bool[] initialContinental, float[] initialThickness)
     {
+        /// <summary>上一步每格是否為大陸，用來數這一步翻面的格數。</summary>
         private readonly bool[] _previous = (bool[])initialContinental.Clone();
+        /// <summary>起始的地殼厚度總和（公里·格）。</summary>
         private readonly double _initialMass = initialThickness.Sum(t => (double)t);
+        /// <summary>起始時厚度落在大陸／海洋之間過渡帶的格數。</summary>
         private readonly int _initialIntermediate = initialThickness.Count(IsIntermediate);
+        /// <summary>每一步翻面（大陸↔海洋）的格數。</summary>
         private readonly List<int> _flips = [];
+        /// <summary>起始的地殼厚度，用來數起始的坑洞。</summary>
         private readonly float[] _initialThickness = initialThickness;
+        /// <summary>最後一步的地殼厚度，用來數最後的坑洞。</summary>
         private float[] _finalThickness = [];
 
         /// <summary>熱點總共加了多少厚度（公里·格）。</summary>
         public double AddedMass { get; set; }
+        /// <summary>累計與精確解不一致的格數，以及累計比較過的格數。</summary>
         private long _mismatch, _compared;
+        /// <summary>最後一步與精確解不一致的格數，以及最後一步比較過的格數。</summary>
         private int _finalMismatch, _finalCompared;
+        /// <summary>累計耗時（毫秒），以及最後一步的厚度總和。</summary>
         private double _totalMs, _finalMass;
+        /// <summary>最後一步落在過渡帶的格數，以及最後一步的大陸格數。</summary>
         private int _finalIntermediate, _finalContinental;
 
+        /// <summary>記錄一步的結果。</summary>
+        /// <param name="thickness">這一步的地殼厚度。</param>
+        /// <param name="flags">這一步每格是否為大陸。</param>
+        /// <param name="exact">精確解每格是否為大陸。</param>
+        /// <param name="valid">哪些格子要拿來跟精確解比較。</param>
+        /// <param name="ms">這一步耗時（毫秒）。</param>
         public void Record(float[] thickness, bool[] flags, bool[] exact, bool[] valid, double ms)
         {
             var flips = 0;
@@ -235,6 +255,7 @@ internal static class RepresentationBenchmark
             _finalThickness = (float[])thickness.Clone();
         }
 
+        /// <summary>評比結束時，把累計的統計量整理成結果。</summary>
         /// <param name="grid">網格。</param>
         /// <param name="initialContinental">起始的大陸格。</param>
         /// <param name="exactMeanFlips">精確解每步翻面數。</param>

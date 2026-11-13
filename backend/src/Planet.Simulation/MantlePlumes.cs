@@ -72,7 +72,9 @@ public sealed class MantlePlumes
     /// </summary>
     private const double NeighborShare = 0.35;
 
+    /// <summary>亂數種子；讀檔時用它重建亂數產生器（見 <see cref="RestoreRandomState"/>）。</summary>
     private readonly int _seed;
+    /// <summary>熱柱生成用的亂數產生器；每次抽取都經過 <see cref="NextDouble"/> 計數，讀檔才能還原到同一個狀態。</summary>
     private Random _rng;
 
     /// <summary>
@@ -165,6 +167,8 @@ public sealed class MantlePlumes
         return actuallyAdded;
     }
 
+    /// <summary>抽一個亂數並累計 <see cref="RandomDraws"/>（讀檔時靠這個次數還原亂數狀態）。</summary>
+    /// <returns>[0, 1) 的亂數。</returns>
     private double NextDouble()
     {
         RandomDraws++;

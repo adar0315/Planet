@@ -41,11 +41,17 @@ public sealed class SimulationEngine
     /// <summary>目前的地函熱柱（板塊內部的火山作用）。</summary>
     public MantlePlumes Plumes => _plumes;
 
+    /// <summary>亂數種子；<see cref="Reset"/> 時用同一個種子重建板塊與初始海洋。</summary>
     private readonly int _seed;
+    /// <summary>地殼的搬運方式（v1 標記法或 v2 板塊座標系）。</summary>
     private readonly CrustTransport _crustTransport;
+    /// <summary>初始海洋世界的海洋深度（公尺）。</summary>
     private readonly float _oceanDepthMeters;
+    /// <summary>一開始就是高密度海洋板塊的板塊數，見 <see cref="PlateSet.DensePlateCount"/>。</summary>
     private readonly int _densePlateCount;
+    /// <summary>板塊構造模型（隱沒、張裂、造山）；<see cref="Reset"/> 時重建。</summary>
     private PlateTectonics _tectonics;
+    /// <summary>地函熱柱；<see cref="Reset"/> 時重建。</summary>
     private MantlePlumes _plumes;
 
     /// <summary>氣候模型。風場只跟緯度有關，所以建一次就重複使用，Reset 也不用重建。</summary>
@@ -74,7 +80,9 @@ public sealed class SimulationEngine
     /// <summary>v2 的風蝕與黃土（水文地貌規劃 H5）；標記法是 null。</summary>
     public AeolianProcesses? Aeolian => _aeolian;
 
+    /// <summary><see cref="FluvialErosion"/> 的儲存欄位。</summary>
     private readonly FluvialErosion? _fluvial;
+    /// <summary><see cref="Aeolian"/> 的儲存欄位。</summary>
     private readonly AeolianProcesses? _aeolian;
 
     /// <summary>冰凍圈。沒有自己的狀態（全部寫在 <c>IceThickness</c> 裡），Reset 也不用重建。</summary>
@@ -86,12 +94,14 @@ public sealed class SimulationEngine
     /// <summary>氣候多久重解一次（年）。見 <see cref="StepOnce"/> 裡的說明。</summary>
     private const double ClimateSolveIntervalYears = 2_000_000;
 
-    private double _yearsSinceClimateSolve = double.MaxValue; // 第一步就先解一次
+    /// <summary>距離上一次重解氣候經過了多少年；初始值讓第一步就先解一次。</summary>
+    private double _yearsSinceClimateSolve = double.MaxValue;
 
     /// <summary>多久檢查一次有沒有海被圍死（年）。見 <see cref="StepOnce"/> 裡的說明。</summary>
     private const double BreachCheckIntervalYears = 200_000;
 
-    private double _yearsSinceBreachCheck = double.MaxValue; // 第一步就先檢查一次
+    /// <summary>距離上一次檢查海洋出口經過了多少年；初始值讓第一步就先檢查一次。</summary>
+    private double _yearsSinceBreachCheck = double.MaxValue;
 
     /// <summary>診斷用：海洋出口的鑿通狀況（上一次檢查鑿開了幾個、哪些屏障太高）。</summary>
     public SeaOutletBreach Breach => _breach;
@@ -258,11 +268,15 @@ public sealed class SimulationEngine
     /// </summary>
     private const double StopCheckIntervalYears = 1_000_000;
 
+    /// <summary>距離上一次檢查停止條件經過了多少年（劇本結束後才開始累計）。</summary>
     private double _yearsSinceStopCheck;
 
     /// <summary>上一次檢查時條件是否成立——邊緣觸發要用，而且是要存進存檔的狀態。</summary>
     private bool _stopConditionWasMet;
 
+    /// <summary>
+    /// 劇本結束後，每 <see cref="StopCheckIntervalYears"/> 檢查一次陸地配置是否符合 <see cref="StopCriteria"/>，在條件剛成立時（邊緣觸發）通知停止。
+    /// </summary>
     private void CheckStopCondition()
     {
         // 大陸配置的劇本跑完之前不檢查：起始的配置本來就符合條件，一開始就會停下來
@@ -392,6 +406,8 @@ public sealed class SimulationEngine
     /// <summary>演化中重解氣候時，四季的水文分幾個時段（每季一個）。</summary>
     private const int EvolutionSeasons = 4;
 
+    /// <summary>重解四季的水文，把每格的洪水係數寫進 <see cref="SimulationState.FloodFactor"/>。</summary>
+    /// <param name="seasons">一年分成幾個時段。</param>
     private void UpdateFloodFactor(int seasons)
     {
         var (_, hydrology) = SolveSeasons(seasons);

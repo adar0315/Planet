@@ -20,8 +20,11 @@ namespace Planet.Service.Controllers;
 [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
 public class RegenerationController : ControllerBase
 {
+    /// <summary>下次重新生成要用的地形參數。</summary>
     private readonly TerrainOptionsStore _optionsStore;
+    /// <summary>程序化地形的重新生成作業。</summary>
     private readonly PlanetRegenerationService _regenerationService;
+    /// <summary>把模擬存檔放大成地塊的作業。</summary>
     private readonly PlanetMaterializationService _materializationService;
 
     /// <summary>建立控制器。</summary>

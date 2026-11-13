@@ -19,12 +19,19 @@ namespace Planet.Service;
 /// </summary>
 public class PlanetMaterializationService
 {
+    /// <summary>用來建立 scoped 的地塊存取物件（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>地質模擬服務，用來讀出存檔。</summary>
     private readonly SimulationService _simulation;
+    /// <summary>星球記錄服務，放大完成後記錄新的地形來源。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>總覽貼圖產生器，放大完成後清掉它的快取。</summary>
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
+    /// <summary>共用的生成狀態（與程序化生成共用，避免兩種作業同時寫地塊）。</summary>
     private readonly SeedingStatus _seedingStatus;
+    /// <summary>記錄器。</summary>
     private readonly ILogger<PlanetMaterializationService> _logger;
+    /// <summary>保護 <see cref="Status"/> 的鎖。</summary>
     private readonly Lock _lock = new();
 
     /// <summary>建立服務。</summary>
@@ -63,6 +70,12 @@ public class PlanetMaterializationService
         return true;
     }
 
+    /// <summary>
+    /// 在背景執行放大：讀存檔 → 清碎島 → 解四季 → 分類粗格 → 寫入地塊 → 記錄來源。
+    /// 失敗時只記錄錯誤；地塊是寫進暫存表再切換的，失敗不會動到舊的地塊。
+    /// </summary>
+    /// <param name="snapshotName">模擬存檔名稱。</param>
+    /// <returns>代表背景作業的工作。</returns>
     private async Task RunAsync(string snapshotName)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -113,6 +126,8 @@ public class PlanetMaterializationService
         }
     }
 
+    /// <summary>在鎖內以 <c>with</c> 更新放大狀態。</summary>
+    /// <param name="change">由舊狀態產生新狀態的函式。</param>
     private void Update(Func<MaterializationStatus, MaterializationStatus> change)
     {
         lock (_lock)

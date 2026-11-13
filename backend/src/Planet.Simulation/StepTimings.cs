@@ -14,8 +14,11 @@ namespace Planet.Simulation;
 /// </summary>
 public sealed class StepTimings
 {
+    /// <summary>各項目第一次出現的順序（報表照這個順序列）。</summary>
     private readonly List<string> _order = [];
+    /// <summary>各項目累積的耗時（<see cref="Stopwatch"/> 的 tick）。</summary>
     private readonly Dictionary<string, long> _ticks = [];
+    /// <summary>上一個標記的時間點（<see cref="Stopwatch"/> 的 tick）。</summary>
     private long _last;
 
     /// <summary>從上次 <see cref="Reset"/> 以來累積了幾步。</summary>
@@ -39,6 +42,7 @@ public sealed class StepTimings
         StepsMeasured = 0;
     }
 
+    /// <summary>一步開始時呼叫，記下起點時間。</summary>
     internal void BeginStep() => _last = Stopwatch.GetTimestamp();
 
     /// <summary>把「上一個標記到現在」記在這一項名下。</summary>
@@ -54,6 +58,7 @@ public sealed class StepTimings
         _last = now;
     }
 
+    /// <summary>一步結束時呼叫，累計步數。</summary>
     internal void EndStep() => StepsMeasured++;
 }
 

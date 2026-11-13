@@ -103,9 +103,13 @@ public sealed class PlateSet
 
     // 球面 Voronoi 的種子點，會跟著各自的歐拉極一起旋轉，見 Advance。
     // 長度是 板塊數 × SeedsPerPlate，_seedPlate 記錄每個種子屬於哪個板塊。
+    /// <summary>Voronoi 種子點位置的 X 分量（單位球上）。</summary>
     private readonly double[] _seedX;
+    /// <summary>Voronoi 種子點位置的 Y 分量（單位球上）。</summary>
     private readonly double[] _seedY;
+    /// <summary>Voronoi 種子點位置的 Z 分量（單位球上）。</summary>
     private readonly double[] _seedZ;
+    /// <summary>每個種子屬於哪個板塊。</summary>
     private readonly int[] _seedPlate;
 
     /// <summary>
@@ -135,6 +139,14 @@ public sealed class PlateSet
     /// <summary>這一次重新分配實際重掃了幾格。診斷與「該不該改回全掃」的判斷用。</summary>
     private int _lastRescanCount;
 
+    /// <summary>以已經建好的板塊與種子建立；外部請用工廠方法建立。</summary>
+    /// <param name="plates">板塊清單。</param>
+    /// <param name="plateIdByCell">每格的板塊編號（起始時歸屬與 Voronoi 歸屬相同）。</param>
+    /// <param name="seedX">種子的 X 分量。</param>
+    /// <param name="seedY">種子的 Y 分量。</param>
+    /// <param name="seedZ">種子的 Z 分量。</param>
+    /// <param name="seedPlate">每個種子屬於哪個板塊。</param>
+    /// <param name="seedBias">每個種子的距離偏移（加權 Voronoi）。</param>
     private PlateSet(
         Plate[] plates, int[] plateIdByCell,
         double[] seedX, double[] seedY, double[] seedZ, int[] seedPlate, double[] seedBias)
@@ -297,6 +309,7 @@ public sealed class PlateSet
     /// </summary>
     private const double ReassignThresholdInCellSpacings = 0.25;
 
+    /// <summary>上一次重新分配歸屬之後，種子累積移動了多少公尺；超過門檻（<see cref="ReassignThresholdInCellSpacings"/> 格距）才重新分配。要進存檔。</summary>
     private double _seedDriftMeters;
 
     /// <summary>相鄰格子的中心間距（公尺）：由平均面積當正六邊形反推邊長，再乘√3。</summary>

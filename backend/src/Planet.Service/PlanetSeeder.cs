@@ -36,11 +36,17 @@ public class PlanetSeeder : IHostedService
     /// </summary>
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>用來建立 scoped 的資料庫存取物件。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>程序化生成作業。</summary>
     private readonly PlanetRegenerationService _regenerationService;
+    /// <summary>生成時要用的地形參數。</summary>
     private readonly TerrainOptionsStore _optionsStore;
+    /// <summary>共用的生成進度。</summary>
     private readonly SeedingStatus _status;
+    /// <summary>星球記錄服務。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>記錄器。</summary>
     private readonly ILogger<PlanetSeeder> _logger;
 
     /// <summary>背景重試迴圈的取消來源，服務關閉時會取消。</summary>

@@ -7,8 +7,10 @@ namespace Planet.Generation;
 /// </summary>
 internal class SimplexNoise3D
 {
+    /// <summary>排列表：0~255 打亂後重複兩次，查表時不必對 255 取餘數。</summary>
     private readonly int[] _perm = new int[512];
 
+    /// <summary>3D Simplex noise 使用的 12 個梯度方向（立方體各邊中點）。</summary>
     private static readonly int[][] Grad3 =
     [
         [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
@@ -33,7 +35,9 @@ internal class SimplexNoise3D
         for (var i = 0; i < 512; i++) _perm[i] = p[i & 255];
     }
 
+    /// <summary>把座標斜切到單形網格的係數 (√4−1)/3＝1/3。</summary>
     private const double F3 = 1.0 / 3.0;
+    /// <summary>把單形網格座標還原回原空間的係數 (1−1/√4)/3＝1/6。</summary>
     private const double G3 = 1.0 / 6.0;
 
     /// <summary>取樣3D空間中某一點的noise值。</summary>

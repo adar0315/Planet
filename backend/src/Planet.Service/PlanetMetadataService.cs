@@ -19,10 +19,15 @@ namespace Planet.Service;
 /// </summary>
 public class PlanetMetadataService
 {
+    /// <summary>用來建立 scoped 的 <see cref="IPlanetMetadataRepository"/>（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>記錄器。</summary>
     private readonly ILogger<PlanetMetadataService> _logger;
+    /// <summary>保護快取的鎖。</summary>
     private readonly Lock _lock = new();
+    /// <summary>快取的星球記錄；<see langword="null"/> 表示尚未載入。</summary>
     private PlanetMetadata? _cached;
+    /// <summary>依星球記錄建立的地形來源快取（程序化產生器或模擬取樣器）。</summary>
     private ITerrainGenerator? _cachedSource;
 
     /// <summary>建立星球記錄服務。</summary>

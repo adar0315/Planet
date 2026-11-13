@@ -92,6 +92,7 @@ public sealed class Erosion
     /// </summary>
     private const float LandDepositionFraction = 0.3f;
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
 
     /// <summary>每格的下游鄰居（最陡下降方向）。-1 代表是窪地或海面下，水流不出去。</summary>
@@ -106,6 +107,7 @@ public sealed class Erosion
     /// <summary>每格搬運中的沉積物（公尺厚度當量）。</summary>
     private readonly double[] _load;
 
+    /// <summary>這一步開始時每格的地表高度（公尺）。</summary>
     private readonly float[] _surface;
 
     /// <summary>排序用的鍵（負高度）。見 <see cref="BuildFlowNetwork"/> 裡不用比較委派的理由。</summary>

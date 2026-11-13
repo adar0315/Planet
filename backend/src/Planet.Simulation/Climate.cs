@@ -101,6 +101,7 @@ public sealed class Climate
     /// <summary>降水轉成逕流的比例；其餘蒸散回大氣。地球陸地的平均逕流係數約0.35。</summary>
     internal const float RunoffFraction = 0.35f;
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
 
     /// <summary>
@@ -135,7 +136,9 @@ public sealed class Climate
     /// <summary>每格留在原地不被吹走的水氣比例。</summary>
     private readonly float[] _retainedFraction;
 
+    /// <summary>水氣輸送迭代的下一輪結果（out-of-place 暫存，算完再複製回狀態）。</summary>
     private readonly float[] _nextMoisture;
+    /// <summary>每格空氣的持水能力（隨氣溫指數變化），每次求解先算好，迭代之間不變。</summary>
     private readonly float[] _capacity;
 
     /// <summary>地形抬升會逼出多少比例的水氣。跟地形一起固定，每次 Solve 算一次就好。</summary>
@@ -505,10 +508,18 @@ public sealed class Climate
     /// <summary>能量平衡模型每次更新的 Gauss–Seidel 迭代次數（從上一次的解出發）。</summary>
     private const int ZonalIterations = 3000;
 
+    /// <summary>各緯度帶（每條 2°）的能量平衡穩態溫度，下次求解從這份解出發。</summary>
     private readonly double[] _zonalTemperature = new double[ZonalBands];
+    /// <summary><see cref="_zonalTemperature"/> 是否已經有初始解（第一次用輻射平衡溫度起算）。</summary>
     private bool _zonalInitialized;
+    /// <summary>每格離海岸幾格（海洋性影響隨距離衰減，特徵距離 <see cref="MaritimeReachKm"/>）。</summary>
     private int[] _coastHops = [];
 
+    /// <summary>
+    /// 只看輻射平衡的溫度：赤道 <see cref="RadiativeEquatorC"/>、往兩極依 sin²(緯度) 下降 <see cref="RadiativePoleDropC"/>。
+    /// </summary>
+    /// <param name="latitudeDegrees">緯度（度）。</param>
+    /// <returns>輻射平衡溫度（°C）。</returns>
     private static double RadiativeAt(double latitudeDegrees)
     {
         var sinLat = Math.Sin(latitudeDegrees * Math.PI / 180.0);
@@ -742,6 +753,7 @@ public sealed class Climate
         }
     }
 
+    /// <summary><see cref="WindSpeedScaledAdvection"/> 的儲存欄位。</summary>
     private bool _windSpeedScaled;
 
     /// <summary>風速低於這個（帶狀風向量長度，信風與西風最強處約 1.1）就依比例少送，見 <see cref="WindSpeedScaledAdvection"/>。</summary>

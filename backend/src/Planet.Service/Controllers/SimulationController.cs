@@ -16,6 +16,7 @@ public record SaveResultDto(string Name, long SizeBytes);
 [Route("api/simulation")]
 public class SimulationController : ControllerBase
 {
+    /// <summary>地質模擬的單例服務。</summary>
     private readonly SimulationService _simulationService;
 
     /// <summary>建立控制器。</summary>

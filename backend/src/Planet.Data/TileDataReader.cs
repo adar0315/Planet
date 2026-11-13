@@ -19,7 +19,9 @@ internal sealed class TileDataReader : IDataReader
         nameof(Tile.RiverWidthMeters), nameof(Tile.RiverCellId),
     ];
 
+    /// <summary>來源地塊集合的列舉器；<see cref="Read"/> 每呼叫一次推進一筆，目前位置就是 SqlBulkCopy 正在讀的那一列。</summary>
     private readonly IEnumerator<Tile> _enumerator;
+    /// <summary>是否已經呼叫過 <see cref="Close"/> 或 <see cref="Dispose"/>，供 <see cref="IsClosed"/> 回報。</summary>
     private bool _closed;
 
     /// <summary>用一個Tile集合建立reader，實際列舉延後到 <see cref="Read"/> 逐一被呼叫時才發生。</summary>

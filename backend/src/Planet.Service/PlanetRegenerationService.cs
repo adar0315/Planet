@@ -10,10 +10,15 @@ namespace Planet.Service;
 /// </summary>
 public class PlanetRegenerationService
 {
+    /// <summary>用來建立 scoped 的 <see cref="ITileRepository"/>（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>共用的生成進度。</summary>
     private readonly SeedingStatus _status;
+    /// <summary>總覽貼圖產生器，生成完成後清掉它的快取。</summary>
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
+    /// <summary>星球記錄服務，生成完成後記錄新的地形參數。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>記錄器。</summary>
     private readonly ILogger<PlanetRegenerationService> _logger;
 
     /// <summary>建立重新生成服務。</summary>
@@ -53,6 +58,10 @@ public class PlanetRegenerationService
         _ = RunAsync(options, clearExisting);
     }
 
+    /// <summary>在背景執行程序化生成；可選擇先清空現有的地塊與粗格。</summary>
+    /// <param name="options">地形參數。</param>
+    /// <param name="clearExisting">是否先清空現有資料。</param>
+    /// <returns>代表背景作業的工作。</returns>
     private async Task RunAsync(TerrainGenerationOptions options, bool clearExisting)
     {
         try

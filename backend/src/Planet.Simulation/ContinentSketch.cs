@@ -23,6 +23,10 @@ namespace Planet.Simulation;
 /// </summary>
 public sealed class ContinentSketch
 {
+    /// <summary>以解碼好的像素分類建立；外部請用載入方法。</summary>
+    /// <param name="width">草圖寬度（像素）。</param>
+    /// <param name="height">草圖高度（像素）。</param>
+    /// <param name="classes">每個像素的分類，依列排列。</param>
     private ContinentSketch(int width, int height, SketchClass[] classes)
     {
         Width = width;
@@ -88,6 +92,7 @@ public sealed class ContinentSketch
         return new ContinentSketch(width, height, classes);
     }
 
+    /// <summary>草圖顏色與分類的對照表（取最接近的顏色）。</summary>
     private static readonly (SketchClass Class, int R, int G, int B)[] Palette =
     [
         (SketchClass.Ocean, 255, 255, 255),
@@ -230,6 +235,11 @@ public sealed class ContinentSketch
         return (width, height, rgb);
     }
 
+    /// <summary>PNG 的 Paeth 預測器：從左、上、左上三個像素中挑最接近 a＋b−c 的那一個。</summary>
+    /// <param name="a">左邊的像素值。</param>
+    /// <param name="b">上面的像素值。</param>
+    /// <param name="c">左上的像素值。</param>
+    /// <returns>預測值。</returns>
     private static int Paeth(int a, int b, int c)
     {
         var p = a + b - c;
@@ -237,6 +247,9 @@ public sealed class ContinentSketch
         return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
     }
 
+    /// <summary>讀一個大端序的 32 位元整數（PNG 的區塊長度與寬高都是大端序）。</summary>
+    /// <param name="reader">讀取器。</param>
+    /// <returns>整數值。</returns>
     private static int ReadInt32BigEndian(BinaryReader reader)
     {
         var bytes = reader.ReadBytes(4);

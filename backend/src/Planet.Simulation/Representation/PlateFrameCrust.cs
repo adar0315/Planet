@@ -34,14 +34,22 @@ namespace Planet.Simulation.Representation;
 /// </summary>
 internal sealed class PlateFrameCrust
 {
+    /// <summary>網格格數，也是每個板塊座標系裡固定點的數目。</summary>
     private readonly int _cellCount;
+    /// <summary>每個板塊從起點到現在的累積旋轉（單位四元數）。</summary>
     private readonly (double W, double X, double Y, double Z)[] _rotation;
+    /// <summary>各板塊座標系裡每一點的地殼欄位：厚度（公里）、年齡（百萬年）、密度、礁灰岩、構造起伏、沉積物。外層索引是板塊、內層是點。</summary>
     private readonly float[][] _thickness, _age, _density, _organic, _relief, _sediment;
     // 蓋層（水文地貌規劃 H1）：基岩頂部的岩石種類與厚度，跟著地殼點走
+    /// <summary>每一點蓋層的厚度（公尺）。</summary>
     private readonly float[][] _cover;
+    /// <summary>每一點蓋層的岩石種類。</summary>
     private readonly CoverRock[][] _coverRock;
+    /// <summary>每一點的地殼類型。</summary>
     private readonly CrustType[][] _crust;
+    /// <summary>每一點是否永遠只能是海洋地殼（<see cref="SimulationState.OceanicOnly"/>），以及這一點是否有地殼。</summary>
     private readonly bool[][] _oceanicOnly, _valid;
+    /// <summary>每一點最後一次被顯示時的 <see cref="_stamp"/>（用來找沒被顯示、被別的板塊蓋住的點），以及這一點往前推算後落在哪一格（下次局部搜尋的起點）。</summary>
     private readonly int[][] _usedStamp, _forward;
 
     /// <summary>
@@ -50,6 +58,7 @@ internal sealed class PlateFrameCrust
     /// P4 第一次加碰撞規則時，整顆球同一個旋轉（沒有真的邊界）也開始增生、地殼一路變多。
     /// </summary>
     private readonly int[][] _origin;
+    /// <summary>下一塊新生地殼要拿的來源編號（見 <see cref="_origin"/>）。</summary>
     private int _nextOrigin;
 
     /// <summary>從開始到現在經過的時間（百萬年），給焊接後的休眠計時用。</summary>
@@ -65,8 +74,11 @@ internal sealed class PlateFrameCrust
     private int[] _owner, _bodyCell, _newOwner, _newBodyCell;
 
 
+    /// <summary><see cref="WriteBack"/> 用的差值暫存：地質作用改完格子後，每格的值減去板塊座標系裡原本的值。</summary>
     private readonly float[] _dThickness, _dAge, _dDensity, _dOrganic, _dRelief, _dCover;
+    /// <summary><see cref="WriteBack"/> 用：這一格的地殼類型或 OceanicOnly 旗標是否被地質作用改掉了。</summary>
     private readonly bool[] _categoryChanged;
+    /// <summary>每一點這一步是否被別的板塊的地殼蓋住、沒被顯示（保險步驟用的暫存）。</summary>
     private readonly bool[] _hidden;
 
     /// <summary>歸屬平滑用的連通塊編號（暫存）。</summary>
@@ -74,10 +86,14 @@ internal sealed class PlateFrameCrust
 
     /// <summary>這一步大陸碰撞縮短下來、還沒攤開的地殼（公里·格），記在發生碰撞的那一格（見 <see cref="DistributeCollisionThickening"/>）。</summary>
     private readonly float[] _collisionBudget;
+    /// <summary>
+    /// 與 <see cref="_collisionBudget"/> 對齊：這筆碰撞增厚是否撞上不可消耗的「牆」板塊（用較大的起伏係數 <see cref="WallReliefPerKmOfThickening"/>）。
+    /// </summary>
     private readonly bool[] _collisionFromWall;
 
     /// <summary>正在判定的是哪一格（<see cref="Resolve"/> 要知道碰撞發生在哪裡）。</summary>
     private int _resolveCell;
+    /// <summary>每一步遞增的標記值，配合 <see cref="_usedStamp"/> 判斷「這一步有沒有被顯示」。</summary>
     private int _stamp;
 
     /// <summary>建立空的板塊座標系地殼。</summary>
@@ -936,6 +952,9 @@ internal sealed class PlateFrameCrust
     /// <summary>構造起伏被侵蝕削掉的特徵時間（百萬年）。造山帶的地形在停止擠壓之後幾千萬年才被夷平。</summary>
     private const double ReliefDecayMyr = 20;
 
+    /// <summary>替一格目前顯示的那一點加厚地殼（以 <see cref="Isostasy.MaxCrustThicknessKm"/> 為上限），並累計到碰撞增厚的診斷量。</summary>
+    /// <param name="cell">格子索引。</param>
+    /// <param name="add">要加的厚度（公里）。</param>
     private void AddThickness(int cell, float add)
     {
         var p = _owner[cell];
@@ -1089,6 +1108,11 @@ internal sealed class PlateFrameCrust
         }
     }
 
+    /// <summary>把一點的全部地殼欄位複製到另一個板塊（或同一個板塊）的另一點。</summary>
+    /// <param name="from">來源板塊。</param>
+    /// <param name="fromBody">來源點（來源板塊座標系裡的索引）。</param>
+    /// <param name="to">目標板塊。</param>
+    /// <param name="toBody">目標點。</param>
     private void CopyPoint(int from, int fromBody, int to, int toBody)
     {
         _thickness[to][toBody] = _thickness[from][fromBody];
@@ -1341,6 +1365,7 @@ internal sealed class PlateFrameCrust
     /// <summary>這塊地殼碰撞時是否浮得住、會縮短拼接而不隱沒（見 <see cref="Isostasy.ResistsSubduction"/>）。</summary>
     private bool IsSuturable(int p, int b) => Isostasy.ResistsSubduction(_crust[p][b], _thickness[p][b], _density[p][b], _oceanicOnly[p][b]);
 
+    /// <summary>每一步開始時把所有診斷計數器歸零。</summary>
     private void ResetCounters()
     {
         LastNewCrustCells = 0;
@@ -1530,6 +1555,10 @@ internal sealed class PlateFrameCrust
         _stamp = 0;
     }
 
+    /// <summary>配置每個板塊一份網格大小的陣列。</summary>
+    /// <typeparam name="T">元素型別。</typeparam>
+    /// <param name="plateCount">板塊數。</param>
+    /// <returns>外層長度為板塊數、內層長度為格數的鋸齒陣列。</returns>
     private T[][] Allocate<T>(int plateCount)
     {
         var arrays = new T[plateCount][];

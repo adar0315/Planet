@@ -112,9 +112,11 @@ public static class Isostasy
     public const float SedimentDensity = 2500f;
 
     /// <summary>有機沉積（珊瑚礁的碳酸鈣、石灰岩）的密度。比碎屑沉積物略高。</summary>
-    // 目前沒有地方用到——礁灰岩刻意不算在 LoadDepressionMeters 的載重裡，理由見那個方法
-    // 的說明（撓曲波長）。留著是因為它是真實的物理常數，等岩石圈撓曲做出來就會用到；
-    // **不要因為「沒人用」就把礁體加回局部均衡**，那會讓礁體長到14公里。
+    /// <remarks>
+    /// 目前沒有地方用到——礁灰岩刻意不算在 <see cref="LoadDepressionMeters"/> 的載重裡，理由見那個方法
+    /// 的說明（撓曲波長）。留著是因為它是真實的物理常數，等岩石圈撓曲做出來就會用到；
+    /// **不要因為「沒人用」就把礁體加回局部均衡**，那會讓礁體長到14公里。
+    /// </remarks>
     public const float OrganicDensity = 2600f;
 
     /// <summary>冰的密度。</summary>

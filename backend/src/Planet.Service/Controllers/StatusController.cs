@@ -7,6 +7,7 @@ namespace Planet.Service.Controllers;
 [Route("api/status")]
 public class StatusController : ControllerBase
 {
+    /// <summary>地圖生成／寫入進度。</summary>
     private readonly SeedingStatus _status;
 
     /// <summary>建立控制器。</summary>

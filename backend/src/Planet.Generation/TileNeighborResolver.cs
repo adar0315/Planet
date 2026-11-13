@@ -14,6 +14,7 @@ namespace Planet.Generation;
 /// </summary>
 public class TileNeighborResolver : ITileNeighborResolver
 {
+    /// <summary>細分頻率 n。</summary>
     private readonly int _n;
 
     /// <summary>以正式的細分頻率（<see cref="GoldbergPlanetGenerator.SubdivisionFrequency"/>）建立鄰居解析器。</summary>

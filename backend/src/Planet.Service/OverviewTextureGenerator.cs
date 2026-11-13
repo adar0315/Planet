@@ -37,12 +37,18 @@ public class OverviewTextureGenerator
     /// <summary>陸海遮罩裡代表「陸地」的值。</summary>
     public const byte MaskLand = 0;
 
+    /// <summary>資料庫找不到某種地形的顏色時用的洋紅色，讓漏設定的地形在貼圖上一眼就看得出來。</summary>
     private static readonly (byte R, byte G, byte B) FallbackColor = (0xff, 0x00, 0xff);
 
+    /// <summary>星球記錄服務，提供目前地塊實際使用的地形來源。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>用來建立 scoped 的 <see cref="ITerrainStyleRepository"/>（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>保護兩份快取的鎖。</summary>
     private readonly Lock _lock = new();
+    /// <summary>快取的 RGBA 總覽貼圖；<see langword="null"/> 表示需要重算。</summary>
     private byte[]? _cachedRgba;
+    /// <summary>快取的陸海遮罩；<see langword="null"/> 表示需要重算。</summary>
     private byte[]? _cachedWaterMask;
 
     /// <summary>建立貼圖產生器。</summary>
@@ -114,6 +120,9 @@ public class OverviewTextureGenerator
         }
     }
 
+    /// <summary>從資料庫讀出每種地形的白天顏色。</summary>
+    /// <param name="ct">取消權杖。</param>
+    /// <returns>地形 → RGB 的對照表。</returns>
     private async Task<IReadOnlyDictionary<TerrainType, (byte R, byte G, byte B)>> LoadDayColorsAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -122,6 +131,9 @@ public class OverviewTextureGenerator
         return styles.ToDictionary(s => s.Terrain, s => ParseHexColor(s.ColorDay));
     }
 
+    /// <summary>解析 <c>#rrggbb</c> 色碼。</summary>
+    /// <param name="hex">色碼字串（可有可無前置的 #）。</param>
+    /// <returns>RGB 三個分量。</returns>
     private static (byte R, byte G, byte B) ParseHexColor(string hex)
     {
         var value = Convert.ToInt32(hex.TrimStart('#'), 16);
@@ -136,6 +148,9 @@ public class OverviewTextureGenerator
     private static bool IsWater(TerrainType terrain) =>
         terrain is TerrainType.Seawater or TerrainType.Freshwater or TerrainType.CoralReef;
 
+    /// <summary>依經緯度等距取樣產生陸海遮罩（第 0 列＝北極，左到右＝西到東）。</summary>
+    /// <param name="terrainGenerator">目前星球的地形來源。</param>
+    /// <returns>長度為 <see cref="MaskWidth"/> × <see cref="MaskHeight"/> 的遮罩，每格是 <see cref="MaskWater"/> 或 <see cref="MaskLand"/>。</returns>
     private static byte[] GenerateWaterMask(ITerrainGenerator terrainGenerator)
     {
         var mask = new byte[MaskWidth * MaskHeight];
@@ -155,6 +170,10 @@ public class OverviewTextureGenerator
         return mask;
     }
 
+    /// <summary>依經緯度等距取樣產生白天配色的 RGBA 貼圖（第 0 列＝北極，左到右＝西到東）。</summary>
+    /// <param name="terrainGenerator">目前星球的地形來源。</param>
+    /// <param name="dayColors">地形 → 白天顏色的對照表。</param>
+    /// <returns>長度為 <see cref="Width"/> × <see cref="Height"/> × 4 的 RGBA 位元組陣列。</returns>
     private static byte[] Generate(ITerrainGenerator terrainGenerator, IReadOnlyDictionary<TerrainType, (byte R, byte G, byte B)> dayColors)
     {
         var pixels = new byte[Width * Height * 4];

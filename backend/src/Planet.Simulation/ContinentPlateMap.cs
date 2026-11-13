@@ -14,11 +14,22 @@ namespace Planet.Simulation;
 /// </summary>
 internal sealed class ContinentPlateMap
 {
+    /// <summary>圖的寬度（像素）。</summary>
     private readonly int _width;
+    /// <summary>圖的高度（像素）。</summary>
     private readonly int _height;
+    /// <summary>每個像素的板塊編號，依列排列。</summary>
     private readonly int[] _plate;
+    /// <summary>
+    /// 每個像素在 C 那一塊的哪一部分（<see cref="PartC"/>、<see cref="PartE"/>、<see cref="PartIsland"/>、<see cref="PartCut"/>）。
+    /// </summary>
     private readonly int[] _cPart;
 
+    /// <summary>以已經解析好的像素資料建立；外部請用載入方法。</summary>
+    /// <param name="width">圖的寬度。</param>
+    /// <param name="height">圖的高度。</param>
+    /// <param name="plate">每個像素的板塊編號。</param>
+    /// <param name="cPart">每個像素在 C 的哪一部分。</param>
     private ContinentPlateMap(int width, int height, int[] plate, int[] cPart)
     {
         _width = width;
@@ -271,6 +282,11 @@ internal sealed class ContinentPlateMap
         }
     }
 
+    /// <summary>等距圓柱圖上一個像素的上下左右鄰居（左右跨經度 ±180° 接縫循環，上下到邊為止）。</summary>
+    /// <param name="width">圖的寬度。</param>
+    /// <param name="height">圖的高度。</param>
+    /// <param name="i">像素索引。</param>
+    /// <returns>鄰居像素索引。</returns>
     private static IEnumerable<int> Neighbors(int width, int height, int i)
     {
         int x = i % width, y = i / width;
@@ -285,6 +301,10 @@ internal sealed class ContinentPlateMap
     /// <param name="longitudeDegrees">經度（任意，會換算到 −180 ~ 180）。</param>
     public int PlateAt(double latitudeDegrees, double longitudeDegrees) => _plate[Index(latitudeDegrees, longitudeDegrees)];
 
+    /// <summary>經緯度換成像素索引（左＝經度 −180°、上＝北極）。</summary>
+    /// <param name="latitudeDegrees">緯度（−90 ~ 90）。</param>
+    /// <param name="longitudeDegrees">經度（任意，會換算到 −180 ~ 180）。</param>
+    /// <returns>像素索引。</returns>
     private int Index(double latitudeDegrees, double longitudeDegrees)
     {
         var lon = ((longitudeDegrees + 180.0) % 360.0 + 360.0) % 360.0;

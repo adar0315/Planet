@@ -156,6 +156,9 @@ public static class PlanetMaterializer
         return cells;
     }
 
+    /// <summary>把 float 陣列原樣轉成位元組（存進 <see cref="PlanetCell"/> 的二進位欄位），與 <see cref="FromBytes"/> 互逆。</summary>
+    /// <param name="values">數值。</param>
+    /// <returns>位元組陣列。</returns>
     private static byte[] ToBytes(float[] values)
     {
         var bytes = new byte[values.Length * sizeof(float)];
@@ -228,6 +231,13 @@ public static class PlanetMaterializer
         return exposure;
     }
 
+    /// <summary>把一格粗格分類成地形與表面覆蓋等級：水域看冰、水深；陸地看冰、溫度與在全部陸地裡的濕度百分位。</summary>
+    /// <param name="state">模擬狀態。</param>
+    /// <param name="c">格子索引。</param>
+    /// <param name="elevation">地表高度（公尺）。</param>
+    /// <param name="isOcean">是否為海洋（與大洋相通的水）。</param>
+    /// <param name="wetness">這一格的降水在全部陸地裡的百分位（0 最乾、接近 1 最濕）。</param>
+    /// <returns>地形與 <see cref="Tile.HeightCategory"/>。</returns>
     private static (TerrainType Terrain, int HeightCategory) Classify(
         SimulationState state, int c, float elevation, bool isOcean, float wetness)
     {
@@ -259,6 +269,9 @@ public static class PlanetMaterializer
         return (TerrainType.Forest, height * 2 + dense);
     }
 
+    /// <summary>水深（公尺）換成深度等級（見 <see cref="WaterDepthBounds"/>）。</summary>
+    /// <param name="depth">水深（公尺）。</param>
+    /// <returns>深度等級。</returns>
     private static int WaterDepthCategory(float depth)
     {
         for (var i = 0; i < WaterDepthBounds.Length; i++)
@@ -268,6 +281,12 @@ public static class PlanetMaterializer
         return WaterDepthBounds.Length;
     }
 
+    /// <summary>把落在 [from, to) 的值等分成 count 段，回傳落在第幾段（夾在 0 ~ count−1）。</summary>
+    /// <param name="value">數值。</param>
+    /// <param name="from">區間起點。</param>
+    /// <param name="to">區間終點。</param>
+    /// <param name="count">段數。</param>
+    /// <returns>段的索引。</returns>
     private static int Bucket(float value, float from, float to, int count) =>
         Math.Clamp((int)((value - from) / (to - from) * count), 0, count - 1);
 

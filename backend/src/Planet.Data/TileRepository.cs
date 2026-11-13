@@ -8,7 +8,9 @@ namespace Planet.Data;
 /// <summary><see cref="ITileRepository"/> 的 EF Core + SQL Server 實作。</summary>
 public class TileRepository : ITileRepository
 {
+    /// <summary>EF Core 資料庫內容，由 DI 以 scoped 生命週期注入。</summary>
     private readonly PlanetDbContext _db;
+    /// <summary>附近地塊查詢的查詢框設定（未注入時為預設值）。</summary>
     private readonly NearbyQueryOptions _nearbyOptions;
 
     /// <summary>建立地塊資料存取物件。</summary>

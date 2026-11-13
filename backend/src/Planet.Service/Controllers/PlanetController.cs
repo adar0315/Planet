@@ -9,6 +9,7 @@ namespace Planet.Service.Controllers;
 [Route("api/planet")]
 public class PlanetController : ControllerBase
 {
+    /// <summary>星球記錄（尺寸、地形來源）的快取服務。</summary>
     private readonly PlanetMetadataService _metadataService;
 
     /// <summary>建立控制器。</summary>

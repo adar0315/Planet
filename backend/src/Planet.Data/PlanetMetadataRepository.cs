@@ -9,6 +9,7 @@ public class PlanetMetadataRepository : IPlanetMetadataRepository
     /// <summary>星球記錄固定使用的主鍵值（這張表永遠只有一列）。</summary>
     private const int SingletonId = 1;
 
+    /// <summary>EF Core 資料庫內容，由 DI 以 scoped 生命週期注入。</summary>
     private readonly PlanetDbContext _db;
 
     /// <summary>建立星球記錄存取物件。</summary>

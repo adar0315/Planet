@@ -8,8 +8,13 @@ namespace Planet.Service;
 /// <summary>編輯模式（2026-11-08）：檢查規則、寫入小格的修改。</summary>
 public sealed class ConstructionService
 {
+    /// <summary>
+    /// 用來建立 scoped 的 <see cref="IConstructionRepository"/>（本服務是 Singleton，不能直接注入 scoped 的 DbContext）。
+    /// </summary>
     private readonly IServiceScopeFactory _scopeFactory;
+    /// <summary>產生小格與套用修改的服務，用來讀取修改前的小格狀態。</summary>
     private readonly SubTileService _subTiles;
+    /// <summary>正式細分頻率下的小格網格，用來查相連的城堡格。</summary>
     private readonly SubTileGrid _grid = new(GoldbergPlanetGenerator.SubdivisionFrequency);
 
     /// <summary>同一時間只處理一個修改：讀出目前狀態、檢查、寫回之間不能被別的請求插隊。</summary>
@@ -93,6 +98,15 @@ public sealed class ConstructionService
         }
     }
 
+    /// <summary>
+    /// 把前端送來的動作字串解析成建築物、地形修改或拆除三者之一。
+    /// 純數字字串（例如 "7"）雖然 <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> 吃得下，但不是合法動作，一律拒絕。
+    /// </summary>
+    /// <param name="action">動作名稱（不分大小寫），例如 <c>Castle</c>、<c>DigChannel</c>、<c>Demolish</c>。</param>
+    /// <param name="structure">解析成建築物時的種類，否則為 <see langword="null"/>。</param>
+    /// <param name="terrainEdit">解析成地形修改時的種類，否則為 <see langword="null"/>。</param>
+    /// <param name="demolish">是否為拆除。</param>
+    /// <returns>是否為合法的動作。</returns>
     private static bool TryParseAction(string action, out StructureKind? structure, out TerrainEditKind? terrainEdit, out bool demolish)
     {
         structure = null;

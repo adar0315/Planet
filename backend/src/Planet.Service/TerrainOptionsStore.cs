@@ -8,6 +8,7 @@ namespace Planet.Service;
 /// </summary>
 public class TerrainOptionsStore
 {
+    /// <summary>目前的地形參數。</summary>
     private TerrainGenerationOptions _current = TerrainGenerationOptions.Default;
 
     /// <summary>目前的地形參數。星球啟動時如果需要生成，也是用這一份（預設值＝ <see cref="TerrainGenerationOptions.Default"/>）。</summary>

@@ -57,32 +57,59 @@ public readonly record struct LakeBasin(
 /// </summary>
 public sealed class Hydrology
 {
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
+    /// <summary>每格的泛洪高度（通往主洋的路上最高點的最低可能值），見 <see cref="FloodLevel"/>。</summary>
     private readonly float[] _flood;
+    /// <summary>泛洪時每一格是從哪一格擴過來的（灌滿之後的流向，指向下游）；主洋的種子格為 -1。</summary>
     private readonly int[] _parent;
+    /// <summary>泛洪處理格子的先後順序（前 <see cref="_orderCount"/> 個有效）。</summary>
     private readonly int[] _order;
+    /// <summary>每格所屬的盆地編號；不在盆地裡為 -1。</summary>
     private readonly int[] _basinOf;
+    /// <summary>每格的水最後流進哪個盆地（沿 <see cref="_parent"/> 往下游遇到的第一個盆地）；流到海為 -1。</summary>
     private readonly int[] _drain;
+    /// <summary>每格所在湖泊的湖面高度。</summary>
     private readonly float[] _lakeLevel;
+    /// <summary>每格所在湖泊（盆地）的編號；沒有湖水為 -1。</summary>
     private readonly int[] _lakeOf;
+    /// <summary>找主洋種子時的連通塊標籤暫存。</summary>
     private readonly int[] _label;
+    /// <summary>這一步每個盆地的水量收支（診斷與顯示用）。</summary>
     private readonly List<LakeBasin> _basins = [];
+    /// <summary><see cref="_order"/> 中有效的格數。</summary>
     private int _orderCount;
+    /// <summary>依泛洪順序累加的地表高度前綴和，海平面求解用。</summary>
     private readonly double[] _surfacePrefix;
+    /// <summary>泛洪順序的版本號；每次重新泛洪或讀檔就加一，讓依賴它的快取失效。</summary>
     private int _orderVersion;
+    /// <summary><see cref="_surfacePrefix"/> 是根據哪個 <see cref="_orderVersion"/> 算的。</summary>
     private int _prefixFor = -1;
+    /// <summary>盆地結構（<see cref="BuildBasins"/>）是根據哪個 <see cref="_orderVersion"/> 建的。</summary>
     private int _basinsFor = -1;
+    /// <summary>每個盆地第一個被泛洪到的格子（它的 <see cref="_parent"/> 就是溢出口的下游）。</summary>
     private readonly List<int> _firstCell = [];
+    /// <summary>每個盆地這一步是否有水（不是乾盆地）。</summary>
     private bool[] _holdsWater = [];
+    /// <summary>每個盆地這一步從溢出口流出去的水量。</summary>
     private double[] _outflow = [];
+    /// <summary>每格的流量（逕流沿流向累加），見 <see cref="Discharge"/>。</summary>
     private readonly float[] _discharge;
+    /// <summary>每個盆地的溢出口高度。</summary>
     private readonly List<float> _spill = [];
+    /// <summary>每個盆地溢出時流進的下游盆地；流到海為 -1。</summary>
     private readonly List<int> _downstream = [];
+    /// <summary>每個盆地集水區的逕流總和（不含上游溢出來的水）。</summary>
     private readonly List<double> _runoff = [];
+    /// <summary>建構 <see cref="_cellStart"/> 用的暫存清單。</summary>
     private readonly List<int> _cellStartList = [];
+    /// <summary>上一步寫過 <see cref="_lakeOf"/> 的格子，下一步只清這些，不必掃全部。</summary>
     private readonly List<int> _lakeCellsWritten = [];
+    /// <summary>每個盆地在 <see cref="_sortedCells"/> 中的起點（CSR，最後多一個結尾）。</summary>
     private int[] _cellStart = [0];
+    /// <summary>各盆地的格子，盆地內由低到高排序。</summary>
     private int[] _sortedCells = [];
+    /// <summary>與 <see cref="_sortedCells"/> 對齊：該格被淹成湖面後，水量收支的淨損失（湖面蒸發 − 原本不會變成逕流的降水）。</summary>
     private double[] _loss = [];
 
     /// <summary>為網格配置暫存緩衝。</summary>
@@ -402,8 +429,11 @@ public sealed class Hydrology
         }
     }
 
+    /// <summary>基數排序用的鍵（float 轉成可依無號整數比較的位元）。</summary>
     private uint[] _sortBits = [];
+    /// <summary>基數排序用的鍵暫存。</summary>
     private uint[] _sortBitsTmp = [];
+    /// <summary>基數排序用的項目暫存。</summary>
     private int[] _sortItemsTmp = [];
 
     /// <summary>

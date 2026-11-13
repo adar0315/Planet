@@ -82,6 +82,14 @@ public sealed class SimulationGrid
     public double AverageCellSpacingMeters =>
         Math.Sqrt(AverageCellAreaSquareMeters / (3.0 * Math.Sqrt(3.0) / 2.0)) * Math.Sqrt(3.0);
 
+    /// <summary>以已經算好的幾何資料建立網格；外部請用工廠方法建立。</summary>
+    /// <param name="frequency">細分頻率。</param>
+    /// <param name="planetRadiusMeters">星球半徑（公尺）。</param>
+    /// <param name="latitude">每格格心的緯度（度）。</param>
+    /// <param name="longitude">每格格心的經度（度）。</param>
+    /// <param name="unitVector">每格格心的單位向量，(x, y, z) 攤平存放。</param>
+    /// <param name="neighbors">每格的鄰居索引，每格 <see cref="MaxNeighborsPerCell"/> 個，不足補 <see cref="NoNeighbor"/>。</param>
+    /// <param name="isPentagon">每格是不是五角形。</param>
     private SimulationGrid(
         int frequency,
         double planetRadiusMeters,
@@ -168,9 +176,16 @@ public sealed class SimulationGrid
     // ---- 最近格查詢 ----
     // 用經緯度桶加速。板塊平移（把物質搬到新位置）與貼圖取樣都需要「這個方向上最近的是哪一格」，
     // 所以放在網格上共用一份，不要各自實作一套 bucket（同一套邏輯存兩份必然漂移）。
+    /// <summary>最近格查詢的緯度方向桶數。</summary>
     private int _latBuckets;
+    /// <summary>最近格查詢的經度方向桶數。</summary>
     private int _lonBuckets;
-    private int[]? _bucketStart;   // CSR 格式：第 b 個桶的內容是 _bucketCells[_bucketStart[b].._bucketStart[b+1]]
+    /// <summary>
+    /// CSR 格式：第 b 個桶的內容是 _bucketCells[_bucketStart[b].._bucketStart[b+1]]
+    /// 第一次查詢時才建立（見 <see cref="EnsureBuckets"/>）。
+    /// </summary>
+    private int[]? _bucketStart;
+    /// <summary>依桶排序的格子索引。</summary>
     private int[]? _bucketCells;
 
     /// <summary>
@@ -225,6 +240,7 @@ public sealed class SimulationGrid
         return best;
     }
 
+    /// <summary>第一次需要時建立經緯度桶（雙重檢查鎖定；<see cref="_bucketStart"/> 最後才指派，其他執行緒靠它判斷是否建好）。</summary>
     private void EnsureBuckets()
     {
         if (_bucketStart is not null) return;
@@ -260,6 +276,12 @@ public sealed class SimulationGrid
         }
     }
 
+    /// <summary>經緯度落在哪一個桶（第 0 列是北極）。</summary>
+    /// <param name="latitude">緯度（度）。</param>
+    /// <param name="longitude">經度（度）。</param>
+    /// <param name="latBuckets">緯度方向桶數。</param>
+    /// <param name="lonBuckets">經度方向桶數。</param>
+    /// <returns>(緯度桶, 經度桶)。</returns>
     private static (int Lat, int Lon) BucketOf(double latitude, double longitude, int latBuckets, int lonBuckets)
     {
         var latIndex = (int)((90.0 - latitude) / 180.0 * latBuckets);

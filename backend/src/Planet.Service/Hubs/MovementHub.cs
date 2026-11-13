@@ -12,7 +12,9 @@ namespace Planet.Service.Hubs;
 /// </summary>
 public class MovementHub : Hub
 {
+    /// <summary>地塊資料存取，用來驗證移動目標。</summary>
     private readonly ITileRepository _tileRepository;
+    /// <summary>地塊鄰居座標解析器，用來確認目標是相鄰格。</summary>
     private readonly ITileNeighborResolver _neighborResolver;
 
     /// <summary>建立Hub。</summary>

@@ -118,6 +118,17 @@ internal static class SphereMath
     internal static (double W, double X, double Y, double Z) StepRotation(Plate plate, double deltaMyr) =>
         AxisAngle(plate.PoleX, plate.PoleY, plate.PoleZ, plate.AngularVelocityDegPerMyr * Math.PI / 180.0 * deltaMyr);
 
+    /// <summary>3×3 矩陣的行列式（依列排列 a~i）。</summary>
+    /// <param name="a">第 1 列第 1 欄。</param>
+    /// <param name="b">第 1 列第 2 欄。</param>
+    /// <param name="c">第 1 列第 3 欄。</param>
+    /// <param name="d">第 2 列第 1 欄。</param>
+    /// <param name="e">第 2 列第 2 欄。</param>
+    /// <param name="f">第 2 列第 3 欄。</param>
+    /// <param name="g">第 3 列第 1 欄。</param>
+    /// <param name="h">第 3 列第 2 欄。</param>
+    /// <param name="i">第 3 列第 3 欄。</param>
+    /// <returns>行列式。</returns>
     private static double Det(double a, double b, double c, double d, double e, double f, double g, double h, double i) =>
         a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 }

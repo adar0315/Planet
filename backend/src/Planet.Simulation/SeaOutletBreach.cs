@@ -65,9 +65,13 @@ public sealed class SeaOutletBreach
     /// </summary>
     private const float BreachDepthBelowSeaLevelMeters = 120f;
 
+    /// <summary>每格水域的連通塊編號（陸地為 -1）。</summary>
     private int[] _waterLabel = [];
+    /// <summary>minimax 泛洪的路徑：每格是從哪一格擴過來的（往主洋的方向）。</summary>
     private int[] _parent = [];
+    /// <summary>從這一格走到主洋，路上最高的那一格最低可以壓到多高（見 <see cref="FloodFromMainOcean"/>）。</summary>
     private float[] _barrier = [];
+    /// <summary>每格的地表高度（不含水），判斷海陸用。</summary>
     private float[] _surface = [];
 
     /// <summary>診斷用：上一次鑿開了幾個內海。</summary>
@@ -197,6 +201,8 @@ public sealed class SeaOutletBreach
         LastColHeights = cols;
     }
 
+    /// <summary>網格大小改變時重新配置暫存陣列。</summary>
+    /// <param name="cellCount">格數。</param>
     private void EnsureCapacity(int cellCount)
     {
         if (_waterLabel.Length == cellCount) return;
@@ -255,6 +261,9 @@ public sealed class SeaOutletBreach
         return sizes;
     }
 
+    /// <summary>找出最大的連通塊（主洋）。</summary>
+    /// <param name="sizes">每個連通塊的格數。</param>
+    /// <returns>最大連通塊的編號。</returns>
     private static int LargestComponent(List<int> sizes)
     {
         var best = 0;

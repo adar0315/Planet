@@ -27,18 +27,30 @@ namespace Planet.Simulation;
 /// </summary>
 public sealed class ContinentScenario
 {
+    /// <summary>配置與劇本參數（速度、時間點）。</summary>
     private readonly ContinentLayoutParameters _p;
+    /// <summary>星球半徑（公尺），用來把地表速度換成角速度。</summary>
     private readonly double _radiusMeters;
+    /// <summary>每塊陸地（依陸塊編號）的板塊，同 <see cref="PlateOfLandMass"/>。</summary>
     private readonly int[] _plate;
+    /// <summary>起始配置裡每格屬於哪一塊陸地（<see cref="ContinentLayoutResult.Label"/>）。</summary>
     private readonly int[] _label;
+    /// <summary>小島群之間要沉成海床的段落（<see cref="ContinentLayoutResult.RiftGap"/>）。</summary>
     private readonly bool[] _gap;
+    /// <summary>每格海洋要跟著哪一塊陸地一起裂開（<see cref="ContinentLayoutResult.OceanJoin"/>）。</summary>
     private readonly int[] _oceanJoin;
+    /// <summary>A 南北轉開的支點（單位球上）。</summary>
     private readonly (double X, double Y, double Z) _hinge;
+    /// <summary>支點轉開的旋轉方向（±1），讓支點東側的海灣張開、A 南往南轉離 A 北。</summary>
     private readonly double _hingeSign;
+    /// <summary>劇本期間受控的板塊對（小的編號在前），劇本結束前彼此不准自動焊接。</summary>
     private readonly HashSet<(int, int)> _scripted = [];
+    /// <summary>永遠不准自動焊接的板塊對：大島、小島群與它們的母大陸。</summary>
     private readonly HashSet<(int, int)> _neverWeld = [];
+    /// <summary>每塊大島或小島群：從哪一塊母陸地、在什麼時間點（百萬年）裂開。</summary>
     private readonly (int LandMass, int Parent, double Start)[] _splits;
 
+    /// <summary>依配置建立劇本：記下每塊陸地的板塊、A 南北轉開的支點、大島裂開的時間表與焊接限制。</summary>
     /// <param name="parameters">配置與劇本參數。</param>
     /// <param name="plateOfLandMass">每塊陸地之後要用的板塊（<see cref="ContinentLayout.ApplyTo"/> 的回傳值）。</param>
     /// <param name="layout">配置（每格的陸塊、A 南北轉開的支點）。</param>
@@ -233,6 +245,10 @@ public sealed class ContinentScenario
     /// <summary>地表速度（公分／年，離歐拉極 90° 處）換成角速度（度／百萬年）。</summary>
     private double ToDegPerMyr(double cmPerYear) => cmPerYear / 100.0 / _radiusMeters * 1_000_000.0 * 180.0 / Math.PI;
 
+    /// <summary>設定板塊的角速度向量（方向是歐拉極、長度是度／百萬年）；長度近乎零時只把速率歸零，保留原本的極。</summary>
+    /// <param name="plates">板塊集合（會被修改）。</param>
+    /// <param name="plate">板塊編號。</param>
+    /// <param name="omega">角速度向量。</param>
     private static void SetVelocity(PlateSet plates, int plate, (double X, double Y, double Z) omega)
     {
         var magnitude = Math.Sqrt(omega.X * omega.X + omega.Y * omega.Y + omega.Z * omega.Z);
@@ -247,11 +263,23 @@ public sealed class ContinentScenario
             };
     }
 
+    /// <summary>向量相加。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>和向量。</returns>
     private static (double X, double Y, double Z) Add((double X, double Y, double Z) a, (double X, double Y, double Z) b) =>
         (a.X + b.X, a.Y + b.Y, a.Z + b.Z);
 
+    /// <summary>向量乘上純量。</summary>
+    /// <param name="a">向量。</param>
+    /// <param name="s">純量。</param>
+    /// <returns>縮放後的向量。</returns>
     private static (double X, double Y, double Z) Scale((double X, double Y, double Z) a, double s) => (a.X * s, a.Y * s, a.Z * s);
 
+    /// <summary>板塊對的正規化鍵（小的編號在前），讓 (a, b) 與 (b, a) 視為同一對。</summary>
+    /// <param name="a">一個板塊編號。</param>
+    /// <param name="b">另一個板塊編號。</param>
+    /// <returns>排序後的板塊對。</returns>
     private static (int, int) Key(int a, int b) => a < b ? (a, b) : (b, a);
 
     /// <summary>板塊上大陸地殼的重心；一格都沒有就是 null。</summary>

@@ -398,8 +398,14 @@ public static class ContinentLayout
         return (shiftA, shiftBC, median, minA, minBC);
     }
 
+    /// <summary>草圖的這個分類是不是陸地（A、B、C、D、E、F 任一塊）。</summary>
+    /// <param name="cls">草圖分類。</param>
+    /// <returns>是否為陸地。</returns>
     private static bool IsLandClass(SketchClass cls) => cls is SketchClass.A or SketchClass.D or SketchClass.B or SketchClass.F or SketchClass.C or SketchClass.E;
 
+    /// <summary>草圖的這個分類是不是 A 那一側（A 或之後從 A 南裂出去的 D）。</summary>
+    /// <param name="cls">草圖分類。</param>
+    /// <returns>是否屬於 A 側。</returns>
     private static bool IsASide(SketchClass cls) => cls is SketchClass.A or SketchClass.D;
 
     /// <summary>
@@ -677,6 +683,11 @@ public static class ContinentLayout
         return hops;
     }
 
+    /// <summary>這一格是否有任何鄰居符合條件。</summary>
+    /// <param name="grid">模擬網格。</param>
+    /// <param name="c">格子索引。</param>
+    /// <param name="predicate">判斷鄰居的條件。</param>
+    /// <returns>是否至少有一個鄰居符合。</returns>
     private static bool Touches(SimulationGrid grid, int c, Func<int, bool> predicate)
     {
         var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
@@ -762,6 +773,10 @@ public static class ContinentLayout
         }
     }
 
+    /// <summary>經緯度（度）轉成單位球上的向量（Z 軸朝北極）。</summary>
+    /// <param name="latDegrees">緯度（度）。</param>
+    /// <param name="lonDegrees">經度（度）。</param>
+    /// <returns>單位向量。</returns>
     private static (double X, double Y, double Z) FromLatLon(double latDegrees, double lonDegrees)
     {
         var la = latDegrees * Math.PI / 180.0;
@@ -778,15 +793,30 @@ public static class ContinentLayout
         return l > 1e-12 ? (t.X / l, t.Y / l, t.Z / l) : Normalize(Cross((0, 0, 1), from));
     }
 
+    /// <summary>兩個單位向量的夾角（弧度）。</summary>
+    /// <param name="a">第一個單位向量。</param>
+    /// <param name="b">第二個單位向量。</param>
+    /// <returns>夾角（弧度，0~π）。</returns>
     internal static double Angle((double X, double Y, double Z) a, (double X, double Y, double Z) b) =>
         Math.Acos(Math.Clamp(Dot(a, b), -1.0, 1.0));
 
+    /// <summary>向量內積。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>內積。</returns>
     internal static double Dot((double X, double Y, double Z) a, (double X, double Y, double Z) b) =>
         a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 
+    /// <summary>向量外積 a × b。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>外積。</returns>
     internal static (double X, double Y, double Z) Cross((double X, double Y, double Z) a, (double X, double Y, double Z) b) =>
         (a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
 
+    /// <summary>正規化成單位向量（長度近乎零時回傳北極 (0, 0, 1)）。</summary>
+    /// <param name="a">向量。</param>
+    /// <returns>單位向量。</returns>
     internal static (double X, double Y, double Z) Normalize((double X, double Y, double Z) a)
     {
         var l = Math.Sqrt(Dot(a, a));

@@ -124,6 +124,8 @@ public class SimulationService
     /// <summary>這一輪的標記（重設、載入時換新），檢查點的名字帶著它：分岔之後的檢查點不會蓋掉原本那條時間線的。</summary>
     private string _runTag = NewRunTag();
 
+    /// <summary>產生一輪的標記（UTC 時間 MMddHHmmss）。</summary>
+    /// <returns>標記字串。</returns>
     private static string NewRunTag() => DateTime.UtcNow.ToString("MMddHHmmss");
 
     /// <summary>建立 v2 劇本的引擎。</summary>
@@ -131,11 +133,16 @@ public class SimulationService
     private static SimulationEngine CreateEngine(SimulationGrid grid) =>
         new(grid, ScenarioSeed, crustTransport: CrustTransport.PlateFrame, continentLayout: ContinentLayoutParameters.Default);
 
+    /// <summary>星球記錄服務。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>保護模擬狀態的鎖：引擎與其下的模型都不是執行緒安全的，所有取用都要在這把鎖裡。</summary>
     private readonly Lock _lock = new();
 
+    /// <summary>目前的模擬網格；<see langword="null"/> 表示尚未建立。</summary>
     private SimulationGrid? _grid;
+    /// <summary>目前的模擬引擎；<see langword="null"/> 表示尚未建立。</summary>
     private SimulationEngine? _engine;
+    /// <summary>把模擬欄位畫成貼圖的渲染器。</summary>
     private SimulationFieldRenderer? _renderer;
 
     /// <summary>建立模擬服務。</summary>
@@ -420,6 +427,9 @@ public class SimulationService
             .ToList();
     }
 
+    /// <summary>讀出一個存檔的摘要：格式是否相容（正在寫入時當成不相容）、說明檔記錄的步數與年代。</summary>
+    /// <param name="file">存檔檔案。</param>
+    /// <returns>存檔摘要。</returns>
     private static SnapshotInfo Describe(FileInfo file)
     {
         bool compatible;
@@ -452,6 +462,9 @@ public class SimulationService
             sidecar?.Kind, sidecar?.StepCount, sidecar?.ElapsedYears, compatible);
     }
 
+    /// <summary>存檔的說明檔路徑（同名、副檔名 .json）。</summary>
+    /// <param name="snapshotPath">存檔路徑。</param>
+    /// <returns>說明檔路徑。</returns>
     private static string SidecarPath(string snapshotPath) => Path.ChangeExtension(snapshotPath, ".json");
 
     /// <summary>刪除一個存檔（連同說明檔）。</summary>

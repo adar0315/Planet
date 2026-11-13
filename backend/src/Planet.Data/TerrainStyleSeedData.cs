@@ -65,7 +65,13 @@ internal static class TerrainStyleSeedData
         return $"#{adjustedR:x2}{adjustedG:x2}{adjustedB:x2}";
     }
 
+    /// <summary>把 0xRRGGBB 整數色碼轉成小寫的 <c>#rrggbb</c> 字串。</summary>
+    /// <param name="color">0xRRGGBB 格式的顏色值。</param>
+    /// <returns>CSS 十六進位色碼字串。</returns>
     private static string ToHex(int color) => $"#{color:x6}";
 
+    /// <summary>把推算出的色彩分量四捨五入並夾在 0~255 之間。</summary>
+    /// <param name="value">未經限制的色彩分量。</param>
+    /// <returns>合法的 8 位元色彩分量。</returns>
     private static int Clamp(double value) => Math.Clamp((int)Math.Round(value), 0, 255);
 }

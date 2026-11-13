@@ -11,9 +11,13 @@ namespace Planet.Service.Controllers;
 [Route("api/tiles")]
 public class TilesController : ControllerBase
 {
+    /// <summary>地塊資料存取。</summary>
     private readonly ITileRepository _tileRepository;
+    /// <summary>地塊鄰居座標解析器（只在後端存在一份，見 CLAUDE.md）。</summary>
     private readonly ITileNeighborResolver _neighborResolver;
+    /// <summary>星球總覽貼圖與陸海遮罩的產生器。</summary>
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
+    /// <summary>即時產生小格的服務。</summary>
     private readonly SubTileService _subTiles;
 
     /// <summary>建立控制器。</summary>

@@ -136,6 +136,7 @@ public sealed class LandformSampler
     /// <summary>三角洲輪廓起伏的波長（公尺）。</summary>
     private const double DeltaLobeWavelengthMeters = 8_000;
 
+    /// <summary>三角洲輪廓起伏用的 noise（固定種子，同一顆星球每次畫出一樣的三角洲）。</summary>
     private readonly Planet.Generation.SimplexNoise3D _deltaNoise = new(2711);
 
     /// <summary>分流左右蜿蜒的幅度與波長（都是半徑的倍數）。</summary>
@@ -162,23 +163,34 @@ public sealed class LandformSampler
     /// <summary>格子比最低的鄰居高出這麼多（公尺）、又是硬岩，就是裸露的岩地。</summary>
     private const float RockReliefMeters = 600;
 
+    /// <summary>模擬網格（粗格）。</summary>
     private readonly SimulationGrid _grid;
+    /// <summary>放大時分類好的粗格狀態（河寬、岩性、三角洲供砂等）。</summary>
     private readonly IReadOnlyList<PlanetCell> _cells;
+    /// <summary>星球半徑（公尺），用來把單位球距離換成公尺。</summary>
     private readonly double _radius;
 
     // 河道曲線：每一條河段（粗格 → 下游粗格）一條折線，單位球上的點
+    /// <summary>每條河段在 <see cref="_curvePoints"/> 中的起點（以點為單位，CSR）。</summary>
     private readonly int[] _curveStart;
+    /// <summary>所有河段曲線的點，依序 (x, y, z) 攤平存放。</summary>
     private readonly double[] _curvePoints;
-    private readonly double[] _curveReach; // 這條曲線離弦最遠多少（單位球），用來快速略過
-    private readonly float[] _valleyFloor; // 每格河谷底的高度（公尺）
+    /// <summary>這條曲線離弦最遠多少（單位球），用來快速略過。</summary>
+    private readonly double[] _curveReach;
+    /// <summary>每格河谷底的高度（公尺）</summary>
+    private readonly float[] _valleyFloor;
+    /// <summary>所有三角洲。</summary>
     private readonly Delta[] _deltas;
-    private readonly int[]?[] _deltasNear; // 每格：扇面可能蓋到這格的三角洲（_deltas 的索引），沒有是 null
+    /// <summary>每格：扇面可能蓋到這格的三角洲（_deltas 的索引），沒有是 null。</summary>
+    private readonly int[]?[] _deltasNear;
 
     /// <summary>一個三角洲：河口那一格海、流進來的河從哪一格來、扇面頂點、軸向（往海）、側向、半徑（公尺）。</summary>
     private readonly record struct Delta(int Mouth, int ApexCell,
         (double X, double Y, double Z) Apex, (double X, double Y, double Z) Axis, (double X, double Y, double Z) Side, double Radius);
-    private readonly bool[] _riverHead; // 河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）
-    private readonly int[] _down; // 每格的下游粗格（−1 沒有）：RiverDownstreamCellId 去掉不連通的河段（見 MaxRiverRiseMeters）
+    /// <summary>河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）</summary>
+    private readonly bool[] _riverHead;
+    /// <summary>每格的下游粗格（−1 沒有）：RiverDownstreamCellId 去掉不連通的河段（見 MaxRiverRiseMeters）</summary>
+    private readonly int[] _down;
 
     /// <summary>建立取樣器。</summary>
     /// <param name="grid">模擬網格。</param>
@@ -830,6 +842,9 @@ public sealed class LandformSampler
         _ => 6,
     };
 
+    /// <summary>整數雜湊（splitmix 風格的位元混合），用來替每格產生固定的擬亂數。</summary>
+    /// <param name="value">要雜湊的整數。</param>
+    /// <returns>雜湊值。</returns>
     private static uint Hash(int value)
     {
         var h = (uint)value;
@@ -837,6 +852,11 @@ public sealed class LandformSampler
         return h;
     }
 
+    /// <summary>線性內插。</summary>
+    /// <param name="a">起點值。</param>
+    /// <param name="b">終點值。</param>
+    /// <param name="t">內插參數（0＝a、1＝b）。</param>
+    /// <returns>內插結果。</returns>
     private static double Lerp(double a, double b, double t) => a + (b - a) * t;
 
     /// <summary>平滑的較小值（多項式 smooth min）：兩者相差超過 <paramref name="k"/> 時就是 min，接近時圓滑過渡、略低於兩者。</summary>
@@ -845,16 +865,42 @@ public sealed class LandformSampler
         var h = Math.Max(k - Math.Abs(a - b), 0) / k;
         return Math.Min(a, b) - h * h * k / 4;
     }
+    /// <summary>向量相減 a − b。</summary>
+    /// <param name="a">被減向量。</param>
+    /// <param name="b">減向量。</param>
+    /// <returns>差向量。</returns>
     private static (double, double, double) Sub((double, double, double) a, (double, double, double) b) => (a.Item1 - b.Item1, a.Item2 - b.Item2, a.Item3 - b.Item3);
+    /// <summary>向量相加 a ＋ b。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>和向量。</returns>
     private static (double, double, double) Add((double, double, double) a, (double, double, double) b) => (a.Item1 + b.Item1, a.Item2 + b.Item2, a.Item3 + b.Item3);
+    /// <summary>向量乘上純量。</summary>
+    /// <param name="a">向量。</param>
+    /// <param name="s">純量。</param>
+    /// <returns>縮放後的向量。</returns>
     private static (double, double, double) Scale((double, double, double) a, double s) => (a.Item1 * s, a.Item2 * s, a.Item3 * s);
+    /// <summary>向量內積。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>內積。</returns>
     private static double Dot((double, double, double) a, (double, double, double) b) => a.Item1 * b.Item1 + a.Item2 * b.Item2 + a.Item3 * b.Item3;
+    /// <summary>向量長度。</summary>
+    /// <param name="a">向量。</param>
+    /// <returns>歐氏長度。</returns>
     private static double Length((double, double, double) a) => Math.Sqrt(Dot(a, a));
+    /// <summary>正規化成單位向量（零向量原樣回傳）。</summary>
+    /// <param name="a">向量。</param>
+    /// <returns>單位向量。</returns>
     private static (double, double, double) Normalize((double, double, double) a)
     {
         var length = Length(a);
         return length > 0 ? Scale(a, 1 / length) : a;
     }
+    /// <summary>向量外積 a × b。</summary>
+    /// <param name="a">第一個向量。</param>
+    /// <param name="b">第二個向量。</param>
+    /// <returns>外積。</returns>
     private static (double, double, double) Cross((double, double, double) a, (double, double, double) b) =>
         (a.Item2 * b.Item3 - a.Item3 * b.Item2, a.Item3 * b.Item1 - a.Item1 * b.Item3, a.Item1 * b.Item2 - a.Item2 * b.Item1);
 
@@ -862,6 +908,13 @@ public sealed class LandformSampler
     private static (double, double, double) Extrapolate((double, double, double) a, (double, double, double) b) =>
         Normalize(Add(b, Sub(b, a)));
 
+    /// <summary>Catmull-Rom 樣條在 p1 → p2 之間的內插點，結果投影回單位球。</summary>
+    /// <param name="p0">p1 之前的控制點。</param>
+    /// <param name="p1">區段起點。</param>
+    /// <param name="p2">區段終點。</param>
+    /// <param name="p3">p2 之後的控制點。</param>
+    /// <param name="t">區段內的參數（0＝p1、1＝p2）。</param>
+    /// <returns>單位球上的內插點。</returns>
     private static (double, double, double) CatmullRom(
         (double, double, double) p0, (double, double, double) p1, (double, double, double) p2, (double, double, double) p3, double t)
     {
@@ -872,6 +925,11 @@ public sealed class LandformSampler
         return Normalize((Axis(p0.Item1, p1.Item1, p2.Item1, p3.Item1), Axis(p0.Item2, p1.Item2, p2.Item2, p3.Item2), Axis(p0.Item3, p1.Item3, p2.Item3, p3.Item3)));
     }
 
+    /// <summary>點到線段的最短距離與最近點的參數。</summary>
+    /// <param name="p">查詢點。</param>
+    /// <param name="a">線段起點。</param>
+    /// <param name="b">線段終點。</param>
+    /// <returns>距離與最近點在線段上的參數 t（0＝a、1＝b）。</returns>
     private static (double Distance, double T) DistanceToSegment((double, double, double) p, (double, double, double) a, (double, double, double) b)
     {
         var ab = Sub(b, a);
@@ -880,6 +938,11 @@ public sealed class LandformSampler
         return (Length(Sub(Add(a, Scale(ab, t)), p)), t);
     }
 
+    /// <summary>點到線段（弦）的最短距離。</summary>
+    /// <param name="p">查詢點。</param>
+    /// <param name="a">弦的起點。</param>
+    /// <param name="b">弦的終點。</param>
+    /// <returns>最短距離。</returns>
     private static double DistanceToChord((double, double, double) p, (double, double, double) a, (double, double, double) b) =>
         DistanceToSegment(p, a, b).Distance;
 }

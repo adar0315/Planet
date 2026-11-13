@@ -203,6 +203,7 @@ public sealed class PlateTectonics
     private const int MarkerCapacityFactor = 12;
 
 
+    /// <summary>模擬網格。</summary>
     private readonly SimulationGrid _grid;
 
     /// <summary>板塊座標系（<see cref="CrustTransport.PlateFrame"/> 時才有；標記法時是 null）。</summary>
@@ -263,11 +264,15 @@ public sealed class PlateTectonics
         }
     }
 
+    /// <summary><see cref="Scenario"/> 的儲存欄位。</summary>
     private ContinentScenario? _scenario;
 
     /// <summary>這一步開始時經過了多少百萬年（劇本與焊接封鎖用）。</summary>
     private double _elapsedMyr;
 
+    /// <summary>某個板塊目前是否處於休眠（劇本指定在某時間點之前不動；標記法永遠為 false）。</summary>
+    /// <param name="plate">板塊編號。</param>
+    /// <returns>是否休眠。</returns>
     internal bool IsPlateDormant(int plate) => _frames?.IsDormant(plate) ?? false;
 
     /// <summary>診斷用（板塊座標系）：上一步縮短增厚的次數（浮力差不多、誰都沉不下去）。</summary>
@@ -296,13 +301,16 @@ public sealed class PlateTectonics
         }
     }
 
+    /// <summary><see cref="CrustPointKeys"/> 的重複使用緩衝（板塊座標系時才配置）。</summary>
     private readonly int[]? _pointKeys;
 
     /// <summary>讀檔之後呼叫：板塊座標系要把每格實際的歸屬寫回 <see cref="PlateSet.OwnerByCell"/>（標記法什麼都不做）。</summary>
     internal void AfterRestore(PlateSet plates) => _frames?.PublishOwnership(plates);
 
-    private readonly double[] _convergenceRate; // 公尺／百萬年，每步重算
-    private readonly int[] _convergingNeighbor; // 這格主要在跟哪一格聚合，-1 表示沒有
+    /// <summary>公尺／百萬年，每步重算</summary>
+    private readonly double[] _convergenceRate;
+    /// <summary>這格主要在跟哪一格聚合，-1 表示沒有。</summary>
+    private readonly int[] _convergingNeighbor;
     /// <summary>
     /// 這個邊界格分隔的「另一個」板塊。用來判斷兩個相鄰的邊界格是不是在**同一條邊**上——
     /// 不是的話它們就分屬兩條邊，中間那個轉折就是接合點。非邊界格是 −1。
@@ -345,6 +353,7 @@ public sealed class PlateTectonics
     /// <summary>每條線段的造山帶上，分配曲線的總和。用來把預算正規化，總量才不會變。</summary>
     private readonly double[] _segmentProfileSum;
 
+    /// <summary>地殼類型快照。<c>ApplyConvergence</c> 的平行迴圈會寫自己的地殼類型、又要讀鄰居的，所以讀鄰居一律讀這份。</summary>
     private readonly CrustType[] _crustSnapshot;
 
     /// <summary>
@@ -352,38 +361,62 @@ public sealed class PlateTectonics
     /// <c>ApplyConvergence</c> 的平行迴圈會寫自己的厚度、又要讀鄰居的厚度。
     /// </summary>
     private readonly float[] _liftSnapshot;
-    private readonly float[] _spreadBuffer; // 重力擴展的 out-of-place 暫存
-    private readonly double[] _arcAdded;   // 診斷用：每格島弧增厚了多少
+    /// <summary>重力擴展的 out-of-place 暫存。</summary>
+    private readonly float[] _spreadBuffer;
+    /// <summary>診斷用：每格島弧增厚了多少。</summary>
+    private readonly double[] _arcAdded;
 
     // 標記（marker）：地殼的性質掛在這裡，位置是連續的，見類別說明。
     // 容量給格數的兩倍：聚合處標記會擠在一起、張裂處會新生，總數在格數上下浮動，留一倍餘裕。
+    /// <summary>標記位置的 X 分量（單位球上）。</summary>
     private readonly double[] _markerX;
+    /// <summary>標記位置的 Y 分量（單位球上）。</summary>
     private readonly double[] _markerY;
+    /// <summary>標記位置的 Z 分量（單位球上）。</summary>
     private readonly double[] _markerZ;
+    /// <summary>標記攜帶的地殼厚度（公里）。</summary>
     private readonly float[] _markerThickness;
+    /// <summary>標記攜帶的地殼年齡（百萬年）。</summary>
     private readonly float[] _markerAge;
+    /// <summary>標記攜帶的地殼密度（<see cref="SimulationState.CrustDensity"/>）。</summary>
     private readonly float[] _markerDensity;
-    // 礁灰岩的厚度（公尺）。它是地殼柱的一部分，所以**必須跟地殼一起漂**，
-    // 不能像以前那樣掛在格子上——見 CoralReefs 類別說明裡的「化石紀錄」那一段。
+    /// <summary>
+    /// 礁灰岩的厚度（公尺）。它是地殼柱的一部分，所以**必須跟地殼一起漂**，
+    /// 不能像以前那樣掛在格子上——見 CoralReefs 類別說明裡的「化石紀錄」那一段。
+    /// </summary>
     private readonly float[] _markerOrganic;
+    /// <summary>標記攜帶的地殼類型。</summary>
     private readonly CrustType[] _markerCrust;
-    private readonly bool[] _markerOceanicOnly; // 永遠不能變成大陸地殼，見 SimulationState.OceanicOnly
+    /// <summary>永遠不能變成大陸地殼，見 SimulationState.OceanicOnly。</summary>
+    private readonly bool[] _markerOceanicOnly;
+    /// <summary>標記所屬的板塊。</summary>
     private readonly int[] _markerPlate;
+    /// <summary>標記是否還存在（隱沒或合併後設為 false，壓實時移除）。</summary>
     private readonly bool[] _markerAlive;
-    private readonly int[] _markerTarget; // 這個標記這一輪落在哪一格
-    private readonly int[] _markerCell;   // 上一輪落在哪一格，局部搜尋的起點
-    private readonly int[] _remap;        // 壓實時的「舊索引 → 新索引」
+    /// <summary>這個標記這一輪落在哪一格。</summary>
+    private readonly int[] _markerTarget;
+    /// <summary>上一輪落在哪一格，局部搜尋的起點。</summary>
+    private readonly int[] _markerCell;
+    /// <summary>壓實時的「舊索引 → 新索引」。</summary>
+    private readonly int[] _remap;
+    /// <summary>目前使用中的標記數（陣列前段有效）。</summary>
     private int _markerCount;
 
     // 每格的標記清單（CSR：start/count 指進 _markersByCell），每次取樣重建
+    /// <summary>每格在 <see cref="_markersByCell"/> 中的起始位置。</summary>
     private readonly int[] _cellMarkerStart;
+    /// <summary>每格的標記數。</summary>
     private readonly int[] _cellMarkerCount;
+    /// <summary>依格子排序的標記索引。</summary>
     private readonly int[] _markersByCell;
 
     // 取樣當下寫進格子的值。地質作用改完格子之後要用「差值」寫回標記，
     // 直接覆蓋會讓同一格裡的所有標記變成一模一樣，多個標記就白費了。
+    /// <summary>取樣當下寫進格子的地殼厚度，寫回時用差值。</summary>
     private readonly float[] _sampledThickness;
+    /// <summary>取樣當下寫進格子的地殼年齡，寫回時用差值。</summary>
     private readonly float[] _sampledAge;
+    /// <summary>取樣當下寫進格子的地殼密度，寫回時用差值。</summary>
     private readonly float[] _sampledDensity;
 
     /// <summary>診斷用：最近一步各來源新增的地殼厚度總和（公里·格），用來找出誰在超產。</summary>
@@ -1884,6 +1917,14 @@ public sealed class PlateTectonics
     /// <summary>診斷用：這一步有多少格落在造山帶內（含邊界那一格）。</summary>
     public int LastOrogenCellCount { get; private set; }
 
+    /// <summary>
+    /// 處理聚合邊界：決定誰隱沒、在上覆板塊造山與島弧增厚、島弧夠厚時變成大陸地殼。
+    /// 鄰居一律讀快照（<see cref="_crustSnapshot"/>），避免平行迴圈的資料競爭。
+    /// </summary>
+    /// <param name="grid">模擬網格。</param>
+    /// <param name="state">模擬狀態（會被修改）。</param>
+    /// <param name="plates">板塊集合。</param>
+    /// <param name="deltaMyr">這一步的時間長度（百萬年）。</param>
     private void ApplyConvergence(SimulationGrid grid, SimulationState state, PlateSet plates, double deltaMyr)
     {
         // 先把地殼類型拍一張快照，平行迴圈裡讀鄰居一律讀快照。
@@ -2154,6 +2195,10 @@ public sealed class PlateTectonics
         }
     }
 
+    /// <summary>重力擴展：過厚的地殼往較薄的鄰居流出一部分厚度（out-of-place，用 <see cref="_spreadBuffer"/> 暫存）。</summary>
+    /// <param name="grid">模擬網格。</param>
+    /// <param name="state">模擬狀態（會被修改地殼厚度）。</param>
+    /// <param name="deltaMyr">這一步的時間長度（百萬年）。</param>
     private void SpreadOverthickenedCrust(SimulationGrid grid, SimulationState state, double deltaMyr)
     {
         Array.Copy(state.CrustThickness, _spreadBuffer, grid.CellCount);

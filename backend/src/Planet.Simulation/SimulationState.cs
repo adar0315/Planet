@@ -428,6 +428,7 @@ public sealed class SimulationState
     /// </summary>
     public const float DefaultOceanDepthMeters = 1550f;
 
+    /// <summary>建立起始的海洋世界：全球都是海洋地殼、被海水覆蓋。</summary>
     /// <param name="grid">要建立狀態的網格。</param>
     /// <param name="oceanDepthMeters">起始的全球海洋深度（公尺），也就是這顆星球的總水量。</param>
     /// <param name="seed">亂數種子，決定early bombardment留下的不均勻分布。</param>
