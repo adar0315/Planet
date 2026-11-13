@@ -6,7 +6,7 @@ import EvolutionControls from './ui/EvolutionControls.vue'
 import CoordinateHud from './ui/CoordinateHud.vue'
 import ModeSwitcher from './ui/ModeSwitcher.vue'
 import EditToolbar from './ui/EditToolbar.vue'
-import Compass from './ui/Compass.vue'
+import CompassRose from './ui/CompassRose.vue'
 import GlobePositionIndicator from './ui/GlobePositionIndicator.vue'
 import ViewModeToggle from './ui/ViewModeToggle.vue'
 import PlanetLoadingGate from './ui/PlanetLoadingGate.vue'
@@ -26,7 +26,7 @@ const gameState = useGameStateStore()
       <CoordinateHud />
       <ModeSwitcher />
       <EditToolbar />
-      <Compass />
+      <CompassRose />
       <GlobePositionIndicator />
     </template>
 

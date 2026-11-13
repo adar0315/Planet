@@ -41,7 +41,7 @@ export function createHudStatsUpdater(
 
     // 指北針：把目前位置的「正北」切線方向投影到鏡頭的螢幕平面，換算成螢幕上的角度。
     // 量化到0.5度、且只在真的變了才寫回store——這是每幀都會跑的程式碼，而 compassAngleDeg 一改
-    // 就會讓 Compass.vue 重新render。原本無條件寫入浮點數，配上 enableDamping 的緩動尾巴，
+    // 就會讓 CompassRose.vue 重新render。原本無條件寫入浮點數，配上 enableDamping 的緩動尾巴，
     // 等於鏡頭只要動過就每秒重繪指北針60次。0.5度在64px的錶盤上是次像素等級，看不出差別。
     const north = northDirectionInto(controls.target, compassNorth)
     camRight.setFromMatrixColumn(camera.matrixWorld, 0)
