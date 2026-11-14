@@ -398,6 +398,16 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
 - **先量再優化**：近看細分 1.4 秒，直覺以為慢在取樣，實測取樣只佔 50~80 毫秒，慢的是資料庫（900）與幾何（400）。
 - **改小格的流程之後，跟正式站的輸出逐位元組比對**（同一批地塊打 8080 與 5202，`cmp` 兩份 JSON）：服務層沒有測試專案，這是最直接的回歸檢查。
 - **載入存檔是讀進新建的引擎、成功才換上**：讀到一半失敗不會留下半新半舊的狀態。新建的引擎也才是有測試守著的路徑（逐位元續跑）。
+- **貴的東西只載入一次、而且不綁在請求的取消權杖上**（`PlanetMetadataService.GetAppliedTerrainSourceAsync`）：
+  地形來源要十幾秒（讀 22.5 萬粗格約 8 秒、建網格約 4 秒、建取樣器約 3 秒）。原本每個請求自己載、請求在 Nginx 60 秒逾時就整個作廢，
+  啟動後同時進來的請求互相拖慢、連續 504。現在大家等同一個 `Task`，`ct` 只取消等待；`PlanetSeeder` 啟動後在背景預熱（連總覽貼圖一起）。
+  模擬粗網格由 `SimulationGridCache` 共用，不要再各自 `SimulationGrid.Build`。
+- **「檢查有沒有在跑」與「標成正在跑」要是同一個原子動作**（`PlanetRegenerationService.StartInBackground`）：
+  旗標晚一步設（原本在 TRUNCATE 之後），中間那段時間的第二個請求照樣通過檢查。
+- **鄰居推導有面內部的快速路徑**（`TileNeighborResolver.GetNeighborCoordinates`）：三個權重都 ≥ 2 的六角格直接加減座標。
+  改一般路徑（`GetNeighborCoordinatesGeneral`）的列舉順序時，快速路徑的順序要跟著改——`GetNeighborCoordinates_FastPathMatchesGeneralPath` 逐格比對。
+- **附近地塊查詢剩下的 1 秒是「回傳 5 萬列完整資料」**，不是索引掃描（只取編號約 0.2 秒）、不是排序、也不是算鄰居（已降到 20~60 毫秒）。
+  同步讀取、分兩步查都試過，沒有明顯改善；要再快得改資料表（涵蓋索引）或少傳欄位。
 - **發佈時工作區有別人沒提交的修改**：用 `git worktree add --detach <暫存目錄> HEAD` 從乾淨的 HEAD 發佈，不要把半成品帶上正式站。
 
 ## 編輯模式（2026-11-08）：修改疊在即時產生的小格上
