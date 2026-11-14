@@ -61,7 +61,9 @@ builder.Services.AddSingleton<SnapshotStore>();
 builder.Services.AddSingleton<SimulationService>();
 builder.Services.AddSingleton<PlanetRegenerationService>();
 builder.Services.AddSingleton<PlanetMaterializationService>();
+builder.Services.AddSingleton<SubTileGeometryCache>();
 builder.Services.AddSingleton<SubTileService>();
+builder.Services.AddSingleton<CellSeasonsService>();
 builder.Services.AddSingleton<ConstructionService>();
 // 注意：這裡沒有註冊 IPlanetGenerator／ITerrainGenerator 的DI singleton——地形參數現在可以透過
 // RegenerationController在執行期間改變，不能只在服務啟動時建構一次就固定死。需要生成器的地方

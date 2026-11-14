@@ -84,4 +84,20 @@ public class SubTileGridTests
         var grid = new SubTileGrid(ParentFrequency);
         Assert.Throws<ArgumentOutOfRangeException>(() => grid.NeighborIdsOf(5));
     }
+
+    /// <summary>
+    /// 以地塊為單位快取幾何（SubTileGeometryCache）成立的前提：一個地塊一個地塊算、再接起來，
+    /// 跟整批一起算的結果完全一樣——小格、順序、鄰居的順序都一樣。
+    /// </summary>
+    [Fact]
+    public void PerParentGeometryMatchesTheBatch()
+    {
+        var grid = new SubTileGrid(ParentFrequency);
+        var (children, neighbors) = grid.ChildrenOf(Parents);
+        var perParent = Parents.SelectMany(grid.ChildrenOfParent).ToList();
+
+        Assert.Equal(children, perParent); // 沒有哪個小格被兩個地塊同時認領，順序也相同
+        for (var i = 0; i < children.Count; i++)
+            Assert.Equal(neighbors[i].Select(x => x!.Value), grid.NeighborIdsOf(children[i].SubTileId)); // 不排序：順序也要一樣
+    }
 }

@@ -80,6 +80,18 @@ public sealed class SubTileGrid
     }
 
     /// <summary>
+    /// 一個地塊底下的小格。結果只跟這個地塊的座標有關，同一個地塊每次都一樣，可以快取。
+    /// </summary>
+    /// <param name="parent">地塊（座標要是正規化的）。</param>
+    public IReadOnlyList<SubTile> ChildrenOfParent(Tile parent)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        var result = new List<SubTile>(Factor * Factor + 4);
+        AddChildren(parent, result, []);
+        return result;
+    }
+
+    /// <summary>
     /// 列舉一個地塊範圍內的所有小格（以「最近的父格中心」判斷歸屬），加進結果清單。
     /// 地塊在面的邊或角上時橫跨好幾個面，每個面都列舉一次，再以正規化座標去重。
     /// </summary>

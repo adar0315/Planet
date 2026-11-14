@@ -19,16 +19,19 @@ public class TilesController : ControllerBase
     private readonly OverviewTextureGenerator _overviewTextureGenerator;
     /// <summary>即時產生小格的服務。</summary>
     private readonly SubTileService _subTiles;
+    /// <summary>模擬粗格的四季資料。</summary>
+    private readonly CellSeasonsService _seasons;
 
     /// <summary>建立控制器。</summary>
     public TilesController(
         ITileRepository tileRepository, ITileNeighborResolver neighborResolver,
-        OverviewTextureGenerator overviewTextureGenerator, SubTileService subTiles)
+        OverviewTextureGenerator overviewTextureGenerator, SubTileService subTiles, CellSeasonsService seasons)
     {
         _tileRepository = tileRepository;
         _neighborResolver = neighborResolver;
         _overviewTextureGenerator = overviewTextureGenerator;
         _subTiles = subTiles;
+        _seasons = seasons;
     }
 
     /// <summary>
@@ -53,7 +56,7 @@ public class TilesController : ControllerBase
     /// <summary>
     /// 模擬粗格的四季（水文地貌規劃 H8）：12 個月的氣溫、降水、流量比例，與積雪、結冰的月份。程序化的星球回傳空清單。
     /// </summary>
-    /// <param name="request">粗格編號（最多 <see cref="SubTileService.MaxCellsPerRequest"/> 個）。</param>
+    /// <param name="request">粗格編號（最多 <see cref="CellSeasonsService.MaxCellsPerRequest"/> 個）。</param>
     /// <param name="ct">取消權杖。</param>
     /// <returns>每個粗格的四季。</returns>
     /// <response code="200">每個粗格的四季。</response>
@@ -64,8 +67,8 @@ public class TilesController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<CellSeasonsDto>>> GetCellSeasons([FromBody] CellSeasonsRequest request, CancellationToken ct)
     {
         if (request.CellIds is not { Length: > 0 } ids) return BadRequest("要給粗格編號。");
-        if (ids.Length > SubTileService.MaxCellsPerRequest) return BadRequest($"一次最多 {SubTileService.MaxCellsPerRequest} 個粗格。");
-        return Ok(await _subTiles.GetSeasonsAsync(ids, ct));
+        if (ids.Length > CellSeasonsService.MaxCellsPerRequest) return BadRequest($"一次最多 {CellSeasonsService.MaxCellsPerRequest} 個粗格。");
+        return Ok(await _seasons.GetSeasonsAsync(ids, ct));
     }
 
     /// <summary>查詢指定經緯度附近最近的地塊。</summary>
