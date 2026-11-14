@@ -2,100 +2,6 @@ using Planet.Simulation;
 
 namespace Planet.Service;
 
-/// <summary>模擬目前的概況，給前端顯示與除錯用。</summary>
-/// <param name="Frequency">粗網格的細分頻率。</param>
-/// <param name="CellCount">格數。</param>
-/// <param name="PlanetRadiusMeters">星球半徑（公尺），跟正式的2,000萬格星球是同一顆。</param>
-/// <param name="AverageCellEdgeMeters">粗網格每格的大致邊長（公尺），方便對照「一格代表多大範圍」。</param>
-/// <param name="ElapsedYears">模擬已經跑了多少年。</param>
-/// <param name="StepCount">已經跑了幾步。</param>
-/// <param name="YearsPerStep">每一步代表多少年。</param>
-/// <param name="PlateCount">板塊數量。</param>
-/// <param name="PlumeCount">目前活躍的地函熱柱數量。</param>
-/// <param name="LandFraction">
-/// 陸地佔全球表面的比例（0~1）。水量守恆、海平面由水量反解（見 <c>SimulationEngine.SolveSeaLevel</c>），
-/// 所以可以跟地球的 0.29 對照。
-/// </param>
-/// <param name="TextureWidth">模擬貼圖的寬度（像素）。前端**不要寫死**，一律從這裡拿。</param>
-/// <param name="TextureHeight">模擬貼圖的高度（像素）。</param>
-/// <param name="Continents">最近一次檢查的陸地配置（停止條件的判斷依據），還沒檢查過是 null。</param>
-/// <param name="StoppedByCondition">這次推進是不是因為停止條件成立而提早停下。前端看到 true 就要停止播放。</param>
-/// <param name="AutoSaveName">停止條件成立時自動存檔的名稱。</param>
-public record SimulationStatusDto(
-    int Frequency,
-    int CellCount,
-    double PlanetRadiusMeters,
-    double AverageCellEdgeMeters,
-    double ElapsedYears,
-    long StepCount,
-    double YearsPerStep,
-    int PlateCount,
-    int PlumeCount,
-    double LandFraction,
-    int TextureWidth,
-    int TextureHeight,
-    ContinentConfigurationReport? Continents = null,
-    bool StoppedByCondition = false,
-    string? AutoSaveName = null);
-
-/// <summary>固定儀表（見 <see cref="SimulationService.GetDashboardAsync"/>）。</summary>
-/// <param name="Status">概況。</param>
-/// <param name="Continents">陸地配置（現算的，不是停止條件上次檢查的快取）。</param>
-/// <param name="Ocean">海洋連通性。</param>
-/// <param name="Hypsometry">高度分布（相對海平面，每 100 公尺一格）。</param>
-/// <param name="LandMasses">陸塊大小分布。</param>
-/// <param name="Mechanisms">各機制上一步的觸發量。</param>
-/// <param name="Timings">每步耗時分項（平均毫秒）。</param>
-/// <param name="TimingSteps">耗時累積了幾步。</param>
-/// <param name="StateHash">整個狀態的雜湊，跨行程重現檢查用。</param>
-public record SimulationDashboardDto(
-    SimulationStatusDto Status,
-    ContinentConfigurationReport Continents,
-    OceanTopologyReport Ocean,
-    IReadOnlyList<HypsometryBin> Hypsometry,
-    IReadOnlyList<LandMassBucket> LandMasses,
-    MechanismCounts Mechanisms,
-    IReadOnlyList<StepTimingEntry> Timings,
-    int TimingSteps,
-    string StateHash);
-
-/// <summary>存檔是怎麼來的。以字串序列化（前端與說明檔都看名稱，不看數字）。</summary>
-[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<SnapshotKind>))]
-public enum SnapshotKind
-{
-    /// <summary>使用者手動存的（含分岔時另存的新名字）。</summary>
-    Manual,
-
-    /// <summary>跑的時候每 <see cref="SimulationService.CheckpointIntervalYears"/> 自動存的檢查點，只留最近幾個。</summary>
-    Checkpoint,
-
-    /// <summary>停止條件成立時自動存的。</summary>
-    StopCondition,
-}
-
-/// <summary>一個存檔的概況。</summary>
-/// <param name="Name">存檔名稱（不含副檔名）。</param>
-/// <param name="SizeBytes">檔案大小（位元組）。</param>
-/// <param name="SavedAtUtc">存檔時間（UTC）。</param>
-/// <param name="Kind">存檔怎麼來的（舊版沒有說明檔的存檔是 null）。</param>
-/// <param name="StepCount">存檔時的步數（舊版存檔是 null）。</param>
-/// <param name="ElapsedYears">存檔時的年代（年，舊版存檔是 null）。</param>
-/// <param name="Compatible">這個版本讀不讀得回來（舊格式、v1 的存檔是 false，列出來但不能載入或放大）。</param>
-public record SnapshotInfo(
-    string Name,
-    long SizeBytes,
-    DateTime SavedAtUtc,
-    SnapshotKind? Kind = null,
-    long? StepCount = null,
-    double? ElapsedYears = null,
-    bool Compatible = true);
-
-/// <summary>存檔旁邊的說明檔（<c>名稱.json</c>）：列表不必把幾十 MB 的存檔讀進來就知道步數與年代。</summary>
-/// <param name="Kind">存檔怎麼來的。</param>
-/// <param name="StepCount">步數。</param>
-/// <param name="ElapsedYears">年代（年）。</param>
-internal record SnapshotSidecar(SnapshotKind Kind, long StepCount, double ElapsedYears);
-
 /// <summary>
 /// 地質演化模擬的持有者（Singleton）。狀態常駐記憶體，**每步不寫資料庫**——
 /// 模擬是即時的，每步落地會被 I/O 淹沒（見 docs/geological-simulation-plan.md）。
@@ -135,6 +41,8 @@ public class SimulationService
 
     /// <summary>星球記錄服務。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>存檔的檔案存取（名稱檢查、寫入、列表、刪除都在那裡）。</summary>
+    private readonly SnapshotStore _snapshots;
     /// <summary>保護模擬狀態的鎖：引擎與其下的模型都不是執行緒安全的，所有取用都要在這把鎖裡。</summary>
     private readonly Lock _lock = new();
 
@@ -151,9 +59,11 @@ public class SimulationService
     /// 所以半徑要向這裡拿，不能用 <c>GoldbergPlanetGenerator</c> 在粗頻率下自己算的那個
     /// （那是「六角形邊長固定1公里」反推的，n=150 只會得到196公里的小星球）。
     /// </param>
-    public SimulationService(PlanetMetadataService metadataService)
+    /// <param name="snapshots">存檔的檔案存取。</param>
+    public SimulationService(PlanetMetadataService metadataService, SnapshotStore snapshots)
     {
         _metadataService = metadataService;
+        _snapshots = snapshots;
     }
 
     /// <summary>取得目前的模擬概況。</summary>
@@ -252,7 +162,7 @@ public class SimulationService
             if (checkpoint)
             {
                 await SaveAsync($"cp-{_runTag}-{elapsed / 1e6:000}myr", ct, SnapshotKind.Checkpoint);
-                PruneCheckpoints();
+                _snapshots.PruneCheckpoints(MaxCheckpoints);
             }
         }
 
@@ -306,65 +216,24 @@ public class SimulationService
         }
     }
 
-    /// <summary>
-    /// 存檔放在服務執行檔旁邊的 <c>snapshots</c> 目錄。
-    ///
-    /// 不做成設定值：這是「不要因為服務重啟就丟掉幾千步的星球」用的，
-    /// 放在部署目錄旁邊最不容易在重新 publish 時被清掉（publish 不會刪除不認識的子目錄）。
-    /// </summary>
-    private static string SnapshotDirectory =>
-        Path.Combine(AppContext.BaseDirectory, "snapshots");
-
-    /// <summary>
-    /// 檢查存檔名稱。**只允許英數、底線與連字號**。
-    ///
-    /// 這是路徑穿越的防線：名稱會直接接到目錄後面，
-    /// <c>..\..\appsettings.Production.json</c> 這種名稱可以寫到部署目錄外面去。
-    /// 用白名單而不是黑名單——黑名單漏一個就破功。
-    /// </summary>
-    /// <param name="name">存檔名稱。</param>
-    /// <returns>完整路徑。</returns>
-    /// <exception cref="ArgumentException">名稱不合規。</exception>
-    private static string SnapshotPath(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > 64
-            || !name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-'))
-        {
-            throw new ArgumentException(
-                "存檔名稱只能用英數、底線與連字號，長度1~64。", nameof(name));
-        }
-
-        return Path.Combine(SnapshotDirectory, name + ".planet");
-    }
-
-    /// <summary>把目前的模擬狀態存成檔案（旁邊寫一份說明檔，見 <see cref="SnapshotSidecar"/>）。</summary>
+    /// <summary>把目前的模擬狀態存成檔案（旁邊寫一份說明檔）。</summary>
     /// <param name="name">存檔名稱（英數、底線、連字號）。</param>
     /// <param name="ct">取消權杖。</param>
     /// <param name="kind">存檔怎麼來的。</param>
     /// <returns>存檔的位元組數。</returns>
+    /// <exception cref="ArgumentException">名稱不合規。</exception>
     public async Task<long> SaveAsync(string name, CancellationToken ct = default, SnapshotKind kind = SnapshotKind.Manual)
     {
-        var path = SnapshotPath(name);
+        _snapshots.PathOf(name); // 名稱不合規的話，在建引擎之前就擋掉
         var (_, engine, _) = await EnsureInitializedAsync(ct);
 
-        Directory.CreateDirectory(SnapshotDirectory);
-
-        // 先寫到暫存檔再換過去：中途失敗的話原本的存檔還在，
-        // 不會變成「有一個讀不回來的半截檔案」。
-        var temporary = path + ".tmp";
+        // 整個寫入都在引擎的鎖裡：寫到一半引擎被推進的話，存下來的是前後不一致的狀態
         lock (_lock)
         {
-            using (var stream = File.Create(temporary))
-            {
-                SimulationSnapshot.Write(engine, stream);
-            }
-
-            File.Move(temporary, path, overwrite: true);
-            File.WriteAllText(SidecarPath(path), System.Text.Json.JsonSerializer.Serialize(
-                new SnapshotSidecar(kind, engine.State.StepCount, engine.State.ElapsedYears)));
+            return _snapshots.Write(
+                name, kind, engine.State.StepCount, engine.State.ElapsedYears,
+                stream => SimulationSnapshot.Write(engine, stream));
         }
-
-        return new FileInfo(path).Length;
     }
 
     /// <summary>
@@ -376,38 +245,31 @@ public class SimulationService
     /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
     public async Task<(SimulationGrid Grid, SimulationEngine Engine)> LoadDetachedAsync(string name, CancellationToken ct = default)
     {
-        var path = SnapshotPath(name);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException($"找不到存檔「{name}」。", path);
-        }
+        await using var stream = _snapshots.OpenRead(name);
 
         // 網格建好之後不會再變（鄰接表、取樣用的桶都是唯讀或執行緒安全的），可以跟線上的模擬共用
         var (grid, _, _) = await EnsureInitializedAsync(ct);
         var engine = CreateEngine(grid);
-        await using var stream = File.OpenRead(path);
         SimulationSnapshot.Restore(engine, stream);
         return (grid, engine);
     }
 
-    /// <summary>從檔案把模擬狀態讀回來，覆蓋目前的內容。</summary>
+    /// <summary>
+    /// 從檔案把模擬狀態讀回來，取代目前的內容。
+    ///
+    /// 讀進一份**新建的**引擎、成功之後才換上去：直接讀進線上的引擎的話，存檔讀到一半失敗
+    /// （檔案壞掉、格式不合）會留下一個半新半舊的狀態，而且沒有東西可以還原。
+    /// </summary>
     /// <param name="name">存檔名稱。</param>
     /// <param name="ct">取消權杖。</param>
     /// <returns>讀回來之後的概況。</returns>
     /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
     public async Task<SimulationStatusDto> LoadAsync(string name, CancellationToken ct = default)
     {
-        var path = SnapshotPath(name);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException($"找不到存檔「{name}」。", path);
-        }
-
-        var (_, engine, _) = await EnsureInitializedAsync(ct);
+        var (_, restored) = await LoadDetachedAsync(name, ct);
         lock (_lock)
         {
-            using var stream = File.OpenRead(path);
-            SimulationSnapshot.Restore(engine, stream);
+            _engine = restored;
             _runTag = NewRunTag();
         }
 
@@ -416,81 +278,12 @@ public class SimulationService
 
     /// <summary>列出所有存檔。</summary>
     /// <returns>每個存檔的名稱、大小與存檔時間。</returns>
-    public IReadOnlyList<SnapshotInfo> ListSnapshots()
-    {
-        if (!Directory.Exists(SnapshotDirectory)) return [];
-
-        return Directory.EnumerateFiles(SnapshotDirectory, "*.planet")
-            .Select(p => new FileInfo(p))
-            .OrderByDescending(f => f.LastWriteTimeUtc)
-            .Select(Describe)
-            .ToList();
-    }
-
-    /// <summary>讀出一個存檔的摘要：格式是否相容（正在寫入時當成不相容）、說明檔記錄的步數與年代。</summary>
-    /// <param name="file">存檔檔案。</param>
-    /// <returns>存檔摘要。</returns>
-    private static SnapshotInfo Describe(FileInfo file)
-    {
-        bool compatible;
-        try
-        {
-            using var stream = file.OpenRead();
-            compatible = SimulationSnapshot.IsCurrentFormat(stream);
-        }
-        catch (IOException)
-        {
-            compatible = false; // 正在寫入（另一個請求在存檔）
-        }
-
-        SnapshotSidecar? sidecar = null;
-        var sidecarPath = SidecarPath(file.FullName);
-        if (File.Exists(sidecarPath))
-        {
-            try
-            {
-                sidecar = System.Text.Json.JsonSerializer.Deserialize<SnapshotSidecar>(File.ReadAllText(sidecarPath));
-            }
-            catch (System.Text.Json.JsonException)
-            {
-                // 說明檔壞了就當成沒有，存檔本身還是列得出來
-            }
-        }
-
-        return new SnapshotInfo(
-            Path.GetFileNameWithoutExtension(file.Name), file.Length, file.LastWriteTimeUtc,
-            sidecar?.Kind, sidecar?.StepCount, sidecar?.ElapsedYears, compatible);
-    }
-
-    /// <summary>存檔的說明檔路徑（同名、副檔名 .json）。</summary>
-    /// <param name="snapshotPath">存檔路徑。</param>
-    /// <returns>說明檔路徑。</returns>
-    private static string SidecarPath(string snapshotPath) => Path.ChangeExtension(snapshotPath, ".json");
+    public IReadOnlyList<SnapshotInfo> ListSnapshots() => _snapshots.List();
 
     /// <summary>刪除一個存檔（連同說明檔）。</summary>
     /// <param name="name">存檔名稱。</param>
     /// <exception cref="FileNotFoundException">找不到這個存檔。</exception>
-    public void DeleteSnapshot(string name)
-    {
-        var path = SnapshotPath(name);
-        if (!File.Exists(path)) throw new FileNotFoundException($"找不到存檔「{name}」。", path);
-        lock (_lock)
-        {
-            File.Delete(path);
-            File.Delete(SidecarPath(path));
-        }
-    }
-
-    /// <summary>檢查點超過 <see cref="MaxCheckpoints"/> 個就刪最舊的（只看說明檔標成檢查點的，手動存檔不動）。</summary>
-    private void PruneCheckpoints()
-    {
-        var stale = ListSnapshots()
-            .Where(s => s.Kind == SnapshotKind.Checkpoint)
-            .OrderByDescending(s => s.SavedAtUtc)
-            .Skip(MaxCheckpoints)
-            .ToList();
-        foreach (var snapshot in stale) DeleteSnapshot(snapshot.Name);
-    }
+    public void DeleteSnapshot(string name) => _snapshots.Delete(name);
 
     /// <summary>
     /// 把模擬重設回大陸劇本的起點。網格與貼圖對應表沿用，**引擎整個重建**：

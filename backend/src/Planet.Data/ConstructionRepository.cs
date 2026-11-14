@@ -17,8 +17,9 @@ public class ConstructionRepository : IConstructionRepository
     public async Task<IReadOnlyList<Construction>> GetByParentsAsync(IReadOnlyCollection<long> parentTileIds, CancellationToken ct = default)
     {
         if (parentTileIds.Count == 0) return [];
+        // EF.Parameter：同 TileRepository.GetByIdsAsync——一個編號一個參數的話，空表也要查 550 毫秒
         return await _db.Constructions.AsNoTracking()
-            .Where(c => parentTileIds.Contains(c.ParentTileId))
+            .Where(c => EF.Parameter(parentTileIds).Contains(c.ParentTileId))
             .ToListAsync(ct);
     }
 

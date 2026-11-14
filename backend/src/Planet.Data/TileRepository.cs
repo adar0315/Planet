@@ -292,8 +292,11 @@ public class TileRepository : ITileRepository
     {
         if (tileIds.Count == 0) return [];
 
+        // EF.Parameter：整批編號當成一個 JSON 參數（OPENJSON）。EF Core 10 預設把集合展開成一個編號一個參數，
+        // 近看細分一次 1,900 個地塊就是 1,900 個參數，實測這個查詢要 370 毫秒（改完 15~50 毫秒），
+        // 而且超過 SQL Server 的 2,100 個參數上限就會失敗（細分一次最多 2,500 個地塊）。
         var ids = tileIds.ToArray();
-        return await _db.Tiles.AsNoTracking().Where(t => ids.Contains(t.TileId)).ToListAsync(ct);
+        return await _db.Tiles.AsNoTracking().Where(t => EF.Parameter(ids).Contains(t.TileId)).ToListAsync(ct);
     }
 
     /// <inheritdoc />
