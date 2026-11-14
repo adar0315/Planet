@@ -46,6 +46,8 @@ public class PlanetSeeder : IHostedService
     private readonly SeedingStatus _status;
     /// <summary>星球記錄服務。</summary>
     private readonly PlanetMetadataService _metadataService;
+    /// <summary>星球總覽貼圖的產生器（啟動後預先算好）。</summary>
+    private readonly OverviewTextureGenerator _overviewTextureGenerator;
     /// <summary>記錄器。</summary>
     private readonly ILogger<PlanetSeeder> _logger;
 
@@ -62,6 +64,7 @@ public class PlanetSeeder : IHostedService
         TerrainOptionsStore optionsStore,
         SeedingStatus status,
         PlanetMetadataService metadataService,
+        OverviewTextureGenerator overviewTextureGenerator,
         ILogger<PlanetSeeder> logger)
     {
         _scopeFactory = scopeFactory;
@@ -69,6 +72,7 @@ public class PlanetSeeder : IHostedService
         _optionsStore = optionsStore;
         _status = status;
         _metadataService = metadataService;
+        _overviewTextureGenerator = overviewTextureGenerator;
         _logger = logger;
     }
 
@@ -97,6 +101,7 @@ public class PlanetSeeder : IHostedService
             {
                 await SeedAsync(ct);
                 _status.ErrorMessage = null;
+                WarmUpTerrainSource();
                 return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -124,6 +129,32 @@ public class PlanetSeeder : IHostedService
             var next = delay.TotalSeconds * 2;
             delay = TimeSpan.FromSeconds(Math.Min(next, MaxRetryDelay.TotalSeconds));
         }
+    }
+
+    /// <summary>
+    /// 在背景先把地形來源載好（模擬放大來的星球要十幾秒），再把總覽貼圖與陸海遮罩算好：
+    /// 不然是第一個拉近鏡頭、打開總覽的玩家等。不等它完成——失敗只記錄，取用時會重試
+    /// （見 <see cref="PlanetMetadataService.GetAppliedTerrainSourceAsync"/>）。
+    /// </summary>
+    private void WarmUpTerrainSource()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _metadataService.GetAppliedTerrainSourceAsync(_shutdown.Token);
+                await _overviewTextureGenerator.GetRgbaBytesAsync(_shutdown.Token);
+                await _overviewTextureGenerator.GetWaterMaskAsync(_shutdown.Token);
+            }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+            {
+                // 服務正在關閉
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "預先載入地形來源與總覽貼圖失敗，第一次取用時會重試。");
+            }
+        }, CancellationToken.None);
     }
 
     /// <summary>資料庫已有資料就略過，否則在背景開始生成整個星球。</summary>

@@ -56,6 +56,7 @@ builder.Services.AddSingleton<OverviewTextureGenerator>();
 builder.Services.AddSingleton<SeedingStatus>();
 builder.Services.AddSingleton<TerrainOptionsStore>();
 // 「實際產生目前資料的參數」與上面的「下次要用的參數」是兩件不同的事，刻意分成兩個服務。
+builder.Services.AddSingleton<SimulationGridCache>();
 builder.Services.AddSingleton<PlanetMetadataService>();
 builder.Services.AddSingleton<SnapshotStore>();
 builder.Services.AddSingleton<SimulationService>();

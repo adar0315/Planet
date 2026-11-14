@@ -131,12 +131,20 @@ public class OverviewTextureGenerator
         return styles.ToDictionary(s => s.Terrain, s => ParseHexColor(s.ColorDay));
     }
 
-    /// <summary>解析 <c>#rrggbb</c> 色碼。</summary>
+    /// <summary>
+    /// 解析 <c>#rrggbb</c> 色碼。格式不對（資料庫被手動改壞）時用 <see cref="FallbackColor"/>：
+    /// 一個壞掉的色碼不該讓整張總覽貼圖 500，洋紅色一眼就看得出是哪種地形出了問題。
+    /// </summary>
     /// <param name="hex">色碼字串（可有可無前置的 #）。</param>
     /// <returns>RGB 三個分量。</returns>
-    private static (byte R, byte G, byte B) ParseHexColor(string hex)
+    private static (byte R, byte G, byte B) ParseHexColor(string? hex)
     {
-        var value = Convert.ToInt32(hex.TrimStart('#'), 16);
+        var digits = hex?.TrimStart('#');
+        if (digits is not { Length: 6 }
+            || !int.TryParse(digits, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return FallbackColor;
+        }
         return ((byte)((value >> 16) & 0xFF), (byte)((value >> 8) & 0xFF), (byte)(value & 0xFF));
     }
 

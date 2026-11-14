@@ -28,12 +28,18 @@ public class PlanetMetadataService
     /// <summary>快取的星球記錄；<see langword="null"/> 表示尚未載入。</summary>
     private PlanetMetadata? _cached;
     /// <summary>依星球記錄建立的地形來源快取（程序化產生器或模擬取樣器）。</summary>
-    private ITerrainGenerator? _cachedSource;
+    private Task<ITerrainGenerator>? _sourceTask;
+    /// <summary>模擬粗網格的共用快取（跟線上的模擬共用同一份網格）。</summary>
+    private readonly SimulationGridCache _grids;
 
     /// <summary>建立星球記錄服務。</summary>
-    public PlanetMetadataService(IServiceScopeFactory scopeFactory, ILogger<PlanetMetadataService> logger)
+    /// <param name="scopeFactory">建立 scoped 資料庫存取物件用。</param>
+    /// <param name="grids">模擬粗網格的共用快取。</param>
+    /// <param name="logger">記錄器。</param>
+    public PlanetMetadataService(IServiceScopeFactory scopeFactory, SimulationGridCache grids, ILogger<PlanetMetadataService> logger)
     {
         _scopeFactory = scopeFactory;
+        _grids = grids;
         _logger = logger;
     }
 
@@ -84,30 +90,70 @@ public class PlanetMetadataService
     /// 地質模擬放大來的星球從 <see cref="PlanetCell"/> 重建 <see cref="SimulatedTerrainSampler"/>
     /// （拿程序化參數去畫，會畫出一顆完全不同的星球）。
     /// </summary>
-    /// <param name="ct">取消權杖。</param>
-    public async Task<ITerrainGenerator> GetAppliedTerrainSourceAsync(CancellationToken ct = default)
+    /// <remarks>
+    /// 模擬放大來的星球要讀 22.5 萬個粗格、建取樣器，要十幾秒。**只載入一次、大家等同一份**（2026-11-14）：
+    /// 原本是每個請求自己載、載完才寫進快取，服務剛啟動時同時進來的請求各載一份、互相拖慢；
+    /// 而且載入綁在請求的取消權杖上，請求在 Nginx 那邊 60 秒逾時被取消，載入就整個作廢，
+    /// 下一個請求又從頭來（實測啟動後連續兩個請求都 504）。現在載入不跟著任何一個請求取消，
+    /// <paramref name="ct"/> 只取消「等」這件事。載入失敗的話下一次呼叫會重試。
+    /// </remarks>
+    /// <param name="ct">取消權杖（只取消等待，不取消載入）。</param>
+    public Task<ITerrainGenerator> GetAppliedTerrainSourceAsync(CancellationToken ct = default)
     {
-        if (_cachedSource is not null) return _cachedSource;
-
-        var metadata = await GetAsync(ct);
-        ITerrainGenerator source;
-        if (metadata?.SimulationFrequency is { } frequency)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var tiles = scope.ServiceProvider.GetRequiredService<ITileRepository>();
-            var cells = await tiles.GetAllPlanetCellsAsync(ct);
-            source = new SimulatedTerrainSampler(SimulationGrid.Build(metadata.RadiusMeters, frequency), cells);
-        }
-        else
-        {
-            source = new TerrainGenerator(await GetAppliedTerrainOptionsAsync(ct));
-        }
-
+        Task<ITerrainGenerator> task;
         lock (_lock)
         {
-            _cachedSource ??= source;
-            return _cachedSource;
+            // Task.Run：載入的同步開頭不要在鎖裡跑
+            task = _sourceTask ??= Task.Run(LoadTerrainSourceAsync, CancellationToken.None);
         }
+        return task.WaitAsync(ct);
+    }
+
+    /// <summary>實際載入地形來源（見 <see cref="GetAppliedTerrainSourceAsync"/>）。失敗時清掉進行中的工作，讓下一次重試。</summary>
+    private async Task<ITerrainGenerator> LoadTerrainSourceAsync()
+    {
+        try
+        {
+            return await BuildTerrainSourceAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "載入地形來源失敗，下一次取用時會重試。");
+            lock (_lock)
+            {
+                _sourceTask = null;
+            }
+            throw;
+        }
+    }
+
+    /// <summary>依星球記錄建出地形來源。</summary>
+    private async Task<ITerrainGenerator> BuildTerrainSourceAsync()
+    {
+        var ct = CancellationToken.None;
+        var metadata = await GetAsync(ct);
+        if (metadata?.SimulationFrequency is not { } frequency)
+            return new TerrainGenerator(await GetAppliedTerrainOptionsAsync(ct));
+
+        // 分段計時：這是服務啟動後最久的一件事，哪一段變慢要看得出來
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        IReadOnlyList<PlanetCell> cells;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            cells = await scope.ServiceProvider.GetRequiredService<ITileRepository>().GetAllPlanetCellsAsync(ct);
+        }
+        var loadMs = stopwatch.ElapsedMilliseconds;
+
+        stopwatch.Restart();
+        var grid = _grids.Get(metadata.RadiusMeters, frequency);
+        var gridMs = stopwatch.ElapsedMilliseconds;
+
+        stopwatch.Restart();
+        var source = new SimulatedTerrainSampler(grid, cells);
+        _logger.LogInformation(
+            "地形來源載入完成：讀 {Cells} 個粗格 {LoadMs} 毫秒、建網格 {GridMs} 毫秒、建取樣器 {SamplerMs} 毫秒。",
+            cells.Count, loadMs, gridMs, stopwatch.ElapsedMilliseconds);
+        return source;
     }
 
     /// <summary>星球生成完成後記錄既成事實。</summary>
@@ -146,7 +192,7 @@ public class PlanetMetadataService
         lock (_lock)
         {
             _cached = metadata;
-            _cachedSource = null; // 地形換了，取樣來源要依新記錄重建
+            _sourceTask = null; // 地形換了，取樣來源要依新記錄重建
         }
     }
 }

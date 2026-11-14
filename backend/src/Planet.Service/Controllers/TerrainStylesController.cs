@@ -43,12 +43,20 @@ public class TerrainStylesController : ControllerBase
     /// <param name="ct">取消權杖。</param>
     /// <returns>更新後的顯示樣式；找不到指定地形類型回傳404。</returns>
     /// <response code="200">更新後的顯示樣式。</response>
+    /// <response code="400">名稱是空的，或顏色不是 <c>#rrggbb</c> 格式。</response>
     /// <response code="404">找不到指定的地形類型。</response>
     [HttpPut("{terrain}")]
     [ProducesResponseType<TerrainStyleDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TerrainStyleDto>> Update(TerrainType terrain, [FromBody] TerrainStyleUpdateRequest style, CancellationToken ct)
     {
+        // 壞掉的色碼存進去之後，前端每一格、後端的總覽貼圖都會拿到它：在入口擋掉
+        if (string.IsNullOrWhiteSpace(style.NameEn) || string.IsNullOrWhiteSpace(style.NameZh))
+            return BadRequest("名稱不能是空的。");
+        string?[] colors = [style.ColorDawn, style.ColorDay, style.ColorDusk, style.ColorNight];
+        if (!colors.All(IsHexColor)) return BadRequest("顏色要是 #rrggbb 格式（例如 #3a7f2c）。");
+
         var entity = new TerrainStyle
         {
             Terrain = terrain,
@@ -66,6 +74,11 @@ public class TerrainStylesController : ControllerBase
         _overviewTextureGenerator.Invalidate(); // 星球總覽貼圖的顏色快取跟這筆新樣式對不上了，清掉讓下次請求重算。
         return Ok(ToDto(entity));
     }
+
+    /// <summary>是不是 <c>#rrggbb</c> 格式的色碼。</summary>
+    /// <param name="color">色碼字串。</param>
+    private static bool IsHexColor(string? color) =>
+        color is { Length: 7 } && color[0] == '#' && color.AsSpan(1).IndexOfAnyExcept("0123456789abcdefABCDEF") < 0;
 
     /// <summary>把地形樣式實體轉成 API 回應的 DTO。</summary>
     /// <param name="s">地形樣式實體。</param>

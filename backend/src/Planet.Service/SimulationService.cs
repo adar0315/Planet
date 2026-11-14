@@ -43,6 +43,8 @@ public class SimulationService
     private readonly PlanetMetadataService _metadataService;
     /// <summary>存檔的檔案存取（名稱檢查、寫入、列表、刪除都在那裡）。</summary>
     private readonly SnapshotStore _snapshots;
+    /// <summary>模擬粗網格的共用快取（跟地形來源共用同一份網格）。</summary>
+    private readonly SimulationGridCache _grids;
     /// <summary>保護模擬狀態的鎖：引擎與其下的模型都不是執行緒安全的，所有取用都要在這把鎖裡。</summary>
     private readonly Lock _lock = new();
 
@@ -60,8 +62,10 @@ public class SimulationService
     /// （那是「六角形邊長固定1公里」反推的，n=150 只會得到196公里的小星球）。
     /// </param>
     /// <param name="snapshots">存檔的檔案存取。</param>
-    public SimulationService(PlanetMetadataService metadataService, SnapshotStore snapshots)
+    /// <param name="grids">模擬粗網格的共用快取。</param>
+    public SimulationService(PlanetMetadataService metadataService, SnapshotStore snapshots, SimulationGridCache grids)
     {
+        _grids = grids;
         _metadataService = metadataService;
         _snapshots = snapshots;
     }
@@ -315,12 +319,13 @@ public class SimulationService
                     "找不到星球中繼資料，無法得知星球半徑。模擬的粗網格必須代表跟正式星球同一顆星球，" +
                     "所以半徑一定要從 PlanetMetadata 來，不能用生成器在粗頻率下自己算的值。");
 
+            // 網格在鎖外面拿：建網格要一到幾秒，不要讓其他請求卡在這把鎖上；共用快取自己會擋重複建
+            var grid = _grids.Get(radius);
             lock (_lock)
             {
                 // 雙重檢查：等半徑的期間可能已經有別的請求建好了
                 if (_grid is null)
                 {
-                    var grid = SimulationGrid.Build(radius);
                     _engine = CreateEngine(grid);
                     _renderer = new SimulationFieldRenderer(grid);
                     _grid = grid; // 最後才指派：其他執行緒是靠這個欄位判斷有沒有初始化完成
