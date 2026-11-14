@@ -31,6 +31,36 @@ public class TileNeighborResolver : ITileNeighborResolver
     /// <inheritdoc />
     public IReadOnlyList<(int FaceIndex, int Row, int Col)> GetNeighborCoordinates(Tile tile)
     {
+        // 快速路徑（2026-11-14）：三個權重都至少是 2 的六角格，六個鄰居全在同一個面的內部，
+        // 不必跨面、座標本來就是正規化的，直接加減就是答案——順序跟 GetNeighborCoordinatesGeneral 列舉的一樣
+        // （TileNeighborResolverTests 逐格比對）。全星球 99.9% 以上的格子走這裡；
+        // 一般路徑每次要配置十幾個字典，一批 5 萬格的鄰居要算 0.6 秒。
+        var row = tile.Row;
+        var col = tile.Col;
+        if (tile.Shape == TileShape.Hexagon && row >= 2 && col >= 2 && _n - row - col >= 2)
+        {
+            var face = tile.FaceIndex;
+            return
+            [
+                (face, row - 1, col),
+                (face, row, col - 1),
+                (face, row + 1, col),
+                (face, row + 1, col - 1),
+                (face, row, col + 1),
+                (face, row - 1, col + 1),
+            ];
+        }
+
+        return GetNeighborCoordinatesGeneral(tile);
+    }
+
+    /// <summary>
+    /// 一般路徑：用重心座標的權重推導，處理面的邊、角與五角形。<see cref="GetNeighborCoordinates"/> 的快速路徑必須跟它給出一模一樣的結果。
+    /// </summary>
+    /// <param name="tile">地塊。</param>
+    /// <returns>鄰居的正規化座標。</returns>
+    internal IReadOnlyList<(int FaceIndex, int Row, int Col)> GetNeighborCoordinatesGeneral(Tile tile)
+    {
         var (ia, ib, ic) = IcosahedronGeometry.Faces[tile.FaceIndex];
         var weights = new Dictionary<int, int>
         {

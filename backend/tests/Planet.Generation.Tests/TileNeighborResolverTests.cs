@@ -70,6 +70,27 @@ public class TileNeighborResolverTests
         }
     }
 
+    /// <summary>
+    /// 快速路徑（面內部的六角格直接加減座標）必須跟一般路徑給出一模一樣的鄰居，**順序也一樣**——
+    /// 前端靠順序對應方位，小格的鄰居編號也照這個順序。
+    /// </summary>
+    [Theory]
+    [InlineData(6)]
+    [InlineData(9)]
+    [InlineData(16)]
+    public void GetNeighborCoordinates_FastPathMatchesGeneralPath(int n)
+    {
+        var resolver = new TileNeighborResolver(n);
+        var tiles = new GoldbergPlanetGenerator(n, 42).GenerateTiles().ToList();
+        var interior = 0;
+        foreach (var tile in tiles)
+        {
+            Assert.Equal(resolver.GetNeighborCoordinatesGeneral(tile), resolver.GetNeighborCoordinates(tile));
+            if (tile.Shape == TileShape.Hexagon && tile.Row >= 2 && tile.Col >= 2 && n - tile.Row - tile.Col >= 2) interior++;
+        }
+        Assert.True(interior > 0, "這個頻率下沒有任何格子走快速路徑，測不到東西");
+    }
+
     [Fact]
     public void GetNeighborCoordinates_TotalDegreeMatchesGoldbergEdgeCount()
     {

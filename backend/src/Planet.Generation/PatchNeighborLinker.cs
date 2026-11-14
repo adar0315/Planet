@@ -36,7 +36,8 @@ public static class PatchNeighborLinker
         }
 
         var result = new long?[patch.Count][];
-        for (var i = 0; i < patch.Count; i++)
+        // 每格互相獨立：鄰居推導是純函式，字典在這之後只讀，可以平行
+        Parallel.For(0, patch.Count, i =>
         {
             var coordinates = resolver.GetNeighborCoordinates(patch[i]);
             var neighbors = new long?[coordinates.Count];
@@ -45,7 +46,7 @@ public static class PatchNeighborLinker
                 neighbors[k] = idByCoordinate.TryGetValue(coordinates[k], out var id) ? id : null;
             }
             result[i] = neighbors;
-        }
+        });
 
         return result;
     }
