@@ -354,6 +354,7 @@ public sealed class SimulationEngine
         // 原本回寫寫在 PlateTectonics.Step 結尾，排在它後面的火山與侵蝕就會被下一次
         // Rasterize 靜靜蓋掉——n=150 大約每2步取樣一次，等於一半的產出憑空消失（2026-09-06）。
         _tectonics.WriteGridBackToMarkers(State);
+        AfterWriteBackForTests?.Invoke(State);
         Timings.Mark("回寫標記");
 
         ApplyIsostasyAndFillWater();
@@ -426,6 +427,12 @@ public sealed class SimulationEngine
         return (climate, SeasonalHydrology.Solve(Grid, State, _hydrology, climate));
     }
 
+    /// <summary>
+    /// 測試用：每一步回寫標記（<see cref="PlateTectonics.WriteGridBackToMarkers"/>）之後立刻呼叫，
+    /// 讓測試拍下那一刻的地殼，確認之後沒有任何東西再改它（CLAUDE.md 3.9）。
+    /// </summary>
+    internal Action<SimulationState>? AfterWriteBackForTests { get; set; }
+
     /// <summary>每步耗時分項（累積平均）。見 <see cref="StepTimings"/>。</summary>
     public StepTimings Timings { get; } = new();
 
@@ -453,7 +460,10 @@ public sealed class SimulationEngine
     /// </summary>
     private void ApplyIsostasyAndFillWater()
     {
-        var deltaMyr = (float)(YearsPerStep / 1_000_000.0);
+        // 老化只在標記法做。板塊座標系的年齡在 PlateFrameCrust.Step 裡長，這裡在回寫之後，
+        // 再加一次不會留下（下一步會被讀回座標系的值），卻會先漏進下一步開頭的邊界分類與岩石圈浮力
+        // ——那兩者在座標系讀回之前就用了 State 的年齡（2026-11-14，Step_NothingChangesCrustAfterWriteBack）。
+        var deltaMyr = _crustTransport == CrustTransport.PlateFrame ? 0f : (float)(YearsPerStep / 1_000_000.0);
         Parallel.For(0, State.CellCount, cell =>
         {
             State.CrustAge[cell] += deltaMyr;

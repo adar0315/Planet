@@ -138,6 +138,49 @@ public class PlateFrameTransportTests
     }
 
     [Fact]
+    public void Step_NothingChangesCrustAfterWriteBack()
+    {
+        // CLAUDE.md 3.9：板塊座標系每一步都從座標系重新讀地殼，所以回寫（WriteGridBackToMarkers）之後
+        // 再改地殼欄位，下一步就被讀回原值。更糟的是讀回之前，下一步開頭的邊界分類與板塊動力學
+        // （ClassifyBoundaries、PlateDynamics.UpdateVelocities）已經用了改過的值——改動沒有留下，卻漏進了板塊速度。
+        // 2026-11-14 抓到的是引擎在回寫之後的老化：v2 每步讓年齡多算一次，下一步的岩石圈浮力用的就是多一步的年齡。
+        //
+        // 這裡比的是「回寫那一刻」與「這一步結束時」，不是 State 與座標系：回寫本身有混疊誤差
+        // （n=24 每步約 0.1~2% 的格子寫不回原值），那是 WriteBack 的近似，不是這條規則管的。
+        string[] names =
+        [
+            "CrustThickness", "CrustAge", "CrustDensity", "OrganicThickness", "StructuralRelief",
+            "SedimentThickness", "CoverThickness", "CoverRock", "Crust", "OceanicOnly",
+        ];
+        static Array[] Fields(SimulationState s) =>
+        [
+            s.CrustThickness, s.CrustAge, s.CrustDensity, s.OrganicThickness, s.StructuralRelief,
+            s.SedimentThickness, s.CoverThickness, s.CoverRock, s.Crust, s.OceanicOnly,
+        ];
+
+        var engine = new SimulationEngine(Grid(), 42, crustTransport: CrustTransport.PlateFrame,
+            continentLayout: ContinentLayoutParameters.Default);
+        Array[]? atWriteBack = null;
+        engine.AfterWriteBackForTests = s => atWriteBack = Fields(s).Select(a => (Array)a.Clone()).ToArray();
+
+        // 跨過氣候重解（每 200 萬年＝40 步）與海口鑿通，回寫之後的每一段都要走過
+        for (var step = 1; step <= 120; step++)
+        {
+            engine.Step(1);
+            var atEnd = Fields(engine.State);
+            for (var f = 0; f < names.Length; f++)
+            {
+                var differing = Enumerable.Range(0, engine.State.CellCount)
+                    .Where(c => !Equals(atWriteBack![f].GetValue(c), atEnd[f].GetValue(c))).ToArray();
+                Assert.True(differing.Length == 0,
+                    $"第 {step} 步回寫之後 {names[f]} 又被改了 {differing.Length} 格"
+                    + (differing.Length > 0 ? $"（第 {differing[0]} 格：{atWriteBack![f].GetValue(differing[0])} → {atEnd[f].GetValue(differing[0])}）" : "")
+                    + "——改地殼的作用要排在 WriteGridBackToMarkers 之前，或在 PlateFrameCrust.Step 裡做。");
+            }
+        }
+    }
+
+    [Fact]
     public void NewCrustAndConsumptionActuallyHappen()
     {
         // CLAUDE.md 3.5：機制要直接數觸發次數，不能只看結果
