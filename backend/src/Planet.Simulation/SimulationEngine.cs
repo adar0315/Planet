@@ -804,23 +804,4 @@ public sealed class SimulationEngine
     /// <summary>板塊歸屬同時存在 PlateSet（模擬用）與 State（顯示用），初始化時要對齊。</summary>
     private void SyncPlateIdIntoState() =>
         Array.Copy(Plates.OwnerByCell, State.PlateId, Grid.CellCount);
-
-    /// <summary>目前的板塊邊界統計，給診斷與測試用。</summary>
-    /// <returns>聚合、張裂、轉形三種邊界各有幾格。</returns>
-    public (int Convergent, int Divergent, int Transform) BoundaryCounts()
-    {
-        var convergent = 0;
-        var divergent = 0;
-        var transform = 0;
-        foreach (var boundary in State.Boundary)
-        {
-            switch (boundary)
-            {
-                case BoundaryType.Convergent: convergent++; break;
-                case BoundaryType.Divergent: divergent++; break;
-                case BoundaryType.Transform: transform++; break;
-            }
-        }
-        return (convergent, divergent, transform);
-    }
 }
