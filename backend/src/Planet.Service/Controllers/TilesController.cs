@@ -78,14 +78,22 @@ public class TilesController : ControllerBase
     /// <param name="ct">取消權杖。</param>
     /// <returns>依距離由近到遠排序的地塊清單。</returns>
     /// <response code="200">依距離由近到遠排序的地塊清單。</response>
+    /// <response code="400">緯度不在 −90~90 之間，或經緯度不是有限的數字。</response>
     [HttpGet("nearby")]
     [ProducesResponseType<IReadOnlyList<TileDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IReadOnlyList<TileDto>>> GetNearby(
         [FromQuery] double lat,
         [FromQuery] double lon,
         [FromQuery] int count = 250,
         CancellationToken ct = default)
     {
+        // NaN 送進 SQL 會變成 500；超出範圍的經度會讓查詢框落在資料外面、退化成掃整條緯度帶
+        if (!double.IsFinite(lat) || !double.IsFinite(lon) || lat is < -90 or > 90)
+            return BadRequest("緯度要在 −90~90 之間，經緯度要是有限的數字。");
+        // 經度繞回 [−180, 180)：190° 就是 −170°
+        lon -= 360 * Math.Floor((lon + 180) / 360);
+
         var tiles = await _tileRepository.GetTilesNearAsync(lat, lon, count, ct);
 
         // 一併附上patch內部的鄰接關係，前端就不必為了知道「腳下這格能往哪走」再打一次

@@ -253,10 +253,25 @@ public class TileRepository : ITileRepository
             var lonMin = longitude - lonDelta;
             var lonMax = longitude + lonDelta;
 
-            // 經度窗跨過±180°接縫時（在換日線附近查詢）簡化為不篩經度，緯度窗仍能把候選集合縮小到位。
-            if (lonMin >= -180 && lonMax <= 180)
+            // 經度窗跨過±180°接縫時（在換日線附近查詢）拆成接縫兩側的兩段。
+            // 原本這種情況乾脆不篩經度，候選變成整條緯度帶，排序的列數多十幾倍（實測 6 秒 vs 2.5 秒）。
+            // 窗寬到 360° 以上（lonDelta 被夾到 180）就是整圈，不必篩。
+            if (lonDelta < 180.0)
             {
-                candidates = candidates.Where(t => t.Longitude >= lonMin && t.Longitude <= lonMax);
+                if (lonMin < -180)
+                {
+                    var wrappedMin = lonMin + 360;
+                    candidates = candidates.Where(t => t.Longitude >= wrappedMin || t.Longitude <= lonMax);
+                }
+                else if (lonMax > 180)
+                {
+                    var wrappedMax = lonMax - 360;
+                    candidates = candidates.Where(t => t.Longitude >= lonMin || t.Longitude <= wrappedMax);
+                }
+                else
+                {
+                    candidates = candidates.Where(t => t.Longitude >= lonMin && t.Longitude <= lonMax);
+                }
             }
         }
 
