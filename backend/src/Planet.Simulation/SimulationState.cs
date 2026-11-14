@@ -267,10 +267,6 @@ public sealed class SimulationState
     /// <param name="cellIndex">格子索引。</param>
     public float WaterSurfaceAt(int cellIndex) => SurfaceElevationAt(cellIndex) + WaterDepth[cellIndex];
 
-    /// <summary>這格有沒有被水覆蓋。</summary>
-    /// <param name="cellIndex">格子索引。</param>
-    public bool IsSubmerged(int cellIndex) => WaterDepth[cellIndex] > 0f;
-
     /// <summary>
     /// 把全部欄位寫進存檔（見 <see cref="SimulationSnapshot"/>）。
     ///

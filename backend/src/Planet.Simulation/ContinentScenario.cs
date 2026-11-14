@@ -31,7 +31,7 @@ public sealed class ContinentScenario
     private readonly ContinentLayoutParameters _p;
     /// <summary>星球半徑（公尺），用來把地表速度換成角速度。</summary>
     private readonly double _radiusMeters;
-    /// <summary>每塊陸地（依陸塊編號）的板塊，同 <see cref="PlateOfLandMass"/>。</summary>
+    /// <summary>每塊陸地（依陸塊編號）的板塊。</summary>
     private readonly int[] _plate;
     /// <summary>起始配置裡每格屬於哪一塊陸地（<see cref="ContinentLayoutResult.Label"/>）。</summary>
     private readonly int[] _label;
@@ -100,9 +100,6 @@ public sealed class ContinentScenario
 
     /// <summary>B 第一次撞上 C 的時間（百萬年），還沒撞上是 null。之後改用推的速度。</summary>
     public double? BContactMyr { get; internal set; }
-
-    /// <summary>每塊陸地（依陸塊編號）的板塊。</summary>
-    public IReadOnlyList<int> PlateOfLandMass => _plate;
 
     /// <summary>
     /// 起始時要休眠的板塊（還沒裂開的大島）與休眠到什麼時候（百萬年）：**永遠**，只有裂開（<see cref="DueSplits"/>）會叫醒它。

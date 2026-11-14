@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
 using Planet.Data;
-using Planet.Domain;
 using Planet.Generation;
 using Planet.Shared;
 

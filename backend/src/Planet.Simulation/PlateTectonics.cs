@@ -237,16 +237,6 @@ public sealed class PlateTectonics
     /// </summary>
     public int[] LastFrameNewCrustByBoundary { get; } = new int[4];
 
-    /// <summary>診斷用（板塊座標系）：上一步從最大的板塊裂出新板塊的次數（板塊的地殼被吃光時）。</summary>
-    public int LastFramePlatesReborn => _frames?.LastPlatesReborn ?? 0;
-
-    /// <summary>診斷用（板塊座標系）：上一步焊接（兩塊板塊沿大陸碰撞帶合併）的次數。</summary>
-    public int LastFramePlatesWelded => _frames?.LastPlatesWelded ?? 0;
-
-    /// <summary>板塊座標系：這個板塊編號是不是焊接之後在休眠（休眠中 0 格是正常的）。標記法永遠是 false。</summary>
-    /// <summary>診斷用（板塊座標系）：上一步保險段解決的重疊次數與其中的縮短增厚次數。</summary>
-    internal (int Resolves, int Shortenings) LastFrameHiddenResolves => (_frames?.LastHiddenResolves ?? 0, _frames?.LastHiddenShortenings ?? 0);
-
     /// <summary>
     /// 大陸配置的劇本（見 <see cref="ContinentScenario"/>），沒有就是 null。只能配板塊座標系。
     /// 設定時順便告訴板塊座標系哪些板塊對不准自動焊接、哪個板塊不會被消耗。
@@ -274,18 +264,6 @@ public sealed class PlateTectonics
     /// <param name="plate">板塊編號。</param>
     /// <returns>是否休眠。</returns>
     internal bool IsPlateDormant(int plate) => _frames?.IsDormant(plate) ?? false;
-
-    /// <summary>診斷用（板塊座標系）：上一步縮短增厚的次數（浮力差不多、誰都沉不下去）。</summary>
-    public int LastFrameShortenings => _frames?.LastShortenings ?? 0;
-
-    /// <summary>診斷用（板塊座標系）：上一步因增厚而變成大陸地殼的點數。</summary>
-    public int LastFrameContinentsFormed => _frames?.LastContinentsFormed ?? 0;
-
-    /// <summary>診斷用（板塊座標系）：上一步併進周圍板塊的碎片塊數（歸屬平滑）。</summary>
-    public int LastFrameFragmentsAbsorbed => _frames?.LastFragmentsAbsorbed ?? 0;
-
-    /// <summary>診斷用（板塊座標系）：上一步併進周圍板塊的碎片格數。</summary>
-    public int LastFrameFragmentCellsAbsorbed => _frames?.LastFragmentCellsAbsorbed ?? 0;
 
     /// <summary>
     /// 每格顯示的地殼點鍵（板塊座標系時；標記法是 null）。要「跟著地殼走」的東西用它，
@@ -455,20 +433,6 @@ public sealed class PlateTectonics
 
     /// <summary>診斷用：目前存活的標記數量。跟格數比對可以看出標記有沒有異常增生。</summary>
     public int MarkerCount => _markerCount;
-
-    /// <summary>診斷用：所有存活標記的厚度總和（公里）。</summary>
-    public double TotalMarkerThicknessKm
-    {
-        get
-        {
-            var total = 0.0;
-            for (var m = 0; m < _markerCount; m++)
-            {
-                if (_markerAlive[m]) total += _markerThickness[m];
-            }
-            return total;
-        }
-    }
 
 
     /// <summary>診斷用：取樣錯配的空格沿用舊厚度時，總共注入了多少地殼（公里·格）。</summary>

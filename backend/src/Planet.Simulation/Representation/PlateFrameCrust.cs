@@ -200,17 +200,6 @@ internal sealed class PlateFrameCrust
     /// <summary>上一步併進周圍板塊的碎片格數。</summary>
     internal int LastFragmentCellsAbsorbed { get; private set; }
 
-    /// <summary>所有板塊座標系裡有地殼的點數總和。</summary>
-    internal long ValidPoints
-    {
-        get
-        {
-            long total = 0;
-            foreach (var valid in _valid) foreach (var v in valid) if (v) total++;
-            return total;
-        }
-    }
-
     /// <summary>用目前格子上的地殼初始化：每格的地殼放進它（起始的 Voronoi）板塊的座標系、旋轉歸零。</summary>
     internal void Initialize(SimulationState state, PlateSet plates)
     {

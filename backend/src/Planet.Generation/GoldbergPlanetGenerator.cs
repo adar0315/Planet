@@ -31,10 +31,6 @@ public class GoldbergPlanetGenerator : IPlanetGenerator
     /// </summary>
     private const double CenterDistanceToEdgeLengthRatio = 1.7320508075688772; // sqrt(3)
 
-    /// <summary>實際生成整個星球時使用的地形種子。其他需要跟資料庫地形資料對得上的程式碼
-    /// （例如全星球總覽貼圖）要引用這個常數，不要各自寫死42。</summary>
-    public const int DefaultTerrainSeed = 42;
-
     /// <summary>星球目前統一的海平面等級（跟ElevationLevel同單位）。存成每格Tile自己的欄位（見Tile.SeaLevel），
     /// 不是寫死的全域常數，方便之後要做「局部海平面變動」時不用改schema。</summary>
     private const int PlanetSeaLevelLevel = 0;

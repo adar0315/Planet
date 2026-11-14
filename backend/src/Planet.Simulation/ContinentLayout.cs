@@ -699,41 +699,6 @@ public static class ContinentLayout
         return false;
     }
 
-    /// <summary>切出一塊之後，母陸塊若被切成幾塊，只留最大的那塊，其他的併進切出來的那一塊（它們就在切口旁邊）。</summary>
-    private static void KeepParentConnected(SimulationGrid grid, int[] label, int parent, int child)
-    {
-        var component = new int[grid.CellCount];
-        Array.Fill(component, -1);
-        var sizes = new List<int>();
-        var stack = new Stack<int>();
-        for (var start = 0; start < grid.CellCount; start++)
-        {
-            if (label[start] != parent || component[start] >= 0) continue;
-            var id = sizes.Count;
-            var size = 0;
-            component[start] = id;
-            stack.Push(start);
-            while (stack.Count > 0)
-            {
-                var c = stack.Pop();
-                size++;
-                var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
-                for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
-                {
-                    var n = grid.Neighbors[baseIndex + s];
-                    if (n == SimulationGrid.NoNeighbor || label[n] != parent || component[n] >= 0) continue;
-                    component[n] = id;
-                    stack.Push(n);
-                }
-            }
-            sizes.Add(size);
-        }
-        if (sizes.Count <= 1) return;
-        var main = sizes.IndexOf(sizes.Max());
-        for (var c = 0; c < grid.CellCount; c++)
-            if (label[c] == parent && component[c] != main) label[c] = child;
-    }
-
     /// <summary>被同一塊陸地整個包住、不超過 maxCells 的水域填成那塊陸地（要的是完整的大陸，湖是 P5 的事）。</summary>
     private static void FillEnclosedWater(SimulationGrid grid, int[] label, int maxCells)
     {

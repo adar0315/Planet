@@ -76,44 +76,6 @@ internal static class SphereMath
         }
     }
 
-    /// <summary>
-    /// 在「最近格＋離這點最近的兩個鄰居」組成的三角形上算重心座標（負值歸零後正規化）。
-    /// 跟 <see cref="SimulatedTerrainSampler"/> 同一套做法。
-    /// </summary>
-    internal static void Barycentric(
-        SimulationGrid grid, int nearest, double x, double y, double z,
-        out int c0, out int c1, out int c2, out double w0, out double w1, out double w2)
-    {
-        var u = grid.UnitVector;
-        c0 = nearest; c1 = -1; c2 = -1;
-        double d1 = double.NegativeInfinity, d2 = double.NegativeInfinity;
-        var baseIndex = nearest * SimulationGrid.MaxNeighborsPerCell;
-        for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
-        {
-            var n = grid.Neighbors[baseIndex + s];
-            if (n == SimulationGrid.NoNeighbor) continue;
-            var dot = x * u[n * 3] + y * u[n * 3 + 1] + z * u[n * 3 + 2];
-            if (dot > d1) { c2 = c1; d2 = d1; c1 = n; d1 = dot; }
-            else if (dot > d2) { c2 = n; d2 = dot; }
-        }
-
-        w0 = 1; w1 = 0; w2 = 0;
-        if (c2 < 0) return;
-
-        double ax = u[c0 * 3], ay = u[c0 * 3 + 1], az = u[c0 * 3 + 2];
-        double bx = u[c1 * 3], by = u[c1 * 3 + 1], bz = u[c1 * 3 + 2];
-        double qx = u[c2 * 3], qy = u[c2 * 3 + 1], qz = u[c2 * 3 + 2];
-        var det = Det(ax, bx, qx, ay, by, qy, az, bz, qz);
-        if (Math.Abs(det) < 1e-15) return;
-
-        var a = Math.Max(0, Det(x, bx, qx, y, by, qy, z, bz, qz) / det);
-        var b = Math.Max(0, Det(ax, x, qx, ay, y, qy, az, z, qz) / det);
-        var c = Math.Max(0, Det(ax, bx, x, ay, by, y, az, bz, z) / det);
-        var sum = a + b + c;
-        if (sum <= 0) return;
-        w0 = a / sum; w1 = b / sum; w2 = c / sum;
-    }
-
     /// <summary>板塊這一步的旋轉（四元數）。</summary>
     internal static (double W, double X, double Y, double Z) StepRotation(Plate plate, double deltaMyr) =>
         AxisAngle(plate.PoleX, plate.PoleY, plate.PoleZ, plate.AngularVelocityDegPerMyr * Math.PI / 180.0 * deltaMyr);

@@ -463,9 +463,6 @@ public sealed class PlateSet
         _driftAngleSinceFullScan = 0;
     }
 
-    /// <summary>診斷用：上一次重新分配實際重掃了幾格（全掃是總格數）。</summary>
-    public int LastRescanCount => _lastRescanCount;
-
     /// <summary>
     /// 守門用：把目前的板塊歸屬跟「完整重掃所有格子」的結果逐格比對，回傳不一致的格數。
     ///
@@ -524,44 +521,6 @@ public sealed class PlateSet
     /// 板塊是否仍然連通，用 <c>PlateFragmentCount</c> 量得出來。
     /// </summary>
     private const double SeedScatter = 0.20;
-
-    /// <summary>
-    /// 診斷用：板塊被切成幾塊互不相連的區域。理想是等於板塊數
-    /// （每塊板塊自己是連通的）；明顯大於板塊數就代表 <see cref="SeedScatter"/> 太大。
-    /// </summary>
-    /// <param name="grid">網格。</param>
-    public int PlateFragmentCount(SimulationGrid grid)
-    {
-        var visited = new bool[grid.CellCount];
-        var queue = new int[grid.CellCount];
-        var fragments = 0;
-
-        for (var start = 0; start < grid.CellCount; start++)
-        {
-            if (visited[start]) continue;
-            fragments++;
-            var plate = PlateIdByCell[start];
-            var count = 0;
-            queue[count++] = start;
-            visited[start] = true;
-
-            for (var head = 0; head < count; head++)
-            {
-                var cell = queue[head];
-                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
-                for (var n = 0; n < SimulationGrid.MaxNeighborsPerCell; n++)
-                {
-                    var neighbor = grid.Neighbors[baseIndex + n];
-                    if (neighbor == SimulationGrid.NoNeighbor) continue;
-                    if (visited[neighbor] || PlateIdByCell[neighbor] != plate) continue;
-                    visited[neighbor] = true;
-                    queue[count++] = neighbor;
-                }
-            }
-        }
-
-        return fragments;
-    }
 
     /// <summary>
     /// 隨機挑 <see cref="DensePlateCount"/> 個板塊，讓它們的地殼比周圍的海洋板塊重。

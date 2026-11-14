@@ -220,7 +220,7 @@ public class TerrainGenerator : ITerrainGenerator
             return SampleOcean(point, absLatitude, landScore);
         }
 
-        return SampleLand(point, latitude, absLatitude);
+        return SampleLand(point, absLatitude);
     }
 
     /// <summary>兩個大陸（各自獨立南北/東西falloff半徑）中較大的那個falloff值，落地判斷跟避開大陸放小島都用這個。</summary>
@@ -275,7 +275,7 @@ public class TerrainGenerator : ITerrainGenerator
     /// 乾燥地形（沙地/鹽鹼地）→ 低地濕地（沼澤）→ 苔原 → 低地岩性（礫灘）→ 泥地 → 黃土地 →
     /// 植被（依濕度分林地/灌木叢/草地三級，各自再用cover noise決定HeightCategory）。
     /// </summary>
-    private TerrainSample SampleLand(Vec3 point, double latitude, double absLatitude)
+    private TerrainSample SampleLand(Vec3 point, double absLatitude)
     {
         var elevationRaw = _elevationNoise.Fbm(point.X, point.Y, point.Z, octaves: 4, baseFrequency: ElevationFrequency);
         var elevationLevel = (int)Math.Round(Math.Clamp((elevationRaw + 1) / 2, 0, 1) * MaxElevationLevel);
