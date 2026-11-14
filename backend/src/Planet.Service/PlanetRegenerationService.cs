@@ -39,10 +39,17 @@ public class PlanetRegenerationService
     /// <summary>是否已經有生成作業正在背景進行中（避免同時觸發第二次，寫入資料庫時打架）。</summary>
     public bool IsRunning => _status.IsSeeding;
 
+    /// <summary>保護「檢查並標成正在生成」這個動作。</summary>
+    private readonly Lock _startLock = new();
+
     /// <summary>
     /// 在背景開始生成，立刻回傳、不等待完成（見 <see cref="PlanetSeeder"/> 說明：不能讓呼叫端等整個生成過程，
-    /// 不然HTTP請求本身就要卡15分鐘）。呼叫前應該先確認 <see cref="IsRunning"/> 是false。
+    /// 不然HTTP請求本身就要卡15分鐘）。
+    ///
+    /// 「檢查有沒有作業在跑」與「標成正在跑」是同一個原子動作（2026-11-14）：原本旗標要等清空資料表之後才設，
+    /// 清 2,000 萬列的那段時間再觸發一次（或啟動放大），檢查照樣通過，兩個作業會同時寫同一張表。
     /// </summary>
+    /// <exception cref="InvalidOperationException">已經有生成作業在進行中。</exception>
     /// <param name="options">要使用的地形生成參數。</param>
     /// <param name="clearExisting">
     /// true＝先TRUNCATE現有資料再生成（手動觸發的「重新生成」用，會覆蓋掉目前的星球）；
@@ -50,9 +57,17 @@ public class PlanetRegenerationService
     /// </param>
     public void StartInBackground(TerrainGenerationOptions options, bool clearExisting)
     {
-        if (_status.IsSeeding)
+        lock (_startLock)
         {
-            throw new InvalidOperationException("已經有星球生成作業正在進行中，請等它完成後再試一次。");
+            if (_status.IsSeeding)
+            {
+                throw new InvalidOperationException("已經有星球生成作業正在進行中，請等它完成後再試一次。");
+            }
+
+            _status.IsSeeding = true;
+            _status.ErrorMessage = null;
+            // 要清空的話，從這一刻起地圖就不能用了（清空期間查到的是空的或一半的資料）
+            if (clearExisting) _status.IsReady = false;
         }
 
         _ = RunAsync(options, clearExisting);

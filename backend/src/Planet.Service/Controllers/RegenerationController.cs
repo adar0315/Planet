@@ -80,7 +80,15 @@ public class RegenerationController : ControllerBase
             return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
         }
 
-        _regenerationService.StartInBackground(_optionsStore.Current, clearExisting: true);
+        try
+        {
+            _regenerationService.StartInBackground(_optionsStore.Current, clearExisting: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // 上面檢查之後、這裡受理之前，另一個請求搶先開始了
+            return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
+        }
         return Accepted();
     }
 
