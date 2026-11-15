@@ -16,7 +16,7 @@ dotnet test
 
 ```bash
 cd frontend
-npm test          # Vitest，只測 src/map 底下的純邏輯（不需要瀏覽器，node 環境即可）
+npm test          # Vitest，測 src/map 底下的純邏輯與 src/network 的二進位解碼（不需要瀏覽器，node 環境即可）
 npm run type-check
 ```
 
@@ -396,7 +396,9 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
   1,900 個地塊的兩個查詢合計約 900 毫秒（空表也要 550 毫秒），改成單一 JSON 參數之後約 80 毫秒；
   而且超過 SQL Server 的 2,100 個參數上限會直接失敗。少量、固定的集合才用 `EF.Constant`（`GetByCoordinatesAsync`）。
 - **先量再優化**：近看細分 1.4 秒，直覺以為慢在取樣，實測取樣只佔 50~80 毫秒，慢的是資料庫（900）與幾何（400）。
-- **改小格的流程之後，跟正式站的輸出逐位元組比對**（同一批地塊打 8080 與 5202，`cmp` 兩份 JSON）：服務層沒有測試專案，這是最直接的回歸檢查。
+- **改小格的流程之後，跟正式站的輸出逐位元組比對**（同一批地塊打 8080 與 5202，`cmp` 兩份 JSON）：`SubTileService` 的整個流程（資料庫 → 幾何 → 取樣 → 挖河道 → 疊玩家修改）還沒有自動測試，這是最直接的回歸檢查。
+- **服務層的自動測試（2026-11-15）**：`Planet.Service.Tests` 測存檔管理（`SnapshotStore`，每個測試用自己的暫存目錄）、二進位編碼、`TilesController` 的輸入驗證與格式協商（倉儲換成假的）；`Planet.Data.Tests` 用記憶體資料庫驗附近地塊查詢「挑出哪些、什麼順序」（換日線、依緯度縮放、極區），做法是在測試裡用獨立寫的暴力算法算出最近的 N 個再逐筆比對。記憶體資料庫**測不到** SQL 本身（索引、執行計畫、`TOP` 要不要寫成常數），那些仍然靠量測。
+- **二進位格式的標準檔**（`backend/tests/Planet.Service.Tests/Fixtures/*.bin`）：後端測「編碼結果跟標準檔逐位元組相同」，前端 `tileBinary.golden.spec.ts` 測「解碼器讀得懂同一份」。刻意改格式時：先改前端解碼器與那份 spec 的期望值，再用 `PLANET_UPDATE_GOLDEN=1 dotnet test backend/tests/Planet.Service.Tests` 重新產生標準檔，兩邊一起提交。
 - **載入存檔是讀進新建的引擎、成功才換上**：讀到一半失敗不會留下半新半舊的狀態。新建的引擎也才是有測試守著的路徑（逐位元續跑）。
 - **貴的東西只載入一次、而且不綁在請求的取消權杖上**（`PlanetMetadataService.GetAppliedTerrainSourceAsync`）：
   地形來源要十幾秒（讀 22.5 萬粗格約 8 秒、建網格約 4 秒、建取樣器約 3 秒）。原本每個請求自己載、請求在 Nginx 60 秒逾時就整個作廢，

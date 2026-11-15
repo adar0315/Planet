@@ -67,7 +67,19 @@ public sealed class SnapshotStore
     /// 不做成設定值：這是「不要因為服務重啟就丟掉幾千步的星球」用的，
     /// 放在部署目錄旁邊最不容易在重新 publish 時被清掉（publish 不會刪除不認識的子目錄）。
     /// </summary>
-    public string DirectoryPath { get; } = Path.Combine(AppContext.BaseDirectory, "snapshots");
+    public string DirectoryPath { get; }
+
+    /// <summary>正式使用：存檔放在部署目錄旁的 snapshots。</summary>
+    public SnapshotStore() : this(Path.Combine(AppContext.BaseDirectory, "snapshots"))
+    {
+    }
+
+    /// <summary>測試用：指定存檔目錄，不去碰部署目錄。（不是 public，DI 只會選上面那個建構子。）</summary>
+    /// <param name="directoryPath">存檔目錄；不存在時第一次寫入才建立。</param>
+    internal SnapshotStore(string directoryPath)
+    {
+        DirectoryPath = directoryPath;
+    }
 
     /// <summary>
     /// 檢查存檔名稱並換成完整路徑。**只允許英數、底線與連字號**。
