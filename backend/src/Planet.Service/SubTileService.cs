@@ -26,7 +26,8 @@ public sealed class SubTileService
     /// <summary>用來建立 scoped 的資料庫存取物件（本服務是 Singleton）。</summary>
     private readonly IServiceScopeFactory _scopeFactory;
     /// <summary>星球記錄服務，提供地形來源。</summary>
-    private readonly PlanetMetadataService _metadata;
+    /// <summary>取得目前這顆星球的地形來源（正式使用時是 <see cref="PlanetMetadataService.GetAppliedTerrainSourceAsync"/>）。</summary>
+    private readonly Func<CancellationToken, Task<ITerrainGenerator>> _terrainSource;
     /// <summary>小格幾何（含快取）。</summary>
     private readonly SubTileGeometryCache _geometry;
 
@@ -35,9 +36,19 @@ public sealed class SubTileService
     /// <param name="metadata">星球記錄服務。</param>
     /// <param name="geometry">小格幾何。</param>
     public SubTileService(IServiceScopeFactory scopeFactory, PlanetMetadataService metadata, SubTileGeometryCache geometry)
+        : this(scopeFactory, metadata.GetAppliedTerrainSourceAsync, geometry)
+    {
+    }
+
+    /// <summary>測試用：直接給地形來源，不必有資料庫裡的星球中繼資料。（不是 public，DI 只會選上面那個建構子。）</summary>
+    /// <param name="scopeFactory">用來取得 scoped 的倉儲。</param>
+    /// <param name="terrainSource">取得地形來源的方法。</param>
+    /// <param name="geometry">小格幾何快取。</param>
+    internal SubTileService(
+        IServiceScopeFactory scopeFactory, Func<CancellationToken, Task<ITerrainGenerator>> terrainSource, SubTileGeometryCache geometry)
     {
         _scopeFactory = scopeFactory;
-        _metadata = metadata;
+        _terrainSource = terrainSource;
         _geometry = geometry;
     }
 
@@ -55,7 +66,7 @@ public sealed class SubTileService
         if (parents.Count == 0) return [];
 
         var batch = _geometry.Build(parents, ct);
-        var raw = SubTileSurfaceSampler.Sample(await _metadata.GetAppliedTerrainSourceAsync(ct), batch.SubTiles, parents, ct);
+        var raw = SubTileSurfaceSampler.Sample(await _terrainSource(ct), batch.SubTiles, parents, ct);
         var (surfaces, edits) = ApplyOverlays(batch, raw, constructions);
 
         var result = new SubTileDto[batch.SubTiles.Count];
@@ -85,7 +96,7 @@ public sealed class SubTileService
         var batch = _geometry.Build(parents, ct);
         if (!batch.IndexById.TryGetValue(subTileId, out var index)) return null;
         // 只取樣要的那一格
-        return SubTileSurfaceSampler.Sample(await _metadata.GetAppliedTerrainSourceAsync(ct), [batch.SubTiles[index]], parents, ct)[0];
+        return SubTileSurfaceSampler.Sample(await _terrainSource(ct), [batch.SubTiles[index]], parents, ct)[0];
     }
 
     /// <summary>查出地塊，以及玩家在這些地塊上的修改。</summary>

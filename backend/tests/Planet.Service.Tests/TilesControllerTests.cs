@@ -16,30 +16,6 @@ namespace Planet.Service.Tests;
 /// </summary>
 public class TilesControllerTests
 {
-    /// <summary>假的倉儲：記下 <c>GetTilesNearAsync</c> 收到的參數，回傳固定的一批地塊。</summary>
-    private sealed class FakeTileRepository(IReadOnlyList<Tile> tiles) : ITileRepository
-    {
-        public List<(double Lat, double Lon, int Count)> NearbyCalls { get; } = [];
-
-        public Task<IReadOnlyList<Tile>> GetTilesNearAsync(double latitude, double longitude, int count, CancellationToken ct = default)
-        {
-            NearbyCalls.Add((latitude, longitude, count));
-            return Task.FromResult(tiles);
-        }
-
-        public Task<bool> HasAnyTilesAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task ClearAllTilesAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task BulkInsertAsync(IEnumerable<Tile> tiles, Action<long>? onProgress = null, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task ReplaceAllWithSimulationAsync(IEnumerable<Tile> tiles, IReadOnlyList<PlanetCell> cells, Action<long>? onProgress = null, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task ClearPlanetCellsAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<IReadOnlyList<PlanetCell>> GetAllPlanetCellsAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<PlanetCell?> GetPlanetCellAsync(int cellId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Tile?> GetByIdAsync(long tileId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<IReadOnlyList<Tile>> GetByIdsAsync(IReadOnlyCollection<long> tileIds, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Tile?> GetByCoordinateAsync(int faceIndex, int row, int col, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<IReadOnlyList<Tile>> GetByCoordinatesAsync(IReadOnlyCollection<(int FaceIndex, int Row, int Col)> coordinates, CancellationToken ct = default) => throw new NotSupportedException();
-    }
-
     private const int Frequency = 3;
 
     private static (TilesController Controller, FakeTileRepository Repository) Create(string? accept = null)
