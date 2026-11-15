@@ -240,9 +240,12 @@ public sealed class Climate
                 : 0f;
         });
 
+        // 基礎降水率在整次求解裡是常數。它是屬性、v2 每讀一次就算一次 Math.Pow：
+        // 原本在每格的迴圈裡讀，n=150 一次求解約 3,000 萬次冪次運算（2026-11-15）。值完全一樣，結果逐位元相同。
+        var baselineRain = BaselineRainPerIteration;
         for (var iteration = 0; iteration < _transportIterations; iteration++)
         {
-            EvaporateAndRain(state);
+            EvaporateAndRain(state, baselineRain);
             Advect(state);
         }
 
@@ -555,13 +558,24 @@ public sealed class Climate
             Array.Copy(radiative, _zonalTemperature, ZonalBands);
             _zonalInitialized = true;
         }
+        // 係數只跟緯度帶有關，迭代之間不變：先算好（運算式跟原本逐字相同，值逐位元一樣）。
+        // 原本每輪每帶算三次 Math.Cos，3,000 輪 × 90 帶，而且每一步都會跑（2026-11-15）。
+        var northCoef = new double[ZonalBands];
+        var southCoef = new double[ZonalBands];
+        var scaleCoef = new double[ZonalBands];
+        for (var i = 0; i < ZonalBands; i++)
+        {
+            northCoef[i] = i < ZonalBands - 1 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i + 1]) * Math.Cos(phi[i] + dphi / 2) : 0;
+            southCoef[i] = i > 0 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i - 1]) * Math.Cos(phi[i] - dphi / 2) : 0;
+            scaleCoef[i] = 1.0 / (Math.Cos(phi[i]) * dphi * dphi);
+        }
         for (var iteration = 0; iteration < ZonalIterations; iteration++)
         {
             for (var i = 0; i < ZonalBands; i++)
             {
-                var north = i < ZonalBands - 1 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i + 1]) * Math.Cos(phi[i] + dphi / 2) : 0;
-                var south = i > 0 ? ZonalDiffusion * 0.5 * (ocean[i] + ocean[i - 1]) * Math.Cos(phi[i] - dphi / 2) : 0;
-                var scale = 1.0 / (Math.Cos(phi[i]) * dphi * dphi);
+                var north = northCoef[i];
+                var south = southCoef[i];
+                var scale = scaleCoef[i];
                 var neighbors = north * (i < ZonalBands - 1 ? _zonalTemperature[i + 1] : 0) + south * (i > 0 ? _zonalTemperature[i - 1] : 0);
                 _zonalTemperature[i] = (radiative[i] + scale * neighbors) / (1 + scale * (north + south));
             }
@@ -656,52 +670,66 @@ public sealed class Climate
     /// **地形抬升**（空氣被迫爬坡、絕熱冷卻、水氣凝結——迎風坡多雨、背風坡是雨影）
     /// 與**飽和**（暖濕空氣移到較冷的地方裝不下，多的降下來）。
     /// </summary>
-    private void EvaporateAndRain(SimulationState state)
+    private void EvaporateAndRain(SimulationState state, float baselineRain)
     {
-        Parallel.For(0, state.CellCount, cell =>
+        ForEachCellRange(state.CellCount, (from, to) =>
         {
-            // 1. 水面蒸發：把空氣往飽和補
-            if (state.WaterDepth[cell] > 0f)
+            for (var cell = from; cell < to; cell++)
             {
-                var deficit = _capacity[cell] - state.AtmosphericMoisture[cell];
-                if (deficit > 0f) state.AtmosphericMoisture[cell] += deficit * EvaporationEfficiency;
+                // 1. 水面蒸發：把空氣往飽和補
+                if (state.WaterDepth[cell] > 0f)
+                {
+                    var deficit = _capacity[cell] - state.AtmosphericMoisture[cell];
+                    if (deficit > 0f) state.AtmosphericMoisture[cell] += deficit * EvaporationEfficiency;
+                }
+                else
+                {
+                    // 陸地的蒸散回流：降在陸地上的水只有 RunoffFraction 那部分往下游流，
+                    // **其餘會蒸散回大氣、被風帶往更內陸再下一次雨**。
+                    //
+                    // 這一段不能省（2026-09-06 踩過）：原本只把逕流那部分記下來、其餘直接憑空消失，
+                    // 於是水氣一進入陸地就被消耗殆盡，**一半的陸地降水掛零**（實測陸地降水中位數0.00），
+                    // 階段4的流水侵蝕會完全沒有輸入。真實世界的內陸之所以還有雨，
+                    // 正是靠這個回收機制（亞馬遜的降水有相當比例來自森林自己的蒸散）。
+                    state.AtmosphericMoisture[cell] += _recycled[cell];
+                    _recycled[cell] = 0f;
+                }
+
+                var moisture = state.AtmosphericMoisture[cell];
+                if (moisture <= 0f) continue;
+
+                // 2. 地形抬升：空氣被迫爬坡、絕熱冷卻、水氣凝結（比例在 Solve 裡先算好了）
+                var rain = moisture * _orographicFraction[cell];
+
+                // 3. 基礎降水（對流雨、鋒面雨），受三胞環流的垂直運動調節：
+                //    上升區（赤道、極鋒）加成，下沉區（副熱帶、極區）抑制——後者就是沙漠帶
+                var convective = baselineRain * (1f + _verticalMotion[cell]);
+                if (convective > 0f) rain += (moisture - rain) * convective;
+
+                // 4. 超過持水能力的部分一定降下來
+                var remaining = moisture - rain;
+                var excess = remaining - _capacity[cell];
+                if (excess > 0f) rain += excess;
+
+                state.AtmosphericMoisture[cell] = moisture - rain;
+                state.Precipitation[cell] += rain;
+
+                // 陸地上的雨有一部分會蒸散回大氣，下一次迭代再放回去（見上面第1步的說明）
+                if (state.WaterDepth[cell] <= 0f) _recycled[cell] = rain * (1f - RunoffFraction);
             }
-            else
-            {
-                // 陸地的蒸散回流：降在陸地上的水只有 RunoffFraction 那部分往下游流，
-                // **其餘會蒸散回大氣、被風帶往更內陸再下一次雨**。
-                //
-                // 這一段不能省（2026-09-06 踩過）：原本只把逕流那部分記下來、其餘直接憑空消失，
-                // 於是水氣一進入陸地就被消耗殆盡，**一半的陸地降水掛零**（實測陸地降水中位數0.00），
-                // 階段4的流水侵蝕會完全沒有輸入。真實世界的內陸之所以還有雨，
-                // 正是靠這個回收機制（亞馬遜的降水有相當比例來自森林自己的蒸散）。
-                state.AtmosphericMoisture[cell] += _recycled[cell];
-                _recycled[cell] = 0f;
-            }
-
-            var moisture = state.AtmosphericMoisture[cell];
-            if (moisture <= 0f) return;
-
-            // 2. 地形抬升：空氣被迫爬坡、絕熱冷卻、水氣凝結（比例在 Solve 裡先算好了）
-            var rain = moisture * _orographicFraction[cell];
-
-            // 3. 基礎降水（對流雨、鋒面雨），受三胞環流的垂直運動調節：
-            //    上升區（赤道、極鋒）加成，下沉區（副熱帶、極區）抑制——後者就是沙漠帶
-            var convective = BaselineRainPerIteration * (1f + _verticalMotion[cell]);
-            if (convective > 0f) rain += (moisture - rain) * convective;
-
-            // 4. 超過持水能力的部分一定降下來
-            var remaining = moisture - rain;
-            var excess = remaining - _capacity[cell];
-            if (excess > 0f) rain += excess;
-
-            state.AtmosphericMoisture[cell] = moisture - rain;
-            state.Precipitation[cell] += rain;
-
-            // 陸地上的雨有一部分會蒸散回大氣，下一次迭代再放回去（見上面第1步的說明）
-            if (state.WaterDepth[cell] <= 0f) _recycled[cell] = rain * (1f - RunoffFraction);
         });
     }
+
+    /// <summary>
+    /// 平行處理每一格，但每個工作拿一段連續的格子，而不是每格呼叫一次委派。
+    /// 只能用在各格互不相依的迴圈（每格只寫自己）：分段方式不影響結果。
+    /// 水氣輸送一次求解要迭代上百輪、每輪掃全部格子兩次，每格一次委派呼叫的開銷佔了不小的比例。
+    /// </summary>
+    private static void ForEachCellRange(int count, Action<int, int> body) =>
+        Parallel.ForEach(System.Collections.Concurrent.Partitioner.Create(0, count, CellRangeSize), range => body(range.Item1, range.Item2));
+
+    /// <summary><see cref="ForEachCellRange"/> 每段的格數。</summary>
+    private const int CellRangeSize = 4096;
 
     /// <summary>下風方向的地表高度（依出流權重加權），用來判斷空氣要不要爬坡。</summary>
     private float DownwindElevation(SimulationState state, int cell)
@@ -791,19 +819,24 @@ public sealed class Climate
     /// </summary>
     private void Advect(SimulationState state)
     {
-        Parallel.For(0, state.CellCount, cell =>
+        ForEachCellRange(state.CellCount, (from, to) =>
         {
-            var incoming = state.AtmosphericMoisture[cell] * _retainedFraction[cell];
-
-            var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
-            for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+            var moisture = state.AtmosphericMoisture;
+            var neighbors = _grid.Neighbors;
+            for (var cell = from; cell < to; cell++)
             {
-                var weight = _inflowWeight[baseIndex + s];
-                if (weight <= 0f) continue;
-                incoming += state.AtmosphericMoisture[_grid.Neighbors[baseIndex + s]] * weight;
-            }
+                var incoming = moisture[cell] * _retainedFraction[cell];
 
-            _nextMoisture[cell] = incoming;
+                var baseIndex = cell * SimulationGrid.MaxNeighborsPerCell;
+                for (var s = 0; s < SimulationGrid.MaxNeighborsPerCell; s++)
+                {
+                    var weight = _inflowWeight[baseIndex + s];
+                    if (weight <= 0f) continue;
+                    incoming += moisture[neighbors[baseIndex + s]] * weight;
+                }
+
+                _nextMoisture[cell] = incoming;
+            }
         });
 
         Array.Copy(_nextMoisture, state.AtmosphericMoisture, state.CellCount);

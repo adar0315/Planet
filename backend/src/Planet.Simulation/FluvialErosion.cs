@@ -210,6 +210,14 @@ public sealed class FluvialErosion
     private readonly List<int> _mudEntries = [];
     /// <summary>平行鋪泥用的分塊暫存（固定 <see cref="MudChunks"/> 份，結果與執行緒數無關）。</summary>
     private readonly MudChunk?[] _mudChunks = new MudChunk?[MudChunks];
+    /// <summary>鋪泥用：每格的海鄰居在 <see cref="_seaNeighbors"/> 裡的起點（長度 n+1，只有海格有鄰居）。每次鋪泥前重建。</summary>
+    private readonly int[] _seaNeighborStart;
+    /// <summary>鋪泥用：海格的海鄰居，依原本鄰接表的順序（走訪順序因此跟逐一檢查鄰居時一模一樣）。</summary>
+    private readonly int[] _seaNeighbors;
+    /// <summary>鋪泥用：這一格比大陸棚深（收得下泥）。每次鋪泥前重算。</summary>
+    private readonly bool[] _deepSea;
+    /// <summary>鋪泥用：第幾圈的權重（從 1 開始一圈乘一次衰減，跟原本邊走邊乘的值逐位元相同）。</summary>
+    private double[] _mudRingWeight = [];
     /// <summary>與 <see cref="_mudEntries"/> 對齊：深海鋪不下、要改堆在大陸棚上的泥量。</summary>
     private double[] _unplacedMud = [];
     /// <summary>每格這一步的河流下切速率（公尺／百萬年），寫回狀態供取樣器畫河谷。</summary>
@@ -265,6 +273,9 @@ public sealed class FluvialErosion
         _maxSeaHops = Math.Max(1, (int)Math.Round(MaxSeaTransportMeters / grid.AverageCellSpacingMeters));
         _deltaHops = Math.Max(0, (int)Math.Round(DeltaRadiusMeters / grid.AverageCellSpacingMeters));
         _mudHops = Math.Max(1, (int)Math.Round(MudSpreadCutoff * MudSpreadLengthMeters / grid.AverageCellSpacingMeters));
+        _seaNeighborStart = new int[grid.CellCount + 1];
+        _seaNeighbors = new int[grid.CellCount * SimulationGrid.MaxNeighborsPerCell];
+        _deepSea = new bool[grid.CellCount];
         _mudLoad = new double[n];
         _incision = new float[n];
         _aggradation = new float[n];
@@ -638,6 +649,7 @@ public sealed class FluvialErosion
         var n = state.CellCount;
         var shelf = state.SeaLevelMeters - ShelfDepthMeters;
         var decayPerRing = Math.Exp(-_grid.AverageCellSpacingMeters / MudSpreadLengthMeters);
+        PrepareMudSpread(state, lakeOf, shelf, decayPerRing);
         Parallel.For(0, MudChunks, k =>
         {
             var chunk = _mudChunks[k] ??= new MudChunk(n);
@@ -645,7 +657,7 @@ public sealed class FluvialErosion
             for (var e = entries * k / MudChunks; e < entries * (k + 1) / MudChunks; e++)
             {
                 var start = _mudEntries[e];
-                _unplacedMud[e] = SpreadMud(state, lakeOf, chunk, start, _mudLoad[start], shelf, decayPerRing) ? 0 : _mudLoad[start];
+                _unplacedMud[e] = SpreadMud(chunk, start, _mudLoad[start]) ? 0 : _mudLoad[start];
             }
         });
         for (var c = 0; c < n; c++)
@@ -668,48 +680,87 @@ public sealed class FluvialErosion
     }
 
     /// <summary>
-    /// 一個入海口的泥按距離分給附近的深海格，加到 <paramref name="chunk"/> 的暫存（只讀不寫模擬狀態，可以平行）。
-    /// 附近沒有比大陸棚深的海格就回傳 false。
+    /// 鋪泥前的準備（每次鋪泥一次）：海格只連海格的鄰接表、哪些格比大陸棚深、各圈的權重。
+    ///
+    /// 鋪泥每步要走上百萬格（n=150 約 3,300 個入海口、760 萬格，2026-11-15 量），原本每走一格都要讀表面高度、
+    /// 逐一檢查六個鄰居是不是海（兩個陣列）、再加進三個 List，佔了河流侵蝕的七成時間。
+    /// 這些在同一步裡對每個入海口都一樣，先算好一次。只跳過「本來就不會走進去」的非海鄰居、不改變走訪順序，
+    /// 權重也照原本的連乘算，所以結果逐位元相同。
     /// </summary>
-    private bool SpreadMud(SimulationState state, int[] lakeOf, MudChunk chunk, int start, double amount, float shelf, double decayPerRing)
+    private void PrepareMudSpread(SimulationState state, int[] lakeOf, float shelf, double decayPerRing)
     {
-        var visited = chunk.Visited;
-        var stamp = ++chunk.Stamp;
-        visited.Clear();
-        visited.Add(start);
-        chunk.VisitStamp[start] = stamp;
-        chunk.Cells.Clear();
-        chunk.Weights.Clear();
+        var n = state.CellCount;
+        var neighbors = _grid.Neighbors;
+        var count = 0;
+        for (var c = 0; c < n; c++)
+        {
+            _seaNeighborStart[c] = count;
+            _deepSea[c] = _surface[c] < shelf;
+            if (!IsSea(state, lakeOf, c)) continue; // 走訪只會經過海格（入海口本身是海，之後只往海鄰居走）
+            var baseIndex = c * SimulationGrid.MaxNeighborsPerCell;
+            for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+            {
+                var nb = neighbors[baseIndex + k];
+                if (nb != SimulationGrid.NoNeighbor && IsSea(state, lakeOf, nb)) _seaNeighbors[count++] = nb;
+            }
+        }
+        _seaNeighborStart[n] = count;
+
+        if (_mudRingWeight.Length != _mudHops + 1) _mudRingWeight = new double[_mudHops + 1];
         var weight = 1.0;
+        for (var ring = 0; ring <= _mudHops; ring++, weight *= decayPerRing) _mudRingWeight[ring] = weight;
+    }
+
+    /// <summary>
+    /// 一個入海口的泥按距離分給附近的深海格，加到 <paramref name="chunk"/> 的暫存（只讀不寫模擬狀態，可以平行）。
+    /// 附近沒有比大陸棚深的海格就回傳 false。要先呼叫 <see cref="PrepareMudSpread"/>。
+    /// </summary>
+    private bool SpreadMud(MudChunk chunk, int start, double amount)
+    {
+        var stamp = ++chunk.Stamp;
+        var visitStamp = chunk.VisitStamp;
+        var visited = chunk.Visited;
+        var cells = chunk.Cells;
+        var rings = chunk.Rings;
+        var seaStart = _seaNeighborStart;
+        var seaNeighbors = _seaNeighbors;
+        var deep = _deepSea;
+        var ringWeight = _mudRingWeight;
+        var visitedCount = 0;
+        var cellCount = 0;
+        visited[visitedCount++] = start;
+        visitStamp[start] = stamp;
         var totalWeight = 0.0;
         var ringStart = 0;
-        for (var ring = 0; ring <= _mudHops && ringStart < visited.Count; ring++, weight *= decayPerRing)
+        for (var ring = 0; ring <= _mudHops && ringStart < visitedCount; ring++)
         {
-            var ringEnd = visited.Count;
+            var ringEnd = visitedCount;
+            var expand = ring != _mudHops;
             for (var i = ringStart; i < ringEnd; i++)
             {
                 var cur = visited[i];
-                if (_surface[cur] < shelf)
+                if (deep[cur])
                 {
-                    chunk.Cells.Add(cur);
-                    chunk.Weights.Add(weight);
-                    totalWeight += weight;
+                    cells[cellCount] = cur;
+                    rings[cellCount] = ring;
+                    cellCount++;
+                    totalWeight += ringWeight[ring];
                 }
-                if (ring == _mudHops) continue;
-                var baseIndex = cur * SimulationGrid.MaxNeighborsPerCell;
-                for (var k = 0; k < SimulationGrid.MaxNeighborsPerCell; k++)
+                if (!expand) continue;
+                for (var k = seaStart[cur]; k < seaStart[cur + 1]; k++)
                 {
-                    var nb = _grid.Neighbors[baseIndex + k];
-                    if (nb == SimulationGrid.NoNeighbor || chunk.VisitStamp[nb] == stamp) continue;
-                    chunk.VisitStamp[nb] = stamp;
-                    if (IsSea(state, lakeOf, nb)) visited.Add(nb);
+                    var nb = seaNeighbors[k];
+                    if (visitStamp[nb] == stamp) continue;
+                    visitStamp[nb] = stamp;
+                    visited[visitedCount++] = nb;
                 }
             }
             ringStart = ringEnd;
         }
         if (totalWeight <= 0) return false;
         var scale = amount / totalWeight;
-        for (var i = 0; i < chunk.Cells.Count; i++) chunk.Deposit[chunk.Cells[i]] += scale * chunk.Weights[i];
+        var deposit = chunk.Deposit;
+        for (var i = 0; i < cellCount; i++) deposit[cells[i]] += scale * ringWeight[rings[i]];
         return true;
     }
 
@@ -725,14 +776,15 @@ public sealed class FluvialErosion
         /// <summary>目前的走訪標記值。</summary>
         public int Stamp { get; set; }
 
-        /// <summary>一圈一圈走過的海格。</summary>
-        public List<int> Visited { get; } = [];
+        /// <summary>一圈一圈走過的海格（同一次走訪裡一格最多走到一次，所以長度 n 一定夠）。</summary>
+        public int[] Visited { get; } = new int[cellCount];
 
         /// <summary>收泥的深海格。</summary>
-        public List<int> Cells { get; } = [];
+        public int[] Cells { get; } = new int[cellCount];
 
-        /// <summary>收泥的深海格各自的權重。</summary>
-        public List<double> Weights { get; } = [];
+        /// <summary>收泥的深海格在第幾圈（權重查 <c>_mudRingWeight</c>）。</summary>
+        public int[] Rings { get; } = new int[cellCount];
+
     }
 
     /// <summary>

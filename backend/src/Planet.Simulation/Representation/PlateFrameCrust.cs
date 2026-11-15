@@ -278,7 +278,10 @@ internal sealed class PlateFrameCrust
             var age = _age[p];
             var relief = _relief[p];
             var valid = _valid[p];
-            Parallel.For(0, _cellCount, b => { if (valid[b]) { age[b] += ageStep; relief[b] *= reliefKeep; } });
+            ForEachCellRange(_cellCount, (from, to) =>
+            {
+                for (var b = from; b < to; b++) if (valid[b]) { age[b] += ageStep; relief[b] *= reliefKeep; }
+            });
         }
 
         // 1. 上一步在這裡的板塊，在這一點的對應點（彼此無相依，平行）
@@ -313,7 +316,10 @@ internal sealed class PlateFrameCrust
 
             // 空缺（張裂）歸鄰居裡最多的板塊。試過「歸上一步在這裡的板塊」，在聚合邊界上會一直替輸掉的一方
             // 長新地殼、立刻又被吃掉：50 Myr 時每步新生 7,512、隱沒 5,742，歸屬碎成 1,324 塊（P4，2026-10-17）。
-            DecideCell(c, candidates[..count], bodies[..count], GapPlate(grid, c, _owner, d), plates, newCrustCells);
+            // 候選只有自己（count == 1）＝六個鄰居都屬於 d：GapPlate 數出來一定是 d，不必再數一次。
+            // 這一圈是依序的、每步 22.5 萬格，內部格子佔絕大多數（2026-11-15）。值相同，結果逐位元相同。
+            var gap = count == 1 ? d : GapPlate(grid, c, _owner, d);
+            DecideCell(c, candidates[..count], bodies[..count], gap, plates, newCrustCells);
         }
 
         // 3. 保險：整個落在別的板塊地殼底下、又沒被顯示的點
@@ -377,6 +383,18 @@ internal sealed class PlateFrameCrust
         Array.Copy(_owner, plates.OwnerByCell, _cellCount);
         Read(state);
     }
+
+    /// <summary>
+    /// 平行處理每一格，但每個工作拿一段連續的格子，而不是每格呼叫一次委派。
+    /// 只能用在各格互不相依的迴圈（每格只寫自己）：分段方式不影響結果。
+    /// 老化每步要對每個板塊各掃一次全部格子（12 個板塊就是 270 萬次），每格只做兩個乘加，委派的開銷比本體還大。
+    /// （第 3 段「隱藏的點」試過也改成這樣，反而從 29 變 35 毫秒：那裡每格的工作量差很多，留著原本的 Parallel.For。）
+    /// </summary>
+    private static void ForEachCellRange(int count, Action<int, int> body) =>
+        Parallel.ForEach(System.Collections.Concurrent.Partitioner.Create(0, count, CellRangeSize), range => body(range.Item1, range.Item2));
+
+    /// <summary><see cref="ForEachCellRange"/> 每段的格數。</summary>
+    private const int CellRangeSize = 4096;
 
     /// <summary>
     /// 清掉一個死掉的板塊：它殘留的碎片格交給周圍的板塊（那裡沒有地殼就長新的），座標系裡的舊點全部作廢——
