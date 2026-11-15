@@ -406,8 +406,10 @@ WebGL context，切換幾十次就會超過瀏覽器的 context 上限。
   旗標晚一步設（原本在 TRUNCATE 之後），中間那段時間的第二個請求照樣通過檢查。
 - **鄰居推導有面內部的快速路徑**（`TileNeighborResolver.GetNeighborCoordinates`）：三個權重都 ≥ 2 的六角格直接加減座標。
   改一般路徑（`GetNeighborCoordinatesGeneral`）的列舉順序時，快速路徑的順序要跟著改——`GetNeighborCoordinates_FastPathMatchesGeneralPath` 逐格比對。
-- **附近地塊查詢剩下的 1 秒是「回傳 5 萬列完整資料」**，不是索引掃描（只取編號約 0.2 秒）、不是排序、也不是算鄰居（已降到 20~60 毫秒）。
-  同步讀取、分兩步查都試過，沒有明顯改善；要再快得改資料表（涵蓋索引）或少傳欄位。
+- **附近地塊查詢要寫成兩層**：內層只用 `(Latitude, Longitude)` 索引挑出最近的 N 個編號，外層再回主鍵接整列。寫成一層（`SELECT TOP n * … ORDER BY 距離`）時 SQL Server 會先把查詢框內每個候選都回主表取整列、再帶著整列排序。兩層的結果逐位元組相同，不必加涵蓋索引。
+- **執行計畫照「第一次呼叫的參數」編出來後沿用**。舊的一層寫法，計畫若照 5 萬筆編，之後連取 10 筆都要 1.7 秒、取 5 萬筆 2.4 秒以上；照小批編反而只要 1.2 秒——所以同一支 API 的耗時會隨「服務啟動後誰先呼叫」而變。量效能時要留意自己的暖機請求用了什麼參數。現在筆數用 `TakeConstant` 寫成 SQL 常數，每種筆數各有自己的計畫。
+- `Take(EF.Constant(n))` 不能用：`Take` 的引數不是 lambda，`EF.Constant` 會在組查詢前被直接執行而丟例外；要手動組運算式樹（見 `QueryableConstantExtensions.TakeConstant`）。
+- 附近地塊 5 萬筆現在約 0.8～0.9 秒（開發版）：資料庫約 0.5 秒，其餘是轉物件、算鄰居、輸出 13 MB JSON。再往下要靠縮小回應（改傳輸格式），不是索引。
 - **發佈時工作區有別人沒提交的修改**：用 `git worktree add --detach <暫存目錄> HEAD` 從乾淨的 HEAD 發佈，不要把半成品帶上正式站。
 
 ## 編輯模式（2026-11-08）：修改疊在即時產生的小格上
