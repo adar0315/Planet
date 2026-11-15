@@ -82,6 +82,8 @@ builder.Services.AddHostedService<PlanetSeeder>();
 builder.Services.AddResponseCompression(options =>
 {
     options.EnableForHttps = true;
+    // 地塊的二進位格式也壓：同一欄的值排在一起、重複度高，壓得動
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Append(TileBinaryEncoder.ContentType);
     options.Providers.Add<BrotliCompressionProvider>();
     options.Providers.Add<GzipCompressionProvider>();
 });

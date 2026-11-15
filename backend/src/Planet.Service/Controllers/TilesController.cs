@@ -50,7 +50,9 @@ public class TilesController : ControllerBase
     {
         if (request.TileIds is not { Length: > 0 } ids) return BadRequest("要給地塊編號。");
         if (ids.Length > SubTileService.MaxParentsPerRequest) return BadRequest($"一次最多 {SubTileService.MaxParentsPerRequest} 個地塊。");
-        return Ok(await _subTiles.GetSubTilesAsync(ids, ct));
+        var subTiles = await _subTiles.GetSubTilesAsync(ids, ct);
+        if (TileBinaryEncoder.IsRequested(Request)) return File(TileBinaryEncoder.Encode(subTiles), TileBinaryEncoder.ContentType);
+        return Ok(subTiles);
     }
 
     /// <summary>
@@ -99,7 +101,10 @@ public class TilesController : ControllerBase
         // 一併附上patch內部的鄰接關係，前端就不必為了知道「腳下這格能往哪走」再打一次
         // /neighbors（省一次來回），也才能在按鍵當下直接移動、不等伺服器。純記憶體運算，不查DB。
         var neighborIds = PatchNeighborLinker.LinkWithinPatch(tiles, _neighborResolver);
-        return Ok(tiles.Select((t, i) => t.ToDto(neighborIds[i])).ToList());
+        var dtos = tiles.Select((t, i) => t.ToDto(neighborIds[i])).ToList();
+        // 前端帶 Accept 標頭要求二進位（大小約 JSON 的三分之一）；不帶就是 JSON
+        if (TileBinaryEncoder.IsRequested(Request)) return File(TileBinaryEncoder.Encode(dtos), TileBinaryEncoder.ContentType);
+        return Ok(dtos);
     }
 
     /// <summary>依Id查詢單一地塊。</summary>

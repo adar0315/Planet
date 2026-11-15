@@ -7,8 +7,20 @@ import type {
 } from '@/types/tile'
 import type { TerrainStyleDto } from '@/types/terrainStyle'
 import type { TerrainGenerationOptionsDto } from '@/types/terrainOptions'
+import { decodeSubTiles, decodeTiles, TILE_BINARY_CONTENT_TYPE } from './tileBinary'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5202'
+
+/**
+ * 地塊與小格優先要二進位格式（大小約 JSON 的三分之一，見 tileBinary.ts），JSON 當備援：
+ * 後端還是舊版時會忽略這個標頭、照舊回 JSON，前後端不必同時部署。
+ */
+const TILE_ACCEPT = `${TILE_BINARY_CONTENT_TYPE}, application/json;q=0.9`
+
+/** 回應是不是二進位格式（否則是 JSON）。 */
+function isTileBinary(response: Response): boolean {
+  return (response.headers.get('Content-Type') ?? '').includes(TILE_BINARY_CONTENT_TYPE)
+}
 
 export async function fetchTilesNear(
   latitude: number,
@@ -20,10 +32,11 @@ export async function fetchTilesNear(
   url.searchParams.set('lon', String(longitude))
   url.searchParams.set('count', String(radiusCount))
 
-  const response = await fetch(url)
+  const response = await fetch(url, { headers: { Accept: TILE_ACCEPT } })
   if (!response.ok) {
     throw new Error(`取得地圖資料失敗: ${response.status}`)
   }
+  if (isTileBinary(response)) return decodeTiles(await response.arrayBuffer())
   return response.json()
 }
 
@@ -34,10 +47,12 @@ export async function fetchTilesNear(
 export async function fetchSubTiles(tileIds: readonly number[]): Promise<SubTileDto[]> {
   const response = await fetch(new URL('/api/tiles/subtiles', API_BASE_URL), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: TILE_ACCEPT },
     body: JSON.stringify({ tileIds }),
   })
   if (!response.ok) throw new Error(`取得細分地塊失敗: ${response.status}`)
+  if (isTileBinary(response)) return decodeSubTiles(await response.arrayBuffer())
+  // 以下是 JSON 備援（舊版後端）
   // 後端的編號欄位叫 subTileId，前端沿用 TileDto 的 tileId。漏了這一步的話 tileId 全是 undefined：
   // 鄰居一個都查不到，每格都退回固定半徑的近似畫法，六角形互相重疊（2026-10-26 使用者回報「顯示有問題」）
   const raw: (Omit<SubTileDto, 'tileId'> & { subTileId: number })[] = await response.json()
@@ -187,7 +202,7 @@ async function adminFetch(path: string, adminKey: string, init?: RequestInit): P
   const url = new URL(path, API_BASE_URL)
   const response = await fetch(url, {
     ...init,
-    headers: { ...(init?.headers ?? {}), [ADMIN_KEY_HEADER]: adminKey },
+    headers: { ...init?.headers, [ADMIN_KEY_HEADER]: adminKey },
   })
 
   if (response.status === 401) {
