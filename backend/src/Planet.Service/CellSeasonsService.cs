@@ -1,3 +1,4 @@
+using Planet.Generation;
 using Planet.Shared;
 using Planet.Simulation;
 
@@ -13,18 +14,25 @@ public sealed class CellSeasonsService
     public const int MaxCellsPerRequest = 5_000;
 
     /// <summary>星球記錄服務，提供地形來源。</summary>
-    private readonly PlanetMetadataService _metadata;
+    /// <summary>取得目前這顆星球的地形來源（正式使用時是 <see cref="PlanetMetadataService.GetAppliedTerrainSourceAsync"/>）。</summary>
+    private readonly Func<CancellationToken, Task<ITerrainGenerator>> _terrainSource;
 
     /// <summary>建立服務。</summary>
     /// <param name="metadata">星球記錄服務。</param>
-    public CellSeasonsService(PlanetMetadataService metadata) => _metadata = metadata;
+    public CellSeasonsService(PlanetMetadataService metadata) : this(metadata.GetAppliedTerrainSourceAsync)
+    {
+    }
+
+    /// <summary>測試用：直接給地形來源。（不是 public，DI 只會選上面那個建構子。）</summary>
+    /// <param name="terrainSource">取得地形來源的方法。</param>
+    internal CellSeasonsService(Func<CancellationToken, Task<ITerrainGenerator>> terrainSource) => _terrainSource = terrainSource;
 
     /// <summary>這些粗格的四季（程序化的星球沒有，回傳空的；不存在的編號略過）。</summary>
     /// <param name="cellIds">粗格編號。</param>
     /// <param name="ct">取消權杖。</param>
     public async Task<IReadOnlyList<CellSeasonsDto>> GetSeasonsAsync(IReadOnlyCollection<int> cellIds, CancellationToken ct)
     {
-        if (await _metadata.GetAppliedTerrainSourceAsync(ct) is not SimulatedTerrainSampler simulated) return [];
+        if (await _terrainSource(ct) is not SimulatedTerrainSampler simulated) return [];
         var cells = simulated.Cells;
         return cellIds
             .Where(id => id >= 0 && id < cells.Count)

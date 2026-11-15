@@ -75,18 +75,19 @@ public class RegenerationController : ControllerBase
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public IActionResult Regenerate()
     {
-        if (_regenerationService.IsRunning || _materializationService.Status.IsRunning)
+        if (_materializationService.Status.IsRunning)
         {
             return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
         }
 
         try
         {
+            // 「有沒有在跑」由 StartInBackground 在同一把鎖裡檢查並標記（原子動作）；
+            // 這裡不再先看 IsRunning——那樣是兩步，中間會被插隊，而且讓下面這條路幾乎走不到、測不到。
             _regenerationService.StartInBackground(_optionsStore.Current, clearExisting: true);
         }
         catch (InvalidOperationException)
         {
-            // 上面檢查之後、這裡受理之前，另一個請求搶先開始了
             return Conflict(new { message = "已經有星球生成或放大作業正在進行中，請等它完成後再試一次。" });
         }
         return Accepted();

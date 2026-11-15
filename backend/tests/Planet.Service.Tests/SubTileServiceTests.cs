@@ -3,6 +3,7 @@ using Planet.Generation;
 using Planet.Service;
 using Planet.Shared;
 using Planet.Simulation;
+using static Planet.Service.Tests.TestWorld;
 
 namespace Planet.Service.Tests;
 
@@ -16,54 +17,6 @@ namespace Planet.Service.Tests;
 /// </summary>
 public class SubTileServiceTests
 {
-    /// <summary>不是 <see cref="SimulatedTerrainSampler"/> 的地形來源：服務會走「小格照抄所屬地塊」那條路。</summary>
-    private sealed class ProceduralSource : ITerrainGenerator
-    {
-        public TerrainSample Sample(double latitude, double longitude) => new(TerrainType.Grassland, 0, 10);
-    }
-
-    /// <summary>
-    /// 正式頻率的前 20 萬個地塊（第 0 面從頂點往下約 630 列）。地塊的 (面, 列, 行) 必須是真的，小格幾何才算得出來；
-    /// 地形在各個測試裡自己設。只產生一次。
-    /// </summary>
-    private static readonly Lazy<IReadOnlyList<Tile>> RealTiles = new(() =>
-        new GoldbergPlanetGenerator(GoldbergPlanetGenerator.SubdivisionFrequency, new ProceduralSource())
-            .GenerateTiles().Take(200_000).ToList());
-
-    private static Tile Copy(Tile tile, TerrainType terrain, int heightCategory, int elevationLevel, int seaLevel) => new()
-    {
-        TileId = tile.TileId,
-        Shape = tile.Shape,
-        FaceIndex = tile.FaceIndex,
-        Row = tile.Row,
-        Col = tile.Col,
-        Latitude = tile.Latitude,
-        Longitude = tile.Longitude,
-        Terrain = terrain,
-        HeightCategory = heightCategory,
-        ElevationLevel = elevationLevel,
-        SeaLevel = seaLevel,
-    };
-
-    private sealed record Setup(SubTileService Service, FakeConstructionRepository Constructions);
-
-    private static Setup Create(IReadOnlyList<Tile> tiles, ITerrainGenerator? source = null)
-    {
-        var constructions = new FakeConstructionRepository();
-        var scopes = FakeScopes.For(new FakeTileRepository(tiles), constructions);
-        var terrain = source ?? new ProceduralSource();
-        return new Setup(new SubTileService(scopes, _ => Task.FromResult(terrain), new SubTileGeometryCache()), constructions);
-    }
-
-    /// <summary>一小片相連的陸地地塊（第 0 面第 40～45 列附近），每塊的海拔不同，方便認出小格抄的是哪一塊。</summary>
-    private static List<Tile> LandPatch()
-    {
-        return RealTiles.Value
-            .Where(t => t.Row is >= 40 and <= 45 && t.Col <= 6)
-            .Select((t, i) => Copy(t, TerrainType.Grassland, 1, 100 + i, 0))
-            .ToList();
-    }
-
     private static SubTileSurface SurfaceOf(SubTileDto dto) => new(
         Enum.Parse<TerrainType>(dto.Terrain), dto.HeightCategory, dto.ElevationLevel, dto.SeaLevel,
         dto.RiverCellId, dto.RiverDistanceMeters, dto.RiverWidthMeters, dto.Floodplain, dto.SourceCellId);
