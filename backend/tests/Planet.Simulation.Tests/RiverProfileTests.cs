@@ -185,6 +185,87 @@ public class RiverProfileTests
         Assert.Equal(TerrainType.Seawater, InlandButSea(10).Terrain); // 遠離三角洲的海照舊是海
     }
 
+    /// <summary>
+    /// 三角洲往海裡長出去的部分要是一整塊，不能有脫離主體的碎塊（2026-11-15 在正式站量到：同一帶有 4、4、6、26、29 格的泥灘，
+    /// 四周都是海）。成因是外緣用「照位置取樣的雜訊」切：主體外面雜訊剛好偏高的一小塊也被當成扇面。
+    /// 現在雜訊只跟方向有關，從頂點往外每個方向只有一個外緣距離。
+    /// 做法：河口周圍鋪 400 公尺的點陣、全部當成海格取樣，被填成三角洲的點只能有一個連通塊。
+    /// </summary>
+    [Theory]
+    [InlineData(38.7f)]
+    [InlineData(300f)]
+    [InlineData(1_000f)]
+    [InlineData(4_000f)]
+    public void DeltaIsOnePieceWithNoDetachedIslands(float supply)
+    {
+        var (cells, path) = River([300, 200, 100, 50, 20], sea => sea.DeltaSupply = supply);
+        var sampler = new LandformSampler(Grid, cells);
+        var u = Grid.UnitVector;
+        (double X, double Y, double Z) At(int c) => (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
+        static (double X, double Y, double Z) Unit((double X, double Y, double Z) v)
+        {
+            var l = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            return (v.X / l, v.Y / l, v.Z / l);
+        }
+        var (land, sea) = (At(path[^2]), At(path[^1]));
+        var coast = Unit((land.X + sea.X, land.Y + sea.Y, land.Z + sea.Z));
+        var axis = Unit((sea.X - land.X, sea.Y - land.Y, sea.Z - land.Z));
+        var side = Unit((coast.Y * axis.Z - coast.Z * axis.Y, coast.Z * axis.X - coast.X * axis.Z, coast.X * axis.Y - coast.Y * axis.X));
+
+        // 涵蓋整個扇面再多一圈（半徑最多 60 公里，外緣最遠到 1.325 倍）
+        const double step = 400;
+        var reach = 60_000 * 1.5;
+        var size = (int)(2 * reach / step) + 1;
+        var inFan = new bool[size, size];
+        var total = 0;
+        for (var i = 0; i < size; i++)
+        {
+            for (var j = 0; j < size; j++)
+            {
+                var a = (-reach + i * step) / Grid.PlanetRadiusMeters;
+                var b = (-reach + j * step) / Grid.PlanetRadiusMeters;
+                var p = Unit((coast.X + a * axis.X + b * side.X, coast.Y + a * axis.Y + b * side.Y, coast.Z + a * axis.Z + b * side.Z));
+                var sample = sampler.Sample(Math.Asin(p.Z) * 180 / Math.PI, Math.Atan2(p.Y, p.X) * 180 / Math.PI, path[^1]);
+                inFan[i, j] = sample.Terrain != TerrainType.Seawater;
+                if (inFan[i, j]) total++;
+            }
+        }
+        Assert.True(total > 50, $"三角洲只取樣到 {total} 點：場景沒有長出三角洲");
+
+        // 連通塊（八方向）
+        var seen = new bool[size, size];
+        var pieces = new List<int>();
+        var stack = new Stack<(int, int)>();
+        for (var i = 0; i < size; i++)
+        {
+            for (var j = 0; j < size; j++)
+            {
+                if (!inFan[i, j] || seen[i, j]) continue;
+                var count = 0;
+                seen[i, j] = true;
+                stack.Push((i, j));
+                while (stack.Count > 0)
+                {
+                    var (ci, cj) = stack.Pop();
+                    count++;
+                    for (var di = -1; di <= 1; di++)
+                    {
+                        for (var dj = -1; dj <= 1; dj++)
+                        {
+                            int ni = ci + di, nj = cj + dj;
+                            if (ni < 0 || nj < 0 || ni >= size || nj >= size || !inFan[ni, nj] || seen[ni, nj]) continue;
+                            seen[ni, nj] = true;
+                            stack.Push((ni, nj));
+                        }
+                    }
+                }
+                pieces.Add(count);
+            }
+        }
+        pieces.Sort();
+        Assert.True(pieces.Count == 1, $"三角洲分成 {pieces.Count} 塊（點數由小到大：{string.Join(", ", pieces)}）");
+    }
+
     [Fact]
     public void RiverIntoAHighLakeStaysAboveTheLakeSurface()
     {

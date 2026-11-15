@@ -320,9 +320,13 @@ public sealed class LandformSampler
         lobe = 0;
         // 先用雜訊的上限排除遠處（雜訊最貴）
         if (distance > delta.Radius * (0.8 + 0.35 * 1.5) || distance < 1) return false;
-        // 邊緣用雜訊打散：三角洲的輪廓是一個個朵狀的沙洲，不是圓規畫的扇形
+        // 邊緣用雜訊打散：三角洲的輪廓是一個個朵狀的沙洲，不是圓規畫的扇形。
+        // 雜訊只看「方向」：把這一點沿著從頂點出發的射線投到外緣的圓周上再取樣，每個方向因此只有一個外緣距離，
+        // 扇面從頂點往外是連續的。原本照這一點的位置取樣，主體外面雜訊剛好偏高的一小塊也會被當成扇面，
+        // 海被填成脫離主體的泥灘——正式站同一帶量到 4、4、6、26、29 格的泥灘小島（2026-11-15）。
         var f = _radius / DeltaLobeWavelengthMeters;
-        lobe = _deltaNoise.Fbm(p.Item1 * f, p.Item2 * f, p.Item3 * f, 3, 1.0);
+        var rim = Add(delta.Apex, Scale(dir, delta.Radius / distance));
+        lobe = _deltaNoise.Fbm(rim.Item1 * f, rim.Item2 * f, rim.Item3 * f, 3, 1.0);
         if (distance > delta.Radius * (0.8 + 0.35 * lobe)) return false;
         var angle = Math.Atan2(across, along) * 180 / Math.PI;
         return Math.Abs(angle) <= DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
