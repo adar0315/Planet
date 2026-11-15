@@ -1420,6 +1420,12 @@ internal sealed class PlateFrameCrust
     }
 
     /// <summary>
+    /// 回寫時，沒被顯示的點要不要照抄那一格的沉積：兩點的地殼厚度差在這個值（公里）以內才抄，見 <see cref="WriteBack"/>。
+    /// 洋殼約 7 公里、大陸地殼 25 公里以上，8 公里分得開這兩種，又容許同一片海盆或同一塊大陸內部的厚度起伏。
+    /// </summary>
+    private const float AliasSedimentCopyMaxCrustGapKm = 8f;
+
+    /// <summary>
     /// 地質作用改完格子之後寫回。用「拉」的：板塊座標系裡**每一個**有地殼的點，去看自己現在在哪一格，
     /// 那一格顯示的是這個板塊的話就收下那一格這一步的修改；類別值（地殼型別、只能是海洋）改了的話直接照抄。
     ///
@@ -1480,8 +1486,15 @@ internal sealed class PlateFrameCrust
                     _density[plate][b] += _dDensity[g];
                     _organic[plate][b] = MathF.Max(0f, _organic[plate][b] + _dOrganic[g]);
                     // 沉積物不加差值、直接照抄：一格的堆積是好幾十公尺到好幾公里，加差值的話混疊出來的點每一步都多拿一份，
-                    // 之後被顯示出來就是一根兩倍厚的沉積柱（P7 第一次校準：40 Myr 單格 39 公里、四周 18 公里）
-                    _sediment[plate][b] = state.SedimentThickness[g];
+                    // 之後被顯示出來就是一根兩倍厚的沉積柱（P7 第一次校準：40 Myr 單格 39 公里、四周 18 公里）。
+                    //
+                    // **但只在兩點的地殼差不多時才抄**（2026-11-15）：沉積是壓在自己那根地殼柱上的。大陸邊緣外被河填滿的海盆
+                    // （洋殼 7 公里＋沉積 21 公里、表面在海平面）跟旁邊的大陸同屬一個板塊，交界上沒被顯示的大陸地殼點混疊到海盆格、
+                    // 照抄 21 公里的沉積，之後露出來就是「27 公里的大陸地殼＋21 公里沉積」——均衡把它抬到海拔 3~5 公里，
+                    // 孤立一格的尖塔（41 Myr 量到 14 格，六個鄰居都比它低）。反方向是海盆裡的厚沉積被抄成薄的、露出來是一個深坑。
+                    // 實測 60 步裡各發生 228、260 次。地殼差太多就保留這一點自己的沉積。
+                    if (MathF.Abs(_thickness[plate][b] - state.CrustThickness[g]) <= AliasSedimentCopyMaxCrustGapKm)
+                        _sediment[plate][b] = state.SedimentThickness[g];
                     _relief[plate][b] = Math.Clamp(_relief[plate][b] + _dRelief[g], -MaxReliefMeters, MaxReliefMeters);
                     _cover[plate][b] = Math.Clamp(_cover[plate][b] + _dCover[g], 0f, Lithology.MaxCoverMeters);
                 }
