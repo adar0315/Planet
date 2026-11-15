@@ -24,4 +24,55 @@ public class SeedingStatus
 
     /// <summary>如果背景生成失敗，這裡會有錯誤訊息；成功或還在進行中則是null。</summary>
     public string? ErrorMessage;
+
+    /// <summary>保護 <see cref="_exclusiveOwner"/> 的鎖。</summary>
+    private readonly Lock _exclusiveLock = new();
+
+    /// <summary>目前佔著「整個換掉地塊表」位置的工作名稱；沒有的話是 null。</summary>
+    private string? _exclusiveOwner;
+
+    /// <summary>
+    /// 目前佔著位置的工作（「重新生成」或「放大存檔」），沒有的話是 null。
+    ///
+    /// 這兩件工作都會整個換掉地塊表，同時跑會互相覆蓋。原本各自用自己的鎖、各自看對方的旗標
+    /// （重新生成在控制器先看放大有沒有在跑、放大在自己的鎖裡看重新生成的旗標），兩個幾乎同時的請求可能都通過。
+    /// 現在兩邊都在這同一把鎖裡搶同一個位置（2026-11-15）。
+    /// </summary>
+    public string? ExclusiveOwner
+    {
+        get
+        {
+            lock (_exclusiveLock) return _exclusiveOwner;
+        }
+    }
+
+    /// <summary>
+    /// 佔用「整個換掉地塊表」的位置。已經有別的工作佔著時回傳 false（檢查與佔用是同一個原子動作）。
+    /// 成功的話，工作結束時（成功或失敗都一樣）一定要呼叫 <see cref="EndExclusive"/>。
+    /// </summary>
+    /// <param name="owner">工作名稱，記錄誰佔著。</param>
+    /// <param name="onAcquired">佔到位置之後、放開鎖之前要做的事（例如把進度狀態設成「進行中」），讓別人看到的狀態跟位置一致。</param>
+    public bool TryBeginExclusive(string owner, Action? onAcquired = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(owner);
+        lock (_exclusiveLock)
+        {
+            if (_exclusiveOwner is not null) return false;
+            _exclusiveOwner = owner;
+            onAcquired?.Invoke();
+            return true;
+        }
+    }
+
+    /// <summary>放開位置。只有佔著的那件工作能放；放錯（不是自己佔的）就丟例外，那是程式寫錯了。</summary>
+    /// <param name="owner">當初佔用時的工作名稱。</param>
+    public void EndExclusive(string owner)
+    {
+        lock (_exclusiveLock)
+        {
+            if (_exclusiveOwner != owner)
+                throw new InvalidOperationException($"「{owner}」要放開的位置現在是「{_exclusiveOwner ?? "沒有人"}」佔著。");
+            _exclusiveOwner = null;
+        }
+    }
 }

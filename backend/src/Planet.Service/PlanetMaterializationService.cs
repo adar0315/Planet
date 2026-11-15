@@ -34,6 +34,9 @@ public class PlanetMaterializationService
     /// <summary>保護 <see cref="Status"/> 的鎖。</summary>
     private readonly Lock _lock = new();
 
+    /// <summary>佔用 <see cref="SeedingStatus.TryBeginExclusive"/> 時用的工作名稱。</summary>
+    internal const string ExclusiveOwnerName = "放大存檔";
+
     /// <summary>建立服務。</summary>
     public PlanetMaterializationService(
         IServiceScopeFactory scopeFactory,
@@ -60,11 +63,15 @@ public class PlanetMaterializationService
     /// <param name="snapshotName">模擬存檔名稱。</param>
     public bool TryStart(string snapshotName)
     {
-        lock (_lock)
+        // 跟重新生成搶同一個位置：兩者都會整個換掉地塊表
+        var acquired = _seedingStatus.TryBeginExclusive(ExclusiveOwnerName, () =>
         {
-            if (Status.IsRunning || _seedingStatus.IsSeeding) return false;
-            Status = new MaterializationStatus { IsRunning = true, SnapshotName = snapshotName, Phase = "讀取存檔" };
-        }
+            lock (_lock)
+            {
+                Status = new MaterializationStatus { IsRunning = true, SnapshotName = snapshotName, Phase = "讀取存檔" };
+            }
+        });
+        if (!acquired) return false;
 
         _ = RunAsync(snapshotName);
         return true;
@@ -123,6 +130,10 @@ public class PlanetMaterializationService
         {
             Update(s => s with { IsRunning = false, Error = ex.Message, ElapsedSeconds = stopwatch.Elapsed.TotalSeconds });
             _logger.LogError(ex, "放大存檔 {Snapshot} 失敗。舊的地塊沒有被動到（暫存表還沒切換）。", snapshotName);
+        }
+        finally
+        {
+            _seedingStatus.EndExclusive(ExclusiveOwnerName);
         }
     }
 

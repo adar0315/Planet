@@ -16,6 +16,10 @@ namespace Planet.Service.Tests;
 /// 倉儲是假的，而且可以在任何一步停住（<see cref="GatedTileRepository"/>）：
 /// 要驗的是「檢查有沒有在跑」與「標成正在跑」是同一個原子動作（2026-11-14 修的 bug：旗標原本在 TRUNCATE 之後才設，
 /// 中間那段時間的第二個請求照樣通過檢查），以及成功、失敗之後狀態有沒有收乾淨。
+///
+/// 也驗「重新生成」與「放大存檔」不會同時跑（2026-11-15 修的 bug：兩邊各用自己的鎖、各看對方的旗標）。
+/// 放大會先查星球中繼資料，所以讓中繼資料倉儲卡在閘門上（<see cref="GatedMetadataRepository"/>），
+/// 放大就會真的停在「進行中」；放行後它因為找不到中繼資料而失敗，順便驗「放大失敗也會放開位置」。
 /// </summary>
 public class PlanetRegenerationServiceTests
 {
@@ -57,14 +61,37 @@ public class PlanetRegenerationServiceTests
         }
     }
 
+    /// <summary>中繼資料倉儲：讀取時卡在閘門上（放大存檔的第一步會讀它），放行後回傳「沒有中繼資料」；寫入照常記錄。</summary>
+    private sealed class GatedMetadataRepository : IPlanetMetadataRepository
+    {
+        public FakeMetadataRepository Inner { get; } = new();
+        public TaskCompletionSource ReadGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReadReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<PlanetMetadata?> GetAsync(CancellationToken ct = default)
+        {
+            ReadReached.TrySetResult();
+            await ReadGate.Task;
+            return null;
+        }
+
+        public Task UpsertAsync(PlanetMetadata metadata, CancellationToken ct = default) => Inner.UpsertAsync(metadata, ct);
+    }
+
     private sealed record World(
         PlanetRegenerationService Service, SeedingStatus Status, GatedTileRepository Tiles,
-        FakeMetadataRepository Metadata, PlanetMaterializationService Materialization);
+        GatedMetadataRepository MetadataGate, PlanetMaterializationService Materialization)
+    {
+        public FakeMetadataRepository Metadata => MetadataGate.Inner;
+    }
+
+    /// <summary>放大要讀的存檔：內容不重要（還沒讀到內容就會因為沒有中繼資料而失敗），檔案要存在。</summary>
+    private const string SnapshotName = "held";
 
     private static World Create(GatedTileRepository? tiles = null)
     {
         tiles ??= new GatedTileRepository();
-        var metadataRepository = new FakeMetadataRepository();
+        var metadataRepository = new GatedMetadataRepository();
         var scopes = FakeScopes.Build(services => services
             .AddScoped<ITileRepository>(_ => tiles)
             .AddScoped<IPlanetMetadataRepository>(_ => metadataRepository));
@@ -72,19 +99,24 @@ public class PlanetRegenerationServiceTests
         var metadata = new PlanetMetadataService(scopes, new SimulationGridCache(), NullLogger<PlanetMetadataService>.Instance);
         var overview = new OverviewTextureGenerator(metadata, scopes);
         var service = new PlanetRegenerationService(scopes, status, overview, metadata, NullLogger<PlanetRegenerationService>.Instance);
-        // 放大服務只用到它的狀態（重新生成前要確認它沒在跑）；模擬服務在這些路徑上不會被用到
+
+        var snapshotDirectory = Path.Combine(Path.GetTempPath(), "planet-regeneration-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(snapshotDirectory);
+        var snapshots = new SnapshotStore(snapshotDirectory);
+        File.WriteAllBytes(snapshots.PathOf(SnapshotName), [0]);
+        var simulation = new SimulationService(metadata, snapshots, new SimulationGridCache());
         var materialization = new PlanetMaterializationService(
-            scopes, null!, metadata, overview, status, NullLogger<PlanetMaterializationService>.Instance);
+            scopes, simulation, metadata, overview, status, NullLogger<PlanetMaterializationService>.Instance);
         return new World(service, status, tiles, metadataRepository, materialization);
     }
 
-    /// <summary>等背景作業結束（成功或失敗都會把 IsSeeding 設回 false）。</summary>
+    /// <summary>等背景作業結束、位置也放開了（成功或失敗都會把 IsSeeding 設回 false，最後才放開位置）。</summary>
     private static async Task WaitUntilFinished(SeedingStatus status)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (status.IsSeeding)
+        while (status.IsSeeding || status.ExclusiveOwner is not null)
         {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("重新生成在 30 秒內沒有結束");
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"背景作業在 30 秒內沒有結束（位置：{status.ExclusiveOwner}）");
             await Task.Delay(10);
         }
     }
@@ -223,6 +255,111 @@ public class PlanetRegenerationServiceTests
         Assert.Single(world.Metadata.Upserts);
     }
 
+    // ───────────────────────── 與放大存檔互斥 ─────────────────────────
+
+    [Fact]
+    public async Task WhileMaterializing_TheRegenerationServiceItselfRefuses_AndLeavesTheMapAlone()
+    {
+        // 舊的寫法只有控制器會先看放大有沒有在跑，服務本身不看：繞過控制器（或兩個請求剛好交錯）就會兩件一起跑
+        var world = Create();
+        Assert.True(world.Materialization.TryStart(SnapshotName));
+        await WithTimeout(world.MetadataGate.ReadReached.Task);
+        Assert.Equal(PlanetMaterializationService.ExclusiveOwnerName, world.Status.ExclusiveOwner);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            world.Service.StartInBackground(TerrainGenerationOptions.Default, clearExisting: true));
+        Assert.IsType<ConflictObjectResult>(Controller(world).Regenerate());
+
+        // 被拒絕的重新生成不能動到任何狀態：地圖仍然可用、沒有清空任何東西
+        Assert.False(world.Status.IsSeeding);
+        Assert.True(world.Status.IsReady);
+        Assert.Empty(world.Tiles.Steps);
+
+        // 放大放行之後失敗（測試裡沒有中繼資料）：位置要放開，之後重新生成就可以開始
+        world.MetadataGate.ReadGate.SetResult();
+        await WaitUntilFinished(world.Status);
+        Assert.False(world.Materialization.Status.IsRunning);
+        Assert.NotNull(world.Materialization.Status.Error);
+
+        world.Tiles.ClearGate.SetResult();
+        world.Tiles.InsertGate.SetResult();
+        Assert.IsType<AcceptedResult>(Controller(world).Regenerate());
+        await WaitUntilFinished(world.Status);
+        Assert.True(world.Status.IsReady);
+    }
+
+    [Fact]
+    public async Task WhileRegenerating_MaterializationRefuses_AndKeepsItsOwnStatus()
+    {
+        var world = Create();
+        world.Service.StartInBackground(TerrainGenerationOptions.Default, clearExisting: true);
+        await WithTimeout(world.Tiles.ClearReached.Task);
+
+        Assert.False(world.Materialization.TryStart(SnapshotName));
+        Assert.IsType<ConflictObjectResult>(Controller(world).Materialize(SnapshotName));
+        // 被拒絕的放大不能把自己的狀態改成「進行中」
+        Assert.False(world.Materialization.Status.IsRunning);
+        Assert.Null(world.Materialization.Status.SnapshotName);
+        Assert.False(world.MetadataGate.ReadReached.Task.IsCompleted);
+
+        world.Tiles.ClearGate.SetResult();
+        world.Tiles.InsertGate.SetResult();
+        await WaitUntilFinished(world.Status);
+    }
+
+    [Fact]
+    public async Task RegenerateAndMaterialize_SimultaneousRequests_ExactlyOneOfAllIsAccepted()
+    {
+        var world = Create();
+        const int eachKind = 16;
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var pending = Enumerable.Range(0, eachKind * 2).Select(i => Task.Run(async () =>
+        {
+            await start.Task;
+            return i % 2 == 0 ? Controller(world).Regenerate() : Controller(world).Materialize(SnapshotName);
+        })).ToList();
+        start.SetResult();
+        var results = await Task.WhenAll(pending);
+
+        Assert.Equal(1, results.Count(r => r is AcceptedResult));
+        Assert.Equal(eachKind * 2 - 1, results.Count(r => r is ConflictObjectResult));
+        // 受理的是哪一件，位置就是誰的，而且另一件完全沒有開始
+        if (world.Status.ExclusiveOwner == PlanetRegenerationService.ExclusiveOwnerName)
+        {
+            Assert.False(world.Materialization.Status.IsRunning);
+        }
+        else
+        {
+            Assert.Equal(PlanetMaterializationService.ExclusiveOwnerName, world.Status.ExclusiveOwner);
+            Assert.False(world.Status.IsSeeding);
+            Assert.Empty(world.Tiles.Steps);
+        }
+
+        world.MetadataGate.ReadGate.SetResult();
+        world.Tiles.ClearGate.SetResult();
+        world.Tiles.InsertGate.SetResult();
+        await WaitUntilFinished(world.Status);
+    }
+
+    [Fact]
+    public void ExclusiveSlot_OnlyTheOwnerCanRelease_AndItCanBeTakenAgainAfterwards()
+    {
+        var status = new SeedingStatus();
+        var callbacks = 0;
+
+        Assert.True(status.TryBeginExclusive("甲", () => callbacks++));
+        Assert.False(status.TryBeginExclusive("乙", () => callbacks++)); // 沒佔到就不執行
+        Assert.Equal(1, callbacks);
+        Assert.Throws<InvalidOperationException>(() => status.EndExclusive("乙"));
+        Assert.Equal("甲", status.ExclusiveOwner);
+
+        status.EndExclusive("甲");
+        Assert.Null(status.ExclusiveOwner);
+        Assert.Throws<InvalidOperationException>(() => status.EndExclusive("甲")); // 放兩次也是程式寫錯
+        Assert.True(status.TryBeginExclusive("乙"));
+    }
+
     // ───────────────────────── 控制器 ─────────────────────────
 
     private static RegenerationController Controller(World world) =>
@@ -237,7 +374,7 @@ public class PlanetRegenerationServiceTests
         await WithTimeout(world.Tiles.ClearReached.Task);
         Assert.IsType<ConflictObjectResult>(Controller(world).Regenerate());
         // 重新生成中也不能開始放大（兩者都會整個換掉地塊表）
-        Assert.IsType<ConflictObjectResult>(Controller(world).Materialize("anything"));
+        Assert.IsType<ConflictObjectResult>(Controller(world).Materialize(SnapshotName));
 
         world.Tiles.ClearGate.SetResult();
         world.Tiles.InsertGate.SetResult();

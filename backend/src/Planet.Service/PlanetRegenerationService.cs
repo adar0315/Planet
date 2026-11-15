@@ -40,7 +40,8 @@ public class PlanetRegenerationService
     public bool IsRunning => _status.IsSeeding;
 
     /// <summary>保護「檢查並標成正在生成」這個動作。</summary>
-    private readonly Lock _startLock = new();
+    /// <summary>佔用 <see cref="SeedingStatus.TryBeginExclusive"/> 時用的工作名稱。</summary>
+    internal const string ExclusiveOwnerName = "重新生成";
 
     /// <summary>
     /// 在背景開始生成，立刻回傳、不等待完成（見 <see cref="PlanetSeeder"/> 說明：不能讓呼叫端等整個生成過程，
@@ -57,17 +58,17 @@ public class PlanetRegenerationService
     /// </param>
     public void StartInBackground(TerrainGenerationOptions options, bool clearExisting)
     {
-        lock (_startLock)
+        // 跟放大存檔搶同一個位置：兩者都會整個換掉地塊表
+        var acquired = _status.TryBeginExclusive(ExclusiveOwnerName, () =>
         {
-            if (_status.IsSeeding)
-            {
-                throw new InvalidOperationException("已經有星球生成作業正在進行中，請等它完成後再試一次。");
-            }
-
             _status.IsSeeding = true;
             _status.ErrorMessage = null;
             // 要清空的話，從這一刻起地圖就不能用了（清空期間查到的是空的或一半的資料）
             if (clearExisting) _status.IsReady = false;
+        });
+        if (!acquired)
+        {
+            throw new InvalidOperationException("已經有星球生成或放大作業正在進行中，請等它完成後再試一次。");
         }
 
         _ = RunAsync(options, clearExisting);
@@ -120,6 +121,11 @@ public class PlanetRegenerationService
             _status.IsSeeding = false;
             _status.ErrorMessage = ex.Message;
             _logger.LogError(ex, "星球生成失敗。");
+        }
+        finally
+        {
+            // 狀態都設好了才放開位置：放早了，下一件工作可能先把 IsSeeding 設成 true、又被這裡蓋回 false
+            _status.EndExclusive(ExclusiveOwnerName);
         }
     }
 }
