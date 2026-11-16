@@ -178,6 +178,8 @@ public sealed class SimulationEngine
             _climate.OrographyAboveWater = true; // v2 P7：地形抬升從水面算起
             _climate.BaselineRainReferenceKm = 200; // v2 P7：基礎降水是每 200 公里 6%，不是每格
             _climate.WindSpeedScaledAdvection = true; // v2 P9：風弱的地方水氣搬得慢，赤道不再有一排降水尖峰
+            _reefs.DissolutionUsesMillimetres = true; // 2026-11-16：露出水面的礁照設計的速率溶蝕
+            _reefs.ContinentalReefsStayBelowSeaLevel = true; // 2026-11-16：大陸棚上的礁不長成陸地
             // v2 P8：全球暖 4°C，冰蓋才壓得到陸地的 10% 以下（2026-10-20 使用者選定）。2026-11-08 冷冰河的侵蝕從 3 倍改成 1 倍之後，
             // 極地的陸地比較高、冰佔陸地升到 14%；+5/+6/+8/+9 是 12.6/11.8/9.8/8.9%，使用者選 +9（淨輸出到海 130 m/Myr）
             _climate.GlobalTemperatureOffsetC = 9f;

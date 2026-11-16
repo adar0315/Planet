@@ -76,6 +76,30 @@ public sealed class CoralReefs
     private const float DissolutionMetersPerMyrPerMillimetreOfRain = 0.03f;
 
     /// <summary>
+    /// 溶蝕用的降水換算成公釐／年（2026-11-16；只在板塊座標系模式開，標記法照舊）。
+    ///
+    /// <see cref="SimulationState.Precipitation"/> 是相對尺度（典型 0~30），不是公釐／年；原本直接拿來乘
+    /// <see cref="DissolutionMetersPerMyrPerMillimetreOfRain"/>，溶蝕不到設計值的百分之一（最多約 1 公尺／百萬年，設計是 30~100），
+    /// 露出水面的礁只進不出：海平面在 41 Myr 裡降了 260 公尺，一路露出來的礁都留著，11,329 格陸地是靠礁才在水面上的。
+    /// 開了之後把全球平均降水當成 <see cref="ReferenceMeanPrecipitationMm"/>，各格依比例換算。
+    /// </summary>
+    public bool DissolutionUsesMillimetres { get; set; }
+
+    /// <summary>全球平均降水當成多少公釐／年（地球約 1,000），見 <see cref="DissolutionUsesMillimetres"/>。</summary>
+    private const double ReferenceMeanPrecipitationMm = 1000;
+
+    /// <summary>
+    /// 大陸地殼上的礁停在海面下 <see cref="ContinentalReefTopDepthM"/>，不長出水面（2026-11-16；只在板塊座標系模式開）。
+    ///
+    /// <see cref="IslandFreeboardM"/> 是為了海洋上的珊瑚島：礁長到海面上 3 公尺就算陸地。但熱帶水深 60 公尺以內的大陸棚
+    /// 整片都符合造礁條件，於是整片變成陸地——大陸棚變不寬的原因之一。海洋地殼上的礁照舊（環礁、珊瑚島）。
+    /// </summary>
+    public bool ContinentalReefsStayBelowSeaLevel { get; set; }
+
+    /// <summary>大陸地殼上的礁頂離海面多深（公尺），見 <see cref="ContinentalReefsStayBelowSeaLevel"/>。</summary>
+    private const float ContinentalReefTopDepthM = 5f;
+
+    /// <summary>
     /// 推進一步的造礁作用。
     /// </summary>
     /// <param name="state">模擬狀態，<see cref="SimulationState.OrganicThickness"/> 會增加。</param>
@@ -85,6 +109,16 @@ public sealed class CoralReefs
         var maxGrowth = (float)(MaxGrowthRateMPerKiloyear * deltaYears / 1000.0);
         var dissolutionPerMillimetre =
             (float)(DissolutionMetersPerMyrPerMillimetreOfRain * deltaYears / 1_000_000.0);
+
+        if (DissolutionUsesMillimetres)
+        {
+            // 依序加總（不平行），同種子結果才不變
+            double sum = 0;
+            for (var c = 0; c < state.CellCount; c++) sum += state.Precipitation[c];
+            var mean = sum / state.CellCount;
+            dissolutionPerMillimetre = mean > 0 ? (float)(dissolutionPerMillimetre * ReferenceMeanPrecipitationMm / mean) : 0f;
+        }
+        var capContinental = ContinentalReefsStayBelowSeaLevel;
 
         Parallel.For(0, state.CellCount, cell =>
         {
@@ -104,7 +138,9 @@ public sealed class CoralReefs
             if (state.Temperature[cell] < MinTemperatureC) return;
 
             // 可以長多高：長到海平面之上一點點（風暴堆積的碎屑）就沒有空間了
-            var accommodation = depth + IslandFreeboardM;
+            var accommodation = capContinental && state.Crust[cell] == CrustType.Continental
+                ? depth - ContinentalReefTopDepthM
+                : depth + IslandFreeboardM;
             if (accommodation <= 0f) return;
 
             state.OrganicThickness[cell] += MathF.Min(maxGrowth, accommodation);

@@ -85,6 +85,56 @@ public class CoralReefTests
     }
 
     /// <summary>
+    /// 大陸棚上的礁停在海面下、不變成陸地；海洋地殼上的礁照舊長成珊瑚島（2026-11-16）。
+    /// 沒有這個區分時，熱帶水深 60 公尺以內的大陸棚整片長到海面上 3 公尺、變成陸地。
+    /// </summary>
+    [Fact]
+    public void Step_ContinentalReefsStayUnderwater_OceanicReefsStillBecomeIslands()
+    {
+        var grid = CreateGrid();
+        var state = CreateSea(grid, depthMeters: 20f, temperatureC: 27f);
+        for (var cell = 0; cell < state.CellCount; cell += 2) state.Crust[cell] = CrustType.Continental;
+        var reefs = new CoralReefs { ContinentalReefsStayBelowSeaLevel = true };
+
+        for (var i = 0; i < 50; i++)
+        {
+            reefs.Step(state, 50_000);
+            for (var cell = 0; cell < state.CellCount; cell++)
+                state.WaterDepth[cell] = MathF.Max(0f, state.SeaLevelMeters - state.SurfaceElevationAt(cell));
+        }
+
+        for (var cell = 0; cell < state.CellCount; cell++)
+        {
+            if (state.Crust[cell] == CrustType.Continental)
+                Assert.InRange(state.WaterDepth[cell], 4.9f, 5.1f);
+            else
+                Assert.Equal(0f, state.WaterDepth[cell]);
+        }
+    }
+
+    /// <summary>
+    /// 露出水面的礁照設計的速率溶蝕（2026-11-16）：降水是相對尺度，要先換算成公釐／年。
+    /// 全球平均的降水 ＝ 1,000 公釐／年 ＝ 每百萬年 30 公尺；沒換算時同樣的降水只溶掉幾公分，露出水面的礁只進不出。
+    /// </summary>
+    [Fact]
+    public void Step_ExposedReefDissolvesAtTheDesignedRate()
+    {
+        var grid = CreateGrid();
+        var state = CreateSea(grid, depthMeters: 0f, temperatureC: 27f);
+        for (var cell = 0; cell < state.CellCount; cell++)
+        {
+            state.OrganicThickness[cell] = 100f;
+            state.Precipitation[cell] = cell % 2 == 0 ? 0.5f : 1.5f; // 平均 1：一半的格子雨少、一半雨多
+        }
+
+        new CoralReefs { DissolutionUsesMillimetres = true }.Step(state, 1_000_000);
+
+        // 0.03 公尺／百萬年／公釐 × 500、1,500 公釐
+        Assert.Equal(100f - 15f, state.OrganicThickness[0], 0.1f);
+        Assert.Equal(100f - 45f, state.OrganicThickness[1], 0.1f);
+    }
+
+    /// <summary>
     /// 在完整的模擬裡，珊瑚**生長**必須只發生在低緯度的溫暖海域。
     ///
     /// **守的是「哪裡在長」，不是「哪裡有礁灰岩」**（2026-09-07 改）：礁灰岩掛在標記上、
