@@ -151,6 +151,15 @@ public sealed class LandformSampler
     /// <summary>沙灘、礫灘鋪到海拔幾公尺（公尺）：再高的海岸帶維持原本的地形，不壓平。</summary>
     private const double BeachTopMeters = 8;
 
+    /// <summary>三角洲從頂點到外緣，超過這個比例的部分是沙灘（河口沙洲）。</summary>
+    private const double DeltaBeachShare = 0.85;
+
+    /// <summary>海岸帶裡離海這麼近（海岸帶寬度的比例）的泥地、沼澤也被浪洗成沙灘。</summary>
+    private const double WashedShoreShare = 0.35;
+
+    /// <summary>硬岩海岸受浪程度到這個值就是岩岸（沒那麼高的低矮礁岩）；更遮蔽的海灣才是沙灘。</summary>
+    private const float RockyShoreExposure = 0.15f;
+
     /// <summary>海崖的高度（公尺），乘上受浪程度。</summary>
     private const double CliffHeightMeters = 120;
 
@@ -335,6 +344,37 @@ public sealed class LandformSampler
         return Math.Abs(angle) <= DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
     }
 
+    /// <summary>三角洲前積層的範圍（公尺，扇面外緣往海量）：再遠就是海床原本的深度。</summary>
+    private const double ProdeltaReachMeters = 20_000;
+
+    /// <summary>前積層的深度上限（公尺，正值）：近處緩（每公里 20 公尺），遠處越來越陡，到範圍邊緣比任何海都深，跟原本的海床接得起來。</summary>
+    private static double ProdeltaDepthMeters(double offshore)
+    {
+        var t = offshore / ProdeltaReachMeters;
+        return 1 + 0.02 * offshore + 6_000 * t * t;
+    }
+
+    /// <summary>點離三角洲（扇面與根）多遠（公尺）；在裡面是 0。扇面側邊外用離側邊的角度近似。</summary>
+    private double FanOffshoreMeters((double, double, double) p, in Delta delta)
+    {
+        var dir = Sub(p, delta.Apex);
+        var distance = Length(dir) * _radius;
+        var root = distance - (DeltaInlandShare * delta.Radius + DeltaRootMarginMeters);
+        if (distance > delta.Radius * (0.8 + 0.35 * 1.5) + ProdeltaReachMeters) return Math.Max(0, root);
+        var lobe = 0.0;
+        if (distance >= 1)
+        {
+            var f = _radius / DeltaLobeWavelengthMeters;
+            var rim = Add(delta.Apex, Scale(dir, delta.Radius / distance));
+            lobe = _deltaNoise.Fbm(rim.Item1 * f, rim.Item2 * f, rim.Item3 * f, 3, 1.0);
+        }
+        var radial = distance - delta.Radius * (0.8 + 0.35 * lobe);
+        var angle = Math.Abs(Math.Atan2(Dot(dir, delta.Side), Dot(dir, delta.Axis)) * 180 / Math.PI);
+        var excess = angle - DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
+        var lateral = excess > 0 ? distance * Math.Sin(Math.Min(90, excess) * Math.PI / 180) : 0;
+        return Math.Max(0, Math.Min(Math.Max(radial, lateral), root));
+    }
+
     /// <summary>點在不在任何三角洲的扇面或根（見 <see cref="DeltaRootMarginMeters"/>）裡：這些地方的海填成三角洲。</summary>
     private bool InAnyFan((double, double, double) p, int nearest)
     {
@@ -461,6 +501,14 @@ public sealed class LandformSampler
         {
             var surface = (double)cell.WaterSurfaceMeters;
             elevation = Math.Min(elevation, surface - 1);
+            // 三角洲前緣：扇面往海裡長，外面卻是那格海原本的深度，泥灘邊直接是上千公尺的牆（2026-11-18）。
+            // 真的三角洲前積層是緩坡：離扇面越遠越深，深到海床原本的深度為止
+            if (cell.IsOcean && _deltasNear[nearest] is { } nearDeltas)
+            {
+                var offshore = double.PositiveInfinity;
+                foreach (var d in nearDeltas) offshore = Math.Min(offshore, FanOffshoreMeters(p, _deltas[d]));
+                if (offshore < ProdeltaReachMeters) elevation = Math.Max(elevation, -ProdeltaDepthMeters(offshore));
+            }
             return new LandformSample(cell.Terrain, cell.HeightCategory, elevation, surface, nearest, -1, double.PositiveInfinity, 0, false);
         }
 
@@ -565,8 +613,16 @@ public sealed class LandformSampler
                     }
                     elevation = Math.Max(elevation, cliff);
                 }
-                else if (elevation <= BeachTopMeters && terrain is not (TerrainType.Swamp or TerrainType.Mud))
+                else if (elevation <= BeachTopMeters && hard && cell.WaveExposure >= RockyShoreExposure)
                 {
+                    // 岩岸：硬岩、有浪，但不到海崖的程度——低矮的礁岩海岸，高度不動
+                    terrain = TerrainType.Rock;
+                    category = 0;
+                }
+                else if (elevation <= BeachTopMeters
+                    && (terrain is not (TerrainType.Swamp or TerrainType.Mud) || coast < ShoreBandMeters * WashedShoreShare))
+                {
+                    // 河口、泛濫平原的泥地到了海邊也是沙：浪把細泥帶走，留下沙
                     // 沙灘、礫灘只鋪在海邊的低地上，高度不動：以前把整條帶子壓到 2~6 公尺，
                     // 帶子是平滑核的範圍（好幾公里），內緣外面是原本幾百公尺的高地，海岸一圈都是垂直的牆（2026-11-18）
                     terrain = rock is ExposedRock.Volcanic or ExposedRock.Melange || cell.WaveExposure > 0.6f ? TerrainType.Gravel : TerrainType.Sand;
@@ -791,7 +847,9 @@ public sealed class LandformSampler
         // 分流之間：沼澤（靠內陸）與泥灘（靠海），往海邊越來越低
         var fraction = distance / delta.Radius;
         elevation = Math.Min(elevation, (DeltaTopMeters - 0.5) * (1 - fraction) + 0.5);
-        terrain = fraction + 0.3 * lobe > 0.6 ? TerrainType.Mud : TerrainType.Swamp;
+        // 最外緣是浪打得到的河口沙洲、沙灘（泥留在後面比較靜的地方）
+        var rim = distance / (delta.Radius * (0.8 + 0.35 * lobe));
+        terrain = rim > DeltaBeachShare ? TerrainType.Sand : fraction + 0.3 * lobe > 0.6 ? TerrainType.Mud : TerrainType.Swamp;
         category = 0;
         return true;
     }

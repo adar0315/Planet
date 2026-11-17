@@ -158,6 +158,54 @@ public class RiverProfileTests
     }
 
     /// <summary>
+    /// 2026-11-18 正式站：三角洲泥灘長到 -1,075 公尺的海上，邊緣是一道垂直的牆。
+    /// 外緣要是沙（河口沙洲），外面的海底從淺處慢慢變深（前積層），遠處才是海床原本的深度。
+    /// </summary>
+    [Fact]
+    public void DeltaFrontIsSandAndSlopesIntoTheSea()
+    {
+        var (cells, path) = River([300, 200, 100, 50, 20], sea => sea.DeltaSupply = 1_000f);
+        var sampler = new LandformSampler(Grid, cells);
+        var u = Grid.UnitVector;
+        (double X, double Y, double Z) At(int c) => (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
+        var (land, sea) = (At(path[^2]), At(path[^1]));
+        var spacing = Math.Sqrt(Math.Pow(sea.X - land.X, 2) + Math.Pow(sea.Y - land.Y, 2) + Math.Pow(sea.Z - land.Z, 2)) * Grid.PlanetRadiusMeters;
+        const double floor = -3_000;
+        LandformSample Seaward(double meters)
+        {
+            // 從海岸往海走，往側邊偏 2 公里避開主分流；海那格的海床當成 3,000 公尺深
+            var t = 0.5 + meters / spacing;
+            var p = (X: land.X + (sea.X - land.X) * t, Y: land.Y + (sea.Y - land.Y) * t, Z: land.Z + (sea.Z - land.Z) * t);
+            var side = (X: land.Y * sea.Z - land.Z * sea.Y, Y: land.Z * sea.X - land.X * sea.Z, Z: land.X * sea.Y - land.Y * sea.X);
+            var offset = 2_000 / Grid.PlanetRadiusMeters / Math.Sqrt(side.X * side.X + side.Y * side.Y + side.Z * side.Z);
+            p = (p.X + side.X * offset, p.Y + side.Y * offset, p.Z + side.Z * offset);
+            var length = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+            return sampler.Sample(Math.Asin(p.Z / length) * 180 / Math.PI, Math.Atan2(p.Y, p.X) * 180 / Math.PI, path[^1], floor);
+        }
+
+        LandformSample? previous = null;
+        var sawFront = false;
+        for (var m = 0.0; m <= 120_000; m += 200)
+        {
+            var s = Seaward(m);
+            if (previous is { } p)
+            {
+                if (p.Terrain != TerrainType.Seawater && s.Terrain == TerrainType.Seawater)
+                {
+                    sawFront = true;
+                    Assert.Equal(TerrainType.Sand, p.Terrain); // 最外緣是沙
+                    Assert.True(s.ElevationMeters > -20, $"三角洲外第一步的海底 {s.ElevationMeters:F0} 公尺");
+                }
+                if (p.Terrain == TerrainType.Seawater && s.Terrain == TerrainType.Seawater)
+                    Assert.True(Math.Abs(s.ElevationMeters - p.ElevationMeters) < 120, $"{m} 公尺處海底一步差 {Math.Abs(s.ElevationMeters - p.ElevationMeters):F0} 公尺");
+            }
+            previous = s;
+        }
+        Assert.True(sawFront, "沒走到三角洲外緣");
+        Assert.Equal(floor, previous!.Value.ElevationMeters); // 遠處是海床原本的深度
+    }
+
+    /// <summary>
     /// 小格的海岸線會被雜訊扭曲、跟著等高線走，可能跑到三角洲頂點的後面（內陸）：那裡的海也要填成三角洲，
     /// 不然三角洲跟陸地之間夾一條海，變成離岸的島（2026-11-08 實測：半徑 5.9 公里的三角洲，頂點後面 1 公里還是海）。
     /// </summary>
