@@ -13,6 +13,9 @@ import { hashId, type Season } from './constructionModels'
  *   尺寸跟建築物一樣放大（房子半徑到 190 公尺），不然鏡頭最近也在 4.5 公里外，真實大小的樹只是一個點
  *   （第一版 30~85 公尺，實際看是小格上幾個暗點，2026-11-17）。
  * - 位置由小格編號決定（每次重建同一格的樹都在同一個地方）。
+ *
+ * 草地（Grassland）上的草叢也在這裡（2026-11-17）：`heightCategory` 0~4 ＝ 草高到腳板／小腿肚／腰部／肩膀／高過頭，
+ * 一格 {@link GRASS_TUFTS_PER_SUBTILE} 叢，同樣放大（矮草 16 公尺、高草 50 公尺；加上 ±25% 的差異也比最矮的樹矮）。
  */
 
 /** 樹的種類：寒帶針葉、溫帶落葉闊葉、熱帶常綠闊葉。 */
@@ -119,7 +122,94 @@ export function crownColor(kind: TreeKind, season: Season, snow: boolean, shade:
   return new THREE.Color(base).multiplyScalar(0.85 + 0.25 * shade).getHex()
 }
 
-/** 一格小格當下的季節、積雪、年均溫（給樹種與樹冠顏色用）。 */
+/** 草高分級 0~4 的草叢高度（公尺，放大過）。 */
+export const GRASS_HEIGHTS_METERS = [16, 22, 30, 40, 50] as const
+/** 每一格草地幾叢草。 */
+export const GRASS_TUFTS_PER_SUBTILE = 28
+/** 草叢種在小格中心多遠以內（公尺）：草叢比樹冠窄，可以種到比較靠邊。 */
+const GRASS_RADIUS_METERS = 190
+/** 積雪時這個分級以下（腳板、小腿肚）的草被雪蓋住。 */
+const BURIED_BY_SNOW_UP_TO = 1
+
+/** 一叢草（在小格切平面上，往東 x、往北 z 公尺）。 */
+export interface GrassTuft {
+  x: number
+  z: number
+  /** 草高（公尺，放大過的）。 */
+  height: number
+  /** 繞上方轉幾弧度（每叢的葉片方向不一樣）。 */
+  rotation: number
+  /** 0~1：顏色深淺差異。 */
+  shade: number
+}
+
+/** 一個草地小格上的草叢；不是草地就是空的。 */
+export function grassTufts(sub: SubTileDto): GrassTuft[] {
+  if (sub.terrain !== 'Grassland') return []
+  const level = THREE.MathUtils.clamp(sub.heightCategory, 0, GRASS_HEIGHTS_METERS.length - 1)
+  // 跟樹用不同的亂數序列：同一個編號的林地與草地不必長得一樣
+  const random = seeded(hashId(sub.tileId) ^ 0x5bd1e995)
+  const tufts: GrassTuft[] = []
+  for (let i = 0; i < GRASS_TUFTS_PER_SUBTILE; i++) {
+    const r = Math.sqrt(random()) * GRASS_RADIUS_METERS
+    const angle = random() * Math.PI * 2
+    tufts.push({
+      x: r * Math.cos(angle),
+      z: r * Math.sin(angle),
+      height: GRASS_HEIGHTS_METERS[level]! * (0.75 + 0.5 * random()),
+      rotation: random() * Math.PI * 2,
+      shade: random(),
+    })
+  }
+  return tufts
+}
+
+/**
+ * 草的顏色：春嫩綠、夏綠、秋黃、冬枯黃；熱帶（年均溫 20°C 以上）一年都綠。
+ * 積雪時矮草被埋住（回傳 null），高草露出枯黃的草尖。
+ */
+export function grassColor(
+  season: Season,
+  snow: boolean,
+  annualMeanC: number | undefined,
+  heightCategory: number,
+  shade: number,
+): number | null {
+  if (snow && heightCategory <= BURIED_BY_SNOW_UP_TO) return null
+  const tropical = annualMeanC !== undefined && annualMeanC >= TROPICAL_ABOVE_C
+  const base = snow
+    ? 0xcfc6a4
+    : tropical
+      ? 0x7ab648
+      : { 春: 0x9ccc5a, 夏: 0x6aa83c, 秋: 0xbfae5c, 冬: 0xa89468 }[season]
+  return new THREE.Color(base).multiplyScalar(0.85 + 0.25 * shade).getHex()
+}
+
+/**
+ * 一叢草：三片細長的葉子，往外斜 15°、彼此差 120°，底部在原點、高 1、寬約 1。雙面著色（葉片很薄）。
+ */
+function grassTuftGeometry(): THREE.BufferGeometry {
+  const positions: number[] = []
+  const lean = Math.tan((15 * Math.PI) / 180)
+  for (let k = 0; k < 3; k++) {
+    const a = (k * 2 * Math.PI) / 3
+    const cos = Math.cos(a)
+    const sin = Math.sin(a)
+    // 葉片在自己的平面上：底寬 0.5，尖端往外斜（第一版 0.3、一格 16 叢，看起來只是零星幾根細線）
+    const base = [
+      [-0.25, 0, 0],
+      [0.25, 0, 0],
+      [0, 1, lean],
+    ]
+    for (const [x, y, z] of base) positions.push(x! * cos + z! * sin, y!, -x! * sin + z! * cos)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+/** 一格小格當下的季節、積雪、年均溫（給樹種、樹冠與草的顏色用）。 */
 export interface ForestClimate {
   season: Season
   snow: boolean
@@ -130,14 +220,16 @@ export interface VegetationLayer {
   readonly group: THREE.Group
   /** 種了幾棵樹（診斷用）。 */
   readonly treeCount: number
+  /** 長了幾叢草（診斷用；被雪埋住的不算）。 */
+  readonly grassCount: number
   dispose(): void
 }
 
 const TRUNK_COLOR = 0x6b4a2e
 
 /**
- * 建出一批小格上的樹：樹幹、闊葉樹冠、針葉樹冠各一個 InstancedMesh（幾萬棵樹也只有三次繪製）。
- * @param subs 要種樹的小格（呼叫端先挑好：林地、沒有建築物、在裁切圓內）。
+ * 建出一批小格上的樹與草：樹幹、闊葉樹冠、針葉樹冠、草叢各一個 InstancedMesh（幾萬棵也只有四次繪製）。
+ * @param subs 要長植物的小格（呼叫端先挑好：林地或草地、沒有建築物、在裁切圓內、不在河裡）。
  * @param options 小格的尺寸換算（跟小格 mesh 同一份）。
  * @param climateOf 每一格的季節、積雪、年均溫。
  */
@@ -150,18 +242,21 @@ export function buildVegetationLayer(
   const trunks: THREE.Matrix4[] = []
   const broadleaf: { matrix: THREE.Matrix4; color: number }[] = []
   const conifers: { matrix: THREE.Matrix4; color: number }[] = []
+  const grass: { matrix: THREE.Matrix4; color: number }[] = []
 
   const scale = new THREE.Matrix4()
+  const turn = new THREE.Matrix4()
   for (const sub of subs) {
     const climate = climateOf(sub)
     const trees = forestTrees(sub, climate.annualMeanC)
-    if (trees.length === 0) continue
+    const tufts = grassTufts(sub)
+    if (trees.length === 0 && tufts.length === 0) continue
     const frame = tangentBasisAt(latLonToVector3(sub.latitude, sub.longitude, 1))
     const south = frame.north.clone().negate()
     const basis = new THREE.Matrix4().makeBasis(frame.east, frame.normal, south)
     const surface = tileSurfaceRadius(sub, options)
     // 一棵樹：底部在地面、往東 x 往北 z，(寬, 高, 寬) 縮放（幾何體都是底部在原點、高 1、半徑 1）
-    const at = (x: number, z: number, lift: number, width: number, height: number) => {
+    const at = (x: number, z: number, lift: number, width: number, height: number, rotation = 0) => {
       const position = frame.normal
         .clone()
         .multiplyScalar(surface + lift * metersToScene)
@@ -170,7 +265,13 @@ export function buildVegetationLayer(
       return basis
         .clone()
         .setPosition(position)
+        .multiply(turn.makeRotationY(rotation))
         .multiply(scale.makeScale(width * metersToScene, height * metersToScene, width * metersToScene))
+    }
+    for (const tuft of tufts) {
+      const color = grassColor(climate.season, climate.snow, climate.annualMeanC, sub.heightCategory, tuft.shade)
+      if (color === null) continue // 被雪埋住
+      grass.push({ matrix: at(tuft.x, tuft.z, 0, tuft.height, tuft.height, tuft.rotation), color })
     }
     for (const tree of trees) {
       const h = tree.height
@@ -190,13 +291,18 @@ export function buildVegetationLayer(
   const geometries: THREE.BufferGeometry[] = []
   const materials: THREE.Material[] = []
 
-  function addInstanced(geometry: THREE.BufferGeometry, items: { matrix: THREE.Matrix4; color: number }[], uniform?: number) {
+  function addInstanced(
+    geometry: THREE.BufferGeometry,
+    items: { matrix: THREE.Matrix4; color: number }[],
+    uniform?: number,
+    side: THREE.Side = THREE.FrontSide,
+  ) {
     if (items.length === 0) {
       geometry.dispose()
       return
     }
     geometries.push(geometry)
-    const material = new THREE.MeshLambertMaterial({ color: uniform ?? 0xffffff })
+    const material = new THREE.MeshLambertMaterial({ color: uniform ?? 0xffffff, side })
     materials.push(material)
     const mesh = new THREE.InstancedMesh(geometry, material, items.length)
     const color = new THREE.Color()
@@ -218,10 +324,12 @@ export function buildVegetationLayer(
   addInstanced(trunk, trunks.map((matrix) => ({ matrix, color: TRUNK_COLOR })), TRUNK_COLOR)
   addInstanced(crown, broadleaf)
   addInstanced(cone, conifers)
+  addInstanced(grassTuftGeometry(), grass, undefined, THREE.DoubleSide)
 
   return {
     group,
     treeCount: trunks.length,
+    grassCount: grass.length,
     dispose() {
       for (const g of geometries) g.dispose()
       for (const m of materials) m.dispose()

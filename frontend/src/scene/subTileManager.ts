@@ -245,14 +245,14 @@ export function createSubTileManager(
   }
 
   /**
-   * 可能種樹的小格：林地、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。
+   * 可能長植物的小格：林地（樹）或草地（草叢）、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。
    * 河道與淹水的泛濫平原這時候不種（{@link riverCovers}），那個看時間，在 rebuildVegetation 裡篩。
    */
   function forestSubs(): SubTileDto[] {
     if (!subPatch) return []
     const out: SubTileDto[] = []
     for (const sub of subPatch.tiles as SubTileDto[]) {
-      if (sub.terrain !== 'Forest' || sub.structure) continue
+      if ((sub.terrain !== 'Forest' && sub.terrain !== 'Grassland') || sub.structure) continue
       if (latLonToVector3(sub.latitude, sub.longitude, 1).angleTo(clipCenter) >= clipAngle) continue
       out.push(sub)
     }

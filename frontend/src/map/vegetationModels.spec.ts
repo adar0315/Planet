@@ -4,11 +4,15 @@ import type { SubTileDto } from '@/types/tile'
 import { latLonToVector3 } from './sphereCoordinates'
 import { tileSurfaceRadius } from './tileMeshBuilder'
 import {
+  GRASS_HEIGHTS_METERS,
+  GRASS_TUFTS_PER_SUBTILE,
   TREE_HEIGHTS_METERS,
   TREES_PER_SUBTILE,
   buildVegetationLayer,
   crownColor,
   forestTrees,
+  grassColor,
+  grassTufts,
   treeKindAt,
 } from './vegetationModels'
 
@@ -140,6 +144,69 @@ describe('buildVegetationLayer', () => {
     const hits: THREE.Intersection[] = []
     for (const child of layer.group.children) child.raycast(new THREE.Raycaster(), hits)
     expect(hits).toHaveLength(0)
+    layer.dispose()
+  })
+})
+
+describe('grassTufts', () => {
+  const grassland = (heightCategory: number, tileId = 77): SubTileDto => ({ ...forest(0, tileId), terrain: 'Grassland', heightCategory })
+
+  it('不是草地就沒有草', () => {
+    expect(grassTufts(forest(3))).toEqual([])
+  })
+
+  it('每格固定叢數，草高照分級（±25%），都比最矮的樹矮', () => {
+    for (let level = 0; level < GRASS_HEIGHTS_METERS.length; level++) {
+      const tufts = grassTufts(grassland(level))
+      expect(tufts).toHaveLength(GRASS_TUFTS_PER_SUBTILE)
+      for (const t of tufts) {
+        expect(t.height).toBeGreaterThanOrEqual(GRASS_HEIGHTS_METERS[level]! * 0.75)
+        expect(t.height).toBeLessThanOrEqual(GRASS_HEIGHTS_METERS[level]! * 1.25)
+        expect(t.height).toBeLessThan(TREE_HEIGHTS_METERS[0] * 0.8)
+        expect(Math.hypot(t.x, t.z)).toBeLessThanOrEqual(190)
+      }
+    }
+  })
+
+  it('同一格每次都一樣', () => {
+    expect(grassTufts(grassland(2))).toEqual(grassTufts(grassland(2)))
+  })
+})
+
+describe('grassColor', () => {
+  it('積雪時矮草被埋住、高草露出來', () => {
+    expect(grassColor('冬', true, 0, 1, 0.5)).toBeNull()
+    expect(grassColor('冬', true, 0, 2, 0.5)).not.toBeNull()
+  })
+
+  it('溫帶冬天枯黃（紅大於綠的比例比夏天高），熱帶冬天照樣綠', () => {
+    const ratio = (hex: number) => {
+      const c = new THREE.Color(hex)
+      return c.r / c.g
+    }
+    expect(ratio(grassColor('冬', false, 12, 2, 0.5)!)).toBeGreaterThan(ratio(grassColor('夏', false, 12, 2, 0.5)!))
+    expect(grassColor('冬', false, 25, 2, 0.5)).toBe(grassColor('夏', false, 25, 2, 0.5))
+  })
+})
+
+describe('buildVegetationLayer（草）', () => {
+  const grassland = (heightCategory: number, tileId: number): SubTileDto => ({ ...forest(0, tileId), terrain: 'Grassland', heightCategory })
+
+  it('草地長草、不長樹；雪埋住矮草就沒有', () => {
+    const summer = buildVegetationLayer([grassland(2, 5)], options, () => ({ season: '夏', snow: false, annualMeanC: 12 }))
+    expect(summer.grassCount).toBe(GRASS_TUFTS_PER_SUBTILE)
+    expect(summer.treeCount).toBe(0)
+    summer.dispose()
+    const buried = buildVegetationLayer([grassland(0, 5)], options, () => ({ season: '冬', snow: true, annualMeanC: 0 }))
+    expect(buried.grassCount).toBe(0)
+    expect(buried.group.children).toHaveLength(0)
+    buried.dispose()
+  })
+
+  it('草叢的葉片雙面著色（葉片很薄，背面也要看得到）', () => {
+    const layer = buildVegetationLayer([grassland(4, 6)], options, () => ({ season: '夏', snow: false, annualMeanC: 12 }))
+    const mesh = layer.group.children[0] as THREE.InstancedMesh
+    expect((mesh.material as THREE.Material).side).toBe(THREE.DoubleSide)
     layer.dispose()
   })
 })

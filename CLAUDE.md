@@ -390,7 +390,7 @@ INPUT/TEXTAREA/SELECT，否則在輸入框打字會把玩家一起走掉（已�
 | HUD的鏡頭數字（指北針/傾斜/距離/高度/縮放%） | `hudStats.ts` |
 | 鍵盤/滑鼠輸入 | `inputHandlers.ts` |
 | 左鍵點一下看方塊資訊（面板 `ui/TileInfoPanel.vue`、內容 `map/tileInfo.ts`） | `tileInspector.ts` |
-| 林地的樹（近看小格才種；高度與疏密照 heightCategory、樹種照年均溫、樹冠跟季節） | `map/vegetationModels.ts`，由 `subTileManager.ts` 建 |
+| 林地的樹、草地的草叢（近看小格才長；高度與疏密照 heightCategory、樹種照年均溫、顏色跟季節；河裡不長） | `map/vegetationModels.ts`，由 `subTileManager.ts` 建 |
 
 三個視角（走動／總覽／地質演化）各自是**完全獨立**的 Three.js 場景與 render loop，
 用 `v-if` 互相切換。三者的 `dispose` 都要呼叫 `forceContextLoss()`——`dispose()` 不會歸還
