@@ -20,6 +20,7 @@ import {
   type SeasonState,
 } from '@/map/constructionModels'
 import { monthFlag, monthPosition, seasonName } from '@/map/seasons'
+import { buildVegetationLayer, type ForestClimate, type VegetationLayer } from '@/map/vegetationModels'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
 import {
@@ -109,6 +110,8 @@ export function createSubTileManager(
   let subPatch: TilePatch | null = null
   /** 這批小格上的建築物。 */
   let constructions: ConstructionLayer | null = null
+  /** 這批小格上林地的樹（只種在裁切圓內、沒有建築物的林地）。 */
+  let vegetation: VegetationLayer | null = null
   /** 地形改過了，下一次 update 要重新要一批（就算正在載入也要：那一批可能是改之前要的）。 */
   let refreshRequested = false
   let refreshHeld = false
@@ -231,6 +234,54 @@ export function createSubTileManager(
   }
   let builtSignature = ''
 
+  /** 林地的樹種看年均溫、樹冠看季節與積雪。 */
+  function climateOf(sub: SubTileDto): ForestClimate {
+    const cell = sub.sourceCellId !== undefined ? seasonData.seasonsOf(sub.sourceCellId) : undefined
+    const annualMeanC =
+      cell && cell.temperature.length > 0
+        ? cell.temperature.reduce((a, b) => a + b, 0) / cell.temperature.length
+        : undefined
+    return { ...seasonOf(sub), annualMeanC }
+  }
+
+  /** 要種樹的小格：林地、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。 */
+  function forestSubs(): SubTileDto[] {
+    if (!subPatch) return []
+    const out: SubTileDto[] = []
+    for (const sub of subPatch.tiles as SubTileDto[]) {
+      if (sub.terrain !== 'Forest' || sub.structure) continue
+      if (latLonToVector3(sub.latitude, sub.longitude, 1).angleTo(clipCenter) >= clipAngle) continue
+      out.push(sub)
+    }
+    return out
+  }
+
+  /** 樹冠跟著季節、積雪變：數字簽章（每次遊戲時間變都會算，不要組字串）。 */
+  function vegetationSignature(subs: readonly SubTileDto[]): number {
+    let h = 0
+    for (const sub of subs) {
+      const state = seasonOf(sub)
+      const code = '春夏秋冬'.indexOf(state.season) * 2 + (state.snow ? 1 : 0)
+      h = (Math.imul(h, 31) + code) | 0
+    }
+    return h
+  }
+  let vegetationSubs: SubTileDto[] = []
+  let vegetationBuiltSignature = 0
+
+  function rebuildVegetation() {
+    if (vegetation) {
+      group.remove(vegetation.group)
+      vegetation.dispose()
+      vegetation = null
+    }
+    vegetationSubs = forestSubs()
+    if (vegetationSubs.length === 0) return
+    vegetationBuiltSignature = vegetationSignature(vegetationSubs)
+    vegetation = buildVegetationLayer(vegetationSubs, subOptions, climateOf)
+    group.add(vegetation.group)
+  }
+
   function rebuildConstructions() {
     if (constructions) {
       group.remove(constructions.group)
@@ -249,6 +300,7 @@ export function createSubTileManager(
     generation++ // 還在路上的那一批作廢
     subPatch = null
     rebuildConstructions()
+    rebuildVegetation()
     if (subMesh) {
       group.remove(subMesh.mesh)
       subMesh.dispose()
@@ -328,6 +380,7 @@ export function createSubTileManager(
       clipAngle = radiusMeters / planetRadius
       applySubClip(built.mesh)
       applyParentClip()
+      rebuildVegetation() // 要在裁切圓更新之後：只種圓內的
       group.add(built.mesh)
       if (hiddenIn === patchManager.patchMesh) {
         setParentsHidden(
@@ -412,6 +465,7 @@ export function createSubTileManager(
     recolor() {
       subMesh?.recolorAll((tile) => shadedColor(tile, brightness))
       if (constructions && seasonalSignature() !== builtSignature) rebuildConstructions()
+      if (vegetation && vegetationSignature(vegetationSubs) !== vegetationBuiltSignature) rebuildVegetation()
     },
 
     get ready() {
@@ -462,7 +516,10 @@ export function createSubTileManager(
         sub.terrainEdit = terrainEdit
       }
       if (terrainChanged) refreshRequested = true
-      else rebuildConstructions()
+      else {
+        rebuildConstructions()
+        rebuildVegetation() // 林地上蓋了東西，那一格的樹拿掉；拆掉了就長回來
+      }
     },
 
     dispose() {

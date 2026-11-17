@@ -21,6 +21,7 @@ import { createGodView } from './godView'
 import { createSeasonData } from './seasonData'
 import { createSubTileManager } from './subTileManager'
 import { createEditController } from './editController'
+import { createTileInspector } from './tileInspector'
 import {
   AVATAR_SIZE_PER_CAMERA_DISTANCE,
   DEFAULT_CAMERA_DISTANCE_METERS,
@@ -47,6 +48,7 @@ import { REALTIME_TICK_MS } from '@/map/timeRates'
  *   - subTileManager.ts   近看細分：鏡頭拉近時把附近的地塊換成 250 公尺的小六角
  *   - seasonData.ts       模擬粗格的四季資料（積雪、結冰、河的水位）
  *   - editController.ts   編輯模式：滑鼠底下的小格畫外框、點一下蓋房子／城堡／橋／路或改河道
+ *   - tileInspector.ts    左鍵點一下（不拖曳）看那個方塊的資訊（面板是 ui/TileInfoPanel.vue）
  *
  * 這裡刻意保留這個順序性的組裝流程、不再拆更細——子系統之間有些初始化順序是真的有依賴
  * （例如 cameraRig 的縮放範圍必須在 patchManager 載入初始patch「之後」、玩家第一次
@@ -197,6 +199,15 @@ onMounted(async () => {
   }
 
   const editController = createEditController(renderer.domElement, camera, scene, subTiles)
+  const tileInspector = createTileInspector(
+    renderer.domElement,
+    camera,
+    scene,
+    patchManager,
+    subTiles,
+    meshOptions,
+    () => editMode.active,
+  )
 
   const avatar = createPlayerAvatar()
   avatar.object.visible = false // 玩家被放到某一格之前不顯示
@@ -317,6 +328,7 @@ onMounted(async () => {
     // 近看細分：跟著鏡頭的注視點（上帝視角時也一樣）
     if (playerPlaced) subTiles.update(cameraRig.target, cameraRig.distance * sceneToMeters)
     editController.tick()
+    tileInspector.tick()
 
     // 太陽方向：依遊戲時間算太陽直射點，換算成場景座標放置光源方向（距離夠遠只是為了讓光線近似平行）。
     // 只在遊戲時間真的變了才重算——時間靜止模式下太陽根本不動，原本每幀都重算一次（含配置新物件）純屬浪費。
@@ -362,6 +374,7 @@ onMounted(async () => {
     // 上帝視角是這個場景的狀態，切到別的視角就結束；store 會留著，不清掉的話回來時 HUD 還顯示「時間暫停」
     gameState.isGodView = false
     editController.dispose()
+    tileInspector.dispose()
     subTiles.dispose()
     patchManager.dispose()
     planetBase.dispose()

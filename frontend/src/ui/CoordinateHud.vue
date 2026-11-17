@@ -138,7 +138,7 @@ const flightLabel = computed(() => {
       {{ keys.toggleFlight }} 起飛／降落、{{ keys.ascend }}{{ keys.descend }} 上升下降、{{ keys.tiers }}
       飛行速度檔、{{ keys.godView }} 上帝視角
     </div>
-    <div class="hint">滑鼠：滾輪縮放、左鍵拖曳環顧、右鍵拖曳轉身</div>
+    <div class="hint">滑鼠：滾輪縮放、左鍵拖曳環顧、右鍵拖曳轉身、左鍵點一下看方塊資訊</div>
     <div class="buttons">
       <button
         type="button"

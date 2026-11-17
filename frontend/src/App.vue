@@ -6,6 +6,7 @@ import EvolutionControls from './ui/EvolutionControls.vue'
 import CoordinateHud from './ui/CoordinateHud.vue'
 import ModeSwitcher from './ui/ModeSwitcher.vue'
 import EditToolbar from './ui/EditToolbar.vue'
+import TileInfoPanel from './ui/TileInfoPanel.vue'
 import CompassRose from './ui/CompassRose.vue'
 import GlobePositionIndicator from './ui/GlobePositionIndicator.vue'
 import ViewModeToggle from './ui/ViewModeToggle.vue'
@@ -26,6 +27,7 @@ const gameState = useGameStateStore()
       <CoordinateHud />
       <ModeSwitcher />
       <EditToolbar />
+      <TileInfoPanel />
       <CompassRose />
       <GlobePositionIndicator />
     </template>
