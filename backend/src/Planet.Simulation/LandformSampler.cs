@@ -148,6 +148,9 @@ public sealed class LandformSampler
     /// <summary>沙灘、海崖帶的寬度（公尺）。</summary>
     private const double ShoreBandMeters = 600;
 
+    /// <summary>沙灘、礫灘鋪到海拔幾公尺（公尺）：再高的海岸帶維持原本的地形，不壓平。</summary>
+    private const double BeachTopMeters = 8;
+
     /// <summary>海崖的高度（公尺），乘上受浪程度。</summary>
     private const double CliffHeightMeters = 120;
 
@@ -553,15 +556,21 @@ public sealed class LandformSampler
                 var hard = rock is ExposedRock.Crystalline or ExposedRock.Volcanic or ExposedRock.OceanicBasalt;
                 if (hard && cell.WaveExposure >= CliffExposure)
                 {
-                    terrain = TerrainType.Cliff;
-                    category = 0;
-                    elevation = Math.Max(elevation, CliffHeightMeters * cell.WaveExposure);
+                    // 海崖：崖高往海岸帶的內緣漸減到 0，帶子內外的高度才接得起來（不然整條帶子是一階平台）
+                    var cliff = CliffHeightMeters * cell.WaveExposure * (1 - coast / ShoreBandMeters);
+                    if (coast < ShoreBandMeters / 2) // 崖面在靠海的那一半，內陸那一半是崖頂原本的地表
+                    {
+                        terrain = TerrainType.Cliff;
+                        category = 0;
+                    }
+                    elevation = Math.Max(elevation, cliff);
                 }
-                else if (terrain is not (TerrainType.Swamp or TerrainType.Mud))
+                else if (elevation <= BeachTopMeters && terrain is not (TerrainType.Swamp or TerrainType.Mud))
                 {
+                    // 沙灘、礫灘只鋪在海邊的低地上，高度不動：以前把整條帶子壓到 2~6 公尺，
+                    // 帶子是平滑核的範圍（好幾公里），內緣外面是原本幾百公尺的高地，海岸一圈都是垂直的牆（2026-11-18）
                     terrain = rock is ExposedRock.Volcanic or ExposedRock.Melange || cell.WaveExposure > 0.6f ? TerrainType.Gravel : TerrainType.Sand;
                     category = 0;
-                    elevation = Math.Min(elevation, 2 + coast / ShoreBandMeters * 4);
                 }
             }
         }

@@ -209,6 +209,41 @@ public class SimulatedTerrainSamplerTests
     }
 
     [Fact]
+    public void Shore_BeachIsLowAndNotBelowAWall()
+    {
+        // 2026-11-18 正式站：海岸帶（平滑核的範圍，好幾公里）整條壓到 2~6 公尺的沙灘，帶子內緣外面是原本幾百公尺的林地，
+        // 一圈垂直的牆（「像蛋糕」）。沙灘只能在海邊的低地上，旁邊的陸地也不能一步高出上百公尺。
+        var (grid, _, cells) = World.Value;
+        var sampler = new SimulatedTerrainSampler(grid, cells);
+        const double step = 0.005; // 度，約 160 公尺
+        var beaches = 0;
+        double worst = 0;
+        for (var lon = -180.0; lon < 180.0; lon += 5)
+        {
+            LandformSample? previous = null;
+            for (var lat = -70.0; lat <= 70.0; lat += step)
+            {
+                var sample = sampler.SampleDetailed(lat, lon);
+                var land = sample.WaterSurfaceMeters is null;
+                // 海岸帶畫出來的沙灘（粗格本身是沙漠的不算）
+                var beach = land && sample.Terrain is TerrainType.Sand or TerrainType.Gravel
+                    && cells[sample.SourceCellId].Terrain is not (TerrainType.Sand or TerrainType.Gravel);
+                if (beach)
+                {
+                    beaches++;
+                    Assert.True(sample.ElevationMeters <= 8.5, $"沙灘在 {sample.ElevationMeters:F0} 公尺（{lat:F3}, {lon}）");
+                }
+                if (land && previous is { WaterSurfaceMeters: null } p
+                    && (beach || (p.Terrain is TerrainType.Sand or TerrainType.Gravel && cells[p.SourceCellId].Terrain is not (TerrainType.Sand or TerrainType.Gravel))))
+                    worst = Math.Max(worst, Math.Abs(sample.ElevationMeters - p.ElevationMeters));
+                previous = sample;
+            }
+        }
+        Assert.True(beaches > 50, $"只取樣到 {beaches} 個沙灘，測不到東西");
+        Assert.True(worst < 100, $"沙灘旁邊一步（160 公尺）高差 {worst:F0} 公尺");
+    }
+
+    [Fact]
     public void Generator_EveryTileTracesBackToItsSourceCell()
     {
         var (grid, _, cells) = World.Value;
