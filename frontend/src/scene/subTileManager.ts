@@ -19,7 +19,7 @@ import {
   type ConstructionLayer,
   type SeasonState,
 } from '@/map/constructionModels'
-import { monthFlag, monthPosition, seasonName } from '@/map/seasons'
+import { monthFlag, monthPosition, riverCoversSubTile, seasonName } from '@/map/seasons'
 import { buildVegetationLayer, type ForestClimate, type VegetationLayer } from '@/map/vegetationModels'
 import type { PatchManager } from './patchManager'
 import type { SeasonData } from './seasonData'
@@ -244,7 +244,10 @@ export function createSubTileManager(
     return { ...seasonOf(sub), annualMeanC }
   }
 
-  /** 要種樹的小格：林地、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。 */
+  /**
+   * 可能種樹的小格：林地、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。
+   * 河道與淹水的泛濫平原這時候不種（{@link riverCovers}），那個看時間，在 rebuildVegetation 裡篩。
+   */
   function forestSubs(): SubTileDto[] {
     if (!subPatch) return []
     const out: SubTileDto[] = []
@@ -256,16 +259,22 @@ export function createSubTileManager(
     return out
   }
 
-  /** 樹冠跟著季節、積雪變：數字簽章（每次遊戲時間變都會算，不要組字串）。 */
+  /** 河裡不種樹：河道（畫成河水或乾河床的那些格）與洪峰淹了的泛濫平原，跟畫面上色同一個判斷。 */
+  function riverCovers(sub: SubTileDto): boolean {
+    return riverCoversSubTile(sub, monthPosition(gameTime()), seasonData.seasonsOf)
+  }
+
+  /** 樹冠跟著季節、積雪變，泛濫平原的樹跟著淹水變：數字簽章（每次遊戲時間變都會算，不要組字串）。 */
   function vegetationSignature(subs: readonly SubTileDto[]): number {
     let h = 0
     for (const sub of subs) {
       const state = seasonOf(sub)
-      const code = '春夏秋冬'.indexOf(state.season) * 2 + (state.snow ? 1 : 0)
+      const code = '春夏秋冬'.indexOf(state.season) * 4 + (state.snow ? 2 : 0) + (riverCovers(sub) ? 1 : 0)
       h = (Math.imul(h, 31) + code) | 0
     }
     return h
   }
+  /** 可能種樹的小格（簽章看這一批：淹水退了，樹要長回來）。 */
   let vegetationSubs: SubTileDto[] = []
   let vegetationBuiltSignature = 0
 
@@ -276,9 +285,10 @@ export function createSubTileManager(
       vegetation = null
     }
     vegetationSubs = forestSubs()
-    if (vegetationSubs.length === 0) return
     vegetationBuiltSignature = vegetationSignature(vegetationSubs)
-    vegetation = buildVegetationLayer(vegetationSubs, subOptions, climateOf)
+    const planted = vegetationSubs.filter((sub) => !riverCovers(sub))
+    if (planted.length === 0) return
+    vegetation = buildVegetationLayer(planted, subOptions, climateOf)
     group.add(vegetation.group)
   }
 
@@ -465,7 +475,7 @@ export function createSubTileManager(
     recolor() {
       subMesh?.recolorAll((tile) => shadedColor(tile, brightness))
       if (constructions && seasonalSignature() !== builtSignature) rebuildConstructions()
-      if (vegetation && vegetationSignature(vegetationSubs) !== vegetationBuiltSignature) rebuildVegetation()
+      if (vegetationSubs.length > 0 && vegetationSignature(vegetationSubs) !== vegetationBuiltSignature) rebuildVegetation()
     },
 
     get ready() {

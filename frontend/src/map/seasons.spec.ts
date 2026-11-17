@@ -4,6 +4,7 @@ import {
   interpolateMonthly,
   monthFlag,
   monthPosition,
+  riverCoversSubTile,
   riverWidthNow,
   seasonName,
   seasonalTerrain,
@@ -106,5 +107,54 @@ describe('seasonalTerrain', () => {
     const land: TileDto = { ...tile, riverWidthMeters: undefined, riverCellId: undefined }
     expect(seasonalTerrain(land, january, lookup, false)).toBe('SnowField')
     expect(seasonalTerrain(land, july, lookup, false)).toBe('Grassland')
+  })
+})
+
+describe('riverCoversSubTile（河裡不種樹）', () => {
+  const july = { month: 6, next: 7, t: 0 }
+  const forestSub = (extra: Partial<SubTileDto>): SubTileDto => ({
+    tileId: 1,
+    parentTileId: 2,
+    shape: 'Hexagon',
+    faceIndex: 0,
+    latitude: 0,
+    longitude: 0,
+    terrain: 'Forest',
+    heightCategory: 5,
+    elevationLevel: 20,
+    seaLevel: 0,
+    ...extra,
+  })
+  const riverSeasons = (ratio: number): CellSeasonsDto => ({
+    cellId: 9,
+    temperature: months(() => 20),
+    precipitation: months(() => 1),
+    dischargeRatio: months(() => ratio),
+    snowMonths: 0,
+    frozenMonths: 0,
+    flowRegime: 1,
+  })
+
+  it('沒有河：不蓋住', () => {
+    expect(riverCoversSubTile(forestSub({}), july, () => undefined)).toBe(false)
+  })
+
+  it('河道（畫成河的那幾格，至少 220 公尺內）：蓋住，乾掉的河床也算', () => {
+    const lookup = () => riverSeasons(0)
+    expect(riverCoversSubTile(forestSub({ riverWidthMeters: 40, riverCellId: 9, riverDistanceMeters: 200 }), july, lookup)).toBe(true)
+    expect(riverCoversSubTile(forestSub({ riverWidthMeters: 40, riverCellId: 9, riverDistanceMeters: 300 }), july, lookup)).toBe(false)
+  })
+
+  it('跟畫面上色一致：蓋住的格子 seasonalTerrain 不是林地', () => {
+    const sub = forestSub({ riverWidthMeters: 40, riverCellId: 9, riverDistanceMeters: 100 })
+    const lookup = () => riverSeasons(1)
+    expect(riverCoversSubTile(sub, july, lookup)).toBe(true)
+    expect(seasonalTerrain(sub, july, lookup, true)).toBe('Freshwater')
+  })
+
+  it('泛濫平原只在洪峰時蓋住', () => {
+    const sub = forestSub({ riverWidthMeters: 40, riverCellId: 9, riverDistanceMeters: 600, floodplain: true })
+    expect(riverCoversSubTile(sub, july, () => riverSeasons(2))).toBe(true)
+    expect(riverCoversSubTile(sub, july, () => riverSeasons(1))).toBe(false)
   })
 })

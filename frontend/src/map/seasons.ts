@@ -75,6 +75,25 @@ const NO_SNOW: ReadonlySet<TerrainType> = new Set<TerrainType>(['Freshwater', 'S
 export const MIN_VISIBLE_RIVER_HALF_WIDTH_METERS = 220
 
 /**
+ * 近看的小格這個時候是不是被河蓋住：河道（不管有沒有水，乾掉是礫石河床）或洪峰淹了的泛濫平原。
+ * 畫面上色（{@link seasonalTerrain}）與林地種樹（河裡不種樹）都看這一支，兩邊才不會不一致。
+ */
+function riverStateOf(sub: SubTileDto, dischargeRatio: number): 'channel' | 'flooded' | null {
+  const meanWidth = sub.riverWidthMeters ?? 0
+  if (meanWidth <= 0) return null
+  const distance = sub.riverDistanceMeters ?? Number.POSITIVE_INFINITY
+  if (distance <= Math.max(meanWidth / 2, MIN_VISIBLE_RIVER_HALF_WIDTH_METERS)) return 'channel'
+  return sub.floodplain && dischargeRatio >= FLOOD_DISCHARGE_RATIO ? 'flooded' : null
+}
+
+/** 這個小格現在被河蓋住（河道或淹水的泛濫平原），見 {@link riverStateOf}。 */
+export function riverCoversSubTile(sub: SubTileDto, position: MonthPosition, seasonsOf: SeasonsLookup): boolean {
+  const river = sub.riverCellId !== undefined ? seasonsOf(sub.riverCellId) : undefined
+  const ratio = river ? interpolateMonthly(river.dischargeRatio, position, 1) : 1
+  return riverStateOf(sub, ratio) !== null
+}
+
+/**
  * 這一格（地塊或小格）在這個時間點畫成什麼地形：積雪、結冰、乾河床、洪水、整格的河。
  * 不改資料本身，只決定顏色。
  *
@@ -99,15 +118,10 @@ export function seasonalTerrain(
   if (meanWidth > 0) {
     const width = riverWidthNow(meanWidth, ratio)
     if (isSubTile) {
-      const sub = tile as SubTileDto
-      const distance = sub.riverDistanceMeters ?? Number.POSITIVE_INFINITY
-      const channelHalf = Math.max(meanWidth / 2, MIN_VISIBLE_RIVER_HALF_WIDTH_METERS)
-      if (distance <= channelHalf) {
-        // 河道：有水是淡水，乾掉是礫石河床
-        terrain = width > 0 ? 'Freshwater' : 'Gravel'
-      } else if (sub.floodplain && ratio >= FLOOD_DISCHARGE_RATIO) {
-        terrain = 'Freshwater' // 洪峰淹了泛濫平原
-      }
+      const state = riverStateOf(tile as SubTileDto, ratio)
+      // 河道：有水是淡水，乾掉是礫石河床；洪峰淹了泛濫平原
+      if (state === 'channel') terrain = width > 0 ? 'Freshwater' : 'Gravel'
+      else if (state === 'flooded') terrain = 'Freshwater'
     } else if (!WATER.has(terrain)) {
       // 拉遠：範圍裡有河的地塊整格是河（乾掉是河床）
       terrain = width > 0 ? 'Freshwater' : 'Gravel'
