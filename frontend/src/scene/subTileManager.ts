@@ -34,6 +34,9 @@ import {
  * 一次最多細分幾個地塊（後端 SubTileService.MaxParentsPerRequest）。半徑 36 公里約 1,900 個。
  * 一定要一次要完：分批的話，批次交界的小格查不到鄰居，會退回近似畫法而互相重疊。
  */
+/** 會長植物的地形：林地（樹）、草地（草叢）、灌木叢（灌木），見 map/vegetationModels.ts。 */
+const VEGETATED: ReadonlySet<TileDto['terrain']> = new Set(['Forest', 'Grassland', 'Shrubland'])
+
 const MAX_PARENTS = 2_500
 
 /**
@@ -245,14 +248,14 @@ export function createSubTileManager(
   }
 
   /**
-   * 可能長植物的小格：林地（樹）或草地（草叢）、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。
+   * 可能長植物的小格：林地（樹）、草地（草叢）或灌木叢（灌木）、沒有建築物、格心在裁切圓內（圓外看到的是地塊，樹會浮在地塊上）。
    * 河道與淹水的泛濫平原這時候不種（{@link riverCovers}），那個看時間，在 rebuildVegetation 裡篩。
    */
   function forestSubs(): SubTileDto[] {
     if (!subPatch) return []
     const out: SubTileDto[] = []
     for (const sub of subPatch.tiles as SubTileDto[]) {
-      if ((sub.terrain !== 'Forest' && sub.terrain !== 'Grassland') || sub.structure) continue
+      if (!VEGETATED.has(sub.terrain) || sub.structure) continue
       if (latLonToVector3(sub.latitude, sub.longitude, 1).angleTo(clipCenter) >= clipAngle) continue
       out.push(sub)
     }

@@ -6,6 +6,8 @@ import { tileSurfaceRadius } from './tileMeshBuilder'
 import {
   GRASS_HEIGHTS_METERS,
   GRASS_TUFTS_PER_SUBTILE,
+  SHRUBS_PER_SUBTILE,
+  SHRUB_HEIGHTS_METERS,
   TREE_HEIGHTS_METERS,
   TREES_PER_SUBTILE,
   buildVegetationLayer,
@@ -13,6 +15,8 @@ import {
   forestTrees,
   grassColor,
   grassTufts,
+  shrubColor,
+  shrubs,
   treeKindAt,
 } from './vegetationModels'
 
@@ -186,6 +190,60 @@ describe('grassColor', () => {
     }
     expect(ratio(grassColor('冬', false, 12, 2, 0.5)!)).toBeGreaterThan(ratio(grassColor('夏', false, 12, 2, 0.5)!))
     expect(grassColor('冬', false, 25, 2, 0.5)).toBe(grassColor('夏', false, 25, 2, 0.5))
+  })
+})
+
+describe('shrubs', () => {
+  const shrubland = (heightCategory: number, tileId = 88): SubTileDto => ({ ...forest(0, tileId), terrain: 'Shrubland', heightCategory })
+
+  it('不是灌木叢就沒有灌木', () => {
+    expect(shrubs(forest(3))).toEqual([])
+  })
+
+  it('每格固定株數，高度照分級（±20%），比最矮的樹矮、跟同名的草一樣高', () => {
+    for (let level = 0; level < SHRUB_HEIGHTS_METERS.length; level++) {
+      const list = shrubs(shrubland(level))
+      expect(list).toHaveLength(SHRUBS_PER_SUBTILE)
+      for (const s of list) {
+        expect(s.height).toBeGreaterThanOrEqual(SHRUB_HEIGHTS_METERS[level]! * 0.8)
+        expect(s.height).toBeLessThanOrEqual(SHRUB_HEIGHTS_METERS[level]! * 1.2)
+        expect(s.height).toBeLessThan(TREE_HEIGHTS_METERS[0] * 0.8)
+        expect(Math.hypot(s.x, s.z)).toBeLessThanOrEqual(180)
+      }
+    }
+    // 灌木的小腿肚／腰部／肩膀／高過頭＝草的分級 1~4
+    expect(SHRUB_HEIGHTS_METERS.slice()).toEqual(GRASS_HEIGHTS_METERS.slice(1))
+  })
+
+  it('同一格每次都一樣', () => {
+    expect(shrubs(shrubland(2))).toEqual(shrubs(shrubland(2)))
+  })
+})
+
+describe('shrubColor', () => {
+  it('積雪時小腿肚高的灌木被埋住、較高的頂著雪', () => {
+    expect(shrubColor('冬', true, 0, 0, 0.5)).toBeNull()
+    const snowy = new THREE.Color(shrubColor('冬', true, 0, 1, 0.5)!)
+    const plain = new THREE.Color(shrubColor('夏', false, 0, 1, 0.5)!)
+    expect(snowy.r + snowy.g + snowy.b).toBeGreaterThan(plain.r + plain.g + plain.b + 1)
+  })
+
+  it('熱帶一年都一樣綠，溫帶冬天轉褐', () => {
+    expect(shrubColor('冬', false, 25, 2, 0.5)).toBe(shrubColor('夏', false, 25, 2, 0.5))
+    const winter = new THREE.Color(shrubColor('冬', false, 12, 2, 0.5)!)
+    expect(winter.r).toBeGreaterThan(winter.g * 0.9)
+  })
+})
+
+describe('buildVegetationLayer（灌木）', () => {
+  it('灌木叢長灌木、不長樹也不長草', () => {
+    const sub: SubTileDto = { ...forest(0, 9), terrain: 'Shrubland', heightCategory: 2 }
+    const layer = buildVegetationLayer([sub], options, () => ({ season: '夏', snow: false, annualMeanC: 12 }))
+    expect(layer.shrubCount).toBe(SHRUBS_PER_SUBTILE)
+    expect(layer.treeCount).toBe(0)
+    expect(layer.grassCount).toBe(0)
+    expect(layer.group.children).toHaveLength(1)
+    layer.dispose()
   })
 })
 

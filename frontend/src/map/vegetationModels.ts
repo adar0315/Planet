@@ -16,6 +16,9 @@ import { hashId, type Season } from './constructionModels'
  *
  * 草地（Grassland）上的草叢也在這裡（2026-11-17）：`heightCategory` 0~4 ＝ 草高到腳板／小腿肚／腰部／肩膀／高過頭，
  * 一格 {@link GRASS_TUFTS_PER_SUBTILE} 叢，同樣放大（矮草 16 公尺、高草 50 公尺；加上 ±25% 的差異也比最矮的樹矮）。
+ *
+ * 灌木叢（Shrubland）的灌木也在這裡（2026-11-17）：`heightCategory` 0~3 ＝ 小腿肚／腰部／肩膀／高過頭，
+ * 一格 {@link SHRUBS_PER_SUBTILE} 株貼地的圓叢，高度跟草叢同名的分級一樣。
  */
 
 /** 樹的種類：寒帶針葉、溫帶落葉闊葉、熱帶常綠闊葉。 */
@@ -186,6 +189,75 @@ export function grassColor(
 }
 
 /**
+ * 灌木高度分級 0~3（小腿肚／腰部／肩膀／高過頭）的灌木高（公尺，放大過）：跟草叢同名的分級一樣高
+ * （草的小腿肚 22、腰部 30……），加上 ±20% 也比最矮的樹（80 × 0.8）矮。
+ */
+export const SHRUB_HEIGHTS_METERS = [22, 30, 40, 50] as const
+/** 每一格灌木叢幾株灌木。 */
+export const SHRUBS_PER_SUBTILE = 12
+/** 灌木種在小格中心多遠以內（公尺）：灌木比草叢寬、比樹冠窄。 */
+const SHRUB_RADIUS_METERS = 180
+/** 積雪時這個分級以下（小腿肚）的灌木被雪蓋住。 */
+const SHRUB_BURIED_BY_SNOW_UP_TO = 0
+
+/** 一株灌木（在小格切平面上，往東 x、往北 z 公尺）。 */
+export interface ShrubSpec {
+  x: number
+  z: number
+  /** 灌木高（公尺，放大過的）。 */
+  height: number
+  /** 半徑是高度的幾倍（灌木比高還寬，每株不一樣）。 */
+  spread: number
+  /** 繞上方轉幾弧度（多面體的稜角才不會全朝同一邊）。 */
+  rotation: number
+  /** 0~1：顏色深淺差異。 */
+  shade: number
+}
+
+/** 一個灌木叢小格上的灌木；不是灌木叢就是空的。 */
+export function shrubs(sub: SubTileDto): ShrubSpec[] {
+  if (sub.terrain !== 'Shrubland') return []
+  const level = THREE.MathUtils.clamp(sub.heightCategory, 0, SHRUB_HEIGHTS_METERS.length - 1)
+  // 跟樹、草用不同的亂數序列
+  const random = seeded(hashId(sub.tileId) ^ 0x27d4eb2f)
+  const out: ShrubSpec[] = []
+  for (let i = 0; i < SHRUBS_PER_SUBTILE; i++) {
+    const r = Math.sqrt(random()) * SHRUB_RADIUS_METERS
+    const angle = random() * Math.PI * 2
+    out.push({
+      x: r * Math.cos(angle),
+      z: r * Math.sin(angle),
+      height: SHRUB_HEIGHTS_METERS[level]! * (0.8 + 0.4 * random()),
+      spread: 0.6 + 0.3 * random(),
+      rotation: random() * Math.PI * 2,
+      shade: random(),
+    })
+  }
+  return out
+}
+
+/**
+ * 灌木的顏色：比草深、偏橄欖綠；溫帶秋天轉黃褐、冬天剩枯枝的褐色，熱帶一年都綠。
+ * 積雪時矮灌木被埋住（回傳 null），其他頂著雪。
+ */
+export function shrubColor(
+  season: Season,
+  snow: boolean,
+  annualMeanC: number | undefined,
+  heightCategory: number,
+  shade: number,
+): number | null {
+  if (snow && heightCategory <= SHRUB_BURIED_BY_SNOW_UP_TO) return null
+  const tropical = annualMeanC !== undefined && annualMeanC >= TROPICAL_ABOVE_C
+  const base = snow
+    ? 0xd3d9d0
+    : tropical
+      ? 0x55803a
+      : { 春: 0x7fa94a, 夏: 0x557a33, 秋: 0x9a7a3a, 冬: 0x7d6b4c }[season]
+  return new THREE.Color(base).multiplyScalar(0.85 + 0.25 * shade).getHex()
+}
+
+/**
  * 一叢草：三片細長的葉子，往外斜 15°、彼此差 120°，底部在原點、高 1、寬約 1。雙面著色（葉片很薄）。
  */
 function grassTuftGeometry(): THREE.BufferGeometry {
@@ -222,6 +294,8 @@ export interface VegetationLayer {
   readonly treeCount: number
   /** 長了幾叢草（診斷用；被雪埋住的不算）。 */
   readonly grassCount: number
+  /** 長了幾株灌木（診斷用；被雪埋住的不算）。 */
+  readonly shrubCount: number
   dispose(): void
 }
 
@@ -243,6 +317,7 @@ export function buildVegetationLayer(
   const broadleaf: { matrix: THREE.Matrix4; color: number }[] = []
   const conifers: { matrix: THREE.Matrix4; color: number }[] = []
   const grass: { matrix: THREE.Matrix4; color: number }[] = []
+  const bushes: { matrix: THREE.Matrix4; color: number }[] = []
 
   const scale = new THREE.Matrix4()
   const turn = new THREE.Matrix4()
@@ -250,7 +325,8 @@ export function buildVegetationLayer(
     const climate = climateOf(sub)
     const trees = forestTrees(sub, climate.annualMeanC)
     const tufts = grassTufts(sub)
-    if (trees.length === 0 && tufts.length === 0) continue
+    const shrubList = shrubs(sub)
+    if (trees.length === 0 && tufts.length === 0 && shrubList.length === 0) continue
     const frame = tangentBasisAt(latLonToVector3(sub.latitude, sub.longitude, 1))
     const south = frame.north.clone().negate()
     const basis = new THREE.Matrix4().makeBasis(frame.east, frame.normal, south)
@@ -272,6 +348,14 @@ export function buildVegetationLayer(
       const color = grassColor(climate.season, climate.snow, climate.annualMeanC, sub.heightCategory, tuft.shade)
       if (color === null) continue // 被雪埋住
       grass.push({ matrix: at(tuft.x, tuft.z, 0, tuft.height, tuft.height, tuft.rotation), color })
+    }
+    for (const shrub of shrubList) {
+      const color = shrubColor(climate.season, climate.snow, climate.annualMeanC, sub.heightCategory, shrub.shade)
+      if (color === null) continue // 被雪埋住
+      bushes.push({
+        matrix: at(shrub.x, shrub.z, 0, shrub.height * shrub.spread, shrub.height, shrub.rotation),
+        color,
+      })
     }
     for (const tree of trees) {
       const h = tree.height
@@ -325,11 +409,14 @@ export function buildVegetationLayer(
   addInstanced(crown, broadleaf)
   addInstanced(cone, conifers)
   addInstanced(grassTuftGeometry(), grass, undefined, THREE.DoubleSide)
+  // 灌木：壓扁的二十面體（跟闊葉樹冠同形，但貼地、沒有樹幹）
+  addInstanced(new THREE.IcosahedronGeometry(1, 0).scale(1, 0.5, 1).translate(0, 0.5, 0), bushes)
 
   return {
     group,
     treeCount: trunks.length,
     grassCount: grass.length,
+    shrubCount: bushes.length,
     dispose() {
       for (const g of geometries) g.dispose()
       for (const m of materials) m.dispose()
