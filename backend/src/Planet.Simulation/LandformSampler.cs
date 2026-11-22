@@ -34,7 +34,7 @@ public sealed class LandformSampler
     /// <summary>河谷的深度＝下切速率 × 這麼多百萬年（河流維持在同一個位置切了多久的量級）。</summary>
     private const double ValleyIncisionMyr = 2.0;
 
-    /// <summary>河谷最深（公尺）。科羅拉多大峽谷約 1.8 公里、雅魯藏布大峽谷約 5 公里，取 1.5 公里（畫面上還有 8 倍誇張）。</summary>
+    /// <summary>河谷最深（公尺）。科羅拉多大峽谷約 1.8 公里、雅魯藏布大峽谷約 5 公里，取 1.5 公里（畫面上還有 5 倍誇張）。</summary>
     private const double MaxValleyDepthMeters = 1_500;
 
     /// <summary>河谷最多刻到格子高出海面的這個比例（低平原上的河不會刻出比地面還深的谷）。</summary>
@@ -75,7 +75,7 @@ public sealed class LandformSampler
 
     /// <summary>
     /// 河谷要多寬的河才刻得到 <see cref="MaxValleyDepthMeters"/>：谷深上限 ∝ √(河寬 ÷ 這個值)。
-    /// 10 公尺的小溪約 240 公尺、100 公尺的河約 750 公尺（原本小溪也刻 1.5 公里，畫面上 8 倍後像刀痕）。
+    /// 10 公尺的小溪約 240 公尺、100 公尺的河約 750 公尺（原本小溪也刻 1.5 公里，畫面上 8 倍誇張（當時）後像刀痕）。
     /// </summary>
     private const double ValleyDepthFullWidthMeters = 400;
 

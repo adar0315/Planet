@@ -30,7 +30,7 @@ const OUTLINE_RENDER_ORDER = 10
  * export出來是為了讓HUD能誠實揭露「畫面上的起伏被放大幾倍」——不揭露的話很容易把
  * 誇張後的陡峭程度誤當成真實地形。
  */
-export const ELEVATION_EXAGGERATION = 8
+export const ELEVATION_EXAGGERATION = 5
 
 /** 每個 ElevationLevel 代表幾公尺。HUD 換算海拔時要用同一個值，不要再寫死一份。 */
 export const METERS_PER_ELEVATION_LEVEL = 5

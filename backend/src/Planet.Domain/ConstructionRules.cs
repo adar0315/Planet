@@ -36,7 +36,7 @@ public static class ConstructionRules
     /// </summary>
     public const double VisibleRiverHalfWidthMeters = 220;
 
-    /// <summary>挖出來的河道底部比原地面低幾級（每級 5 公尺，畫面上再乘 8 倍）。</summary>
+    /// <summary>挖出來的河道底部比原地面低幾級（每級 5 公尺，畫面上再乘 5 倍）。</summary>
     public const int ChannelBedDepthLevels = 4;
 
     /// <summary>挖出來的河道水面比原地面低幾級：水面略低於兩岸，看得出是挖下去的。</summary>
