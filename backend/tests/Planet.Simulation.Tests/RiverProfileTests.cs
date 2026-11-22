@@ -226,6 +226,50 @@ public class RiverProfileTests
         Assert.True(checkedPoints > 0, "河口那一段沒取樣到河道");
     }
 
+    /// <summary>
+    /// 2026-11-23 正式站：有河的地塊整格畫成河床（0 公尺），旁邊沒河的森林地塊 185~250 公尺，地塊裡小格平均其實是 36~144 公尺。
+    /// 有河的地塊改用範圍裡地面的平均（使用者選的）：地塊的高度要代表它範圍裡的地面，不是河床。
+    /// 用跟取樣器不同的點（範圍裡 7×7 的點陣）量地面平均來比，差不到 30 公尺。
+    /// </summary>
+    [Fact]
+    public void RiverTileHeightIsItsGroundNotTheRiverbed()
+    {
+        var grid = SimulationGrid.Build(TestPlanet.RadiusMeters / 5, 24);
+        var (cells, path) = River([1_000, 800, 600, 400], sea => { }, grid);
+        foreach (var c in path[..^1]) cells[c].IncisionRate = 1_000f; // 刻出深谷
+        var sampler = new SimulatedTerrainSampler(grid, cells) { TileRadiusMeters = 1_000 };
+        var toDegrees = 180 / Math.PI / grid.PlanetRadiusMeters;
+
+        var rivers = 0;
+        double worst = 0;
+        foreach (var c in path[..^2])
+        {
+            var line = sampler.Landforms.RiverCenterline(c).ToList();
+            for (var i = line.Count / 4; i < line.Count * 3 / 4; i += Math.Max(1, line.Count / 8))
+            {
+                // 河道旁邊半個地塊：正好在河道上的是河水，高度照河面，不在這裡比
+                var (lat, lon) = line[i];
+                lat += 0.5 * sampler.TileRadiusMeters * toDegrees;
+                var tile = sampler.Sample(lat, lon);
+                if (tile.RiverWidthMeters <= 0f || tile.Terrain is TerrainType.Freshwater) continue;
+                // 地塊範圍（內切圓）裡 7×7 點陣的地面平均
+                var ground = new List<double>();
+                for (var a = -3; a <= 3; a++)
+                    for (var b = -3; b <= 3; b++)
+                    {
+                        var (dx, dy) = (a / 3.0 * 0.85 * sampler.TileRadiusMeters, b / 3.0 * 0.85 * sampler.TileRadiusMeters);
+                        if (dx * dx + dy * dy > Math.Pow(0.85 * sampler.TileRadiusMeters, 2)) continue;
+                        var s = sampler.SampleDetailed(lat + dy * toDegrees, lon + dx * toDegrees / Math.Cos(lat * Math.PI / 180));
+                        ground.Add(Math.Max(0, s.ElevationMeters));
+                    }
+                rivers++;
+                worst = Math.Max(worst, Math.Abs(ground.Average() - tile.ElevationLevel * SimulatedTerrainSampler.MetersPerElevationLevel));
+            }
+        }
+        Assert.True(rivers >= 5, $"只找到 {rivers} 個有河的地塊");
+        Assert.True(worst < 30, $"有河的地塊高度跟範圍裡的地面平均差 {worst:F0} 公尺");
+    }
+
     /// <summary>同一格海有第二條（比較窄的）河流進來：三角洲只算最寬那條，第二條在扇面裡的河道也不能架高（正式站 198633）。</summary>
     [Fact]
     public void SecondRiverIntoTheSameDeltaIsNotAboveIt()

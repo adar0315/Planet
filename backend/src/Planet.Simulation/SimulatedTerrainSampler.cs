@@ -63,14 +63,49 @@ public sealed class SimulatedTerrainSampler : ITerrainGenerator
     /// <inheritdoc />
     public TerrainSample Sample(double latitude, double longitude)
     {
-        // 地塊：範圍裡有河就整格畫成河，所以整格的高度也是河床
+        // 地塊：範圍裡有河就整格畫成河（顏色）
         var sample = SampleDetailed(latitude, longitude, TileRadiusMeters, riverBandAddsToChannel: true);
-        var (level, waterLevel) = Levels(sample);
 
         // 這一格範圍裡有河：拉遠時整格畫成河水的藍色（H6）
         var hasRiver = sample.RiverCellId >= 0 && sample.RiverDistanceMeters <= TileRadiusMeters + sample.RiverWidthMeters / 2;
+
+        // 高度用範圍裡地面的平均，不用河床：河只有幾十公尺寬，地塊大部分是兩岸的坡地。
+        // 以前整格畫成河床，河谷兩側的地塊高出兩百多公尺，遠看沿河一階一階的牆（2026-11-23，使用者選了平均；
+        // 代價是沿河的藍色地塊可能忽高忽低，近看的小格不受影響，河道照樣一路往下游降）
+        if (hasRiver && sample.WaterSurfaceMeters is null)
+            sample = sample with { ElevationMeters = MeanGroundElevation(latitude, longitude) };
+        var (level, waterLevel) = Levels(sample);
         return new TerrainSample(sample.Terrain, sample.HeightCategory, level, sample.SourceCellId, waterLevel,
             hasRiver ? (float)sample.RiverWidthMeters : 0f, hasRiver ? sample.RiverCellId : null);
+    }
+
+    /// <summary>
+    /// 地塊範圍裡地面的平均高度（公尺）：中心、半徑一半的一圈 6 點、半徑 0.85 倍的一圈 6 點，跟近看的小格一樣取樣（河道窄窄一條）。
+    /// 海不算（海邊的地塊不被海底拉低）；全部是海就回傳 0。
+    /// </summary>
+    private double MeanGroundElevation(double latitude, double longitude)
+    {
+        var lat = latitude * Math.PI / 180;
+        var lon = longitude * Math.PI / 180;
+        var p = (X: Math.Cos(lat) * Math.Cos(lon), Y: Math.Cos(lat) * Math.Sin(lon), Z: Math.Sin(lat));
+        var east = (X: -Math.Sin(lon), Y: Math.Cos(lon), Z: 0.0);
+        var north = (X: -Math.Sin(lat) * Math.Cos(lon), Y: -Math.Sin(lat) * Math.Sin(lon), Z: Math.Cos(lat));
+        double sum = 0;
+        var count = 0;
+        for (var i = 0; i < 13; i++)
+        {
+            var ring = i == 0 ? 0 : i <= 6 ? 0.5 : 0.85;
+            var angle = (i <= 6 ? i : i + 0.5) * Math.PI / 3;
+            var d = ring * TileRadiusMeters / _grid.PlanetRadiusMeters;
+            var (dx, dy) = (d * Math.Cos(angle), d * Math.Sin(angle));
+            var q = (X: p.X + dx * east.X + dy * north.X, Y: p.Y + dx * east.Y + dy * north.Y, Z: p.Z + dx * east.Z + dy * north.Z);
+            var length = Math.Sqrt(q.X * q.X + q.Y * q.Y + q.Z * q.Z);
+            var s = SampleDetailed(Math.Asin(q.Z / length) * 180 / Math.PI, Math.Atan2(q.Y, q.X) * 180 / Math.PI);
+            if (s.Terrain is TerrainType.Seawater) continue;
+            sum += Math.Max(0, s.ElevationMeters);
+            count++;
+        }
+        return count == 0 ? 0 : sum / count;
     }
 
     /// <summary>每一格的記錄（依格子編號）。近看細分查每月的資料用。</summary>

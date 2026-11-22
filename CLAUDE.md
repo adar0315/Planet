@@ -311,6 +311,10 @@ P9 時這三樣都漏過，讀檔續跑第一步就分歧（從檢查點分岔�
   河道曲線有任何一點落在扇面裡、又流進海的河段，谷底壓到 `DeltaTopMeters`、也不當源頭（源頭從粗格原本的地面降下來一樣架高）；只壓低，一路往下游降的規則不變。
   **不能只壓三角洲頂點那條**：同一格海常有好幾條河流進來，三角洲只算最寬的，正式站 198633 就是另一條（第一次部署只壓頂點，量到沒變）。
   `RiverIntoDeltaIsNotAboveTheDelta`、`SecondRiverIntoTheSameDeltaIsNotAboveIt` 守著（後者用小五倍的星球，格距約 19 公里，三角洲才蓋得到鄰格的河口）。
+- **有河的地塊高度用範圍裡地面的平均，不用河床**（2026-11-23，使用者選的）：河只有幾十公尺寬，地塊大部分是兩岸坡地。
+  以前整格畫成河床，旁邊沒河的地塊高出兩百多公尺，遠看沿河一階一階的牆。`SimulatedTerrainSampler.MeanGroundElevation` 取中心＋兩圈共 13 點（不算海）。
+  代價：沿河的藍色地塊可能忽高忽低；近看小格不受影響。中心正好在河道上（有水面）的地塊照舊用河面。`RiverTileHeightIsItsGroundNotTheRiverbed` 守著。
+  注意測試用的 `SimulatedTerrainSamplerTests.World` 沒有任何河，測河要用 `RiverProfileTests.River`。
 - **三角洲往海裡長**：扇面頂點在河口海岸往內陸 30% 半徑，其餘伸進海那格——海格裡落在扇面內的點是陸地（沼澤、泥灘、分流）。
   扇面可以比格距大好幾倍，找三角洲要用 `_deltasNear`（建構時記好每格附近的三角洲），不能只看最近格與鄰居。
 
