@@ -15,9 +15,10 @@ public class RiverProfileTests
     private static readonly SimulationGrid Grid = SimulationGrid.Build(TestPlanet.RadiusMeters, 24);
 
     /// <summary>全部是 1,000 公尺的陸地，加上一條不繞回頭的河，最後一格是 <paramref name="end"/> 指定的水體。</summary>
-    private static (PlanetCell[] Cells, int[] Path) River(double[] heights, Action<PlanetCell>? end = null)
+    private static (PlanetCell[] Cells, int[] Path) River(double[] heights, Action<PlanetCell>? end = null, SimulationGrid? on = null)
     {
-        var cells = Enumerable.Range(0, Grid.CellCount).Select(c => new PlanetCell
+        var grid = on ?? Grid;
+        var cells = Enumerable.Range(0, grid.CellCount).Select(c => new PlanetCell
         {
             CellId = c,
             Terrain = TerrainType.Forest,
@@ -27,10 +28,10 @@ public class RiverProfileTests
 
         var path = new List<int> { 0 };
         Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
-        var u = Grid.UnitVector;
+        var u = grid.UnitVector;
         while (path.Count <= heights.Length)
         {
-            var count = Grid.GetNeighbors(path[^1], neighbors);
+            var count = grid.GetNeighbors(path[^1], neighbors);
             var next = -1;
             var farthest = double.MaxValue;
             for (var i = 0; i < count; i++)
@@ -223,6 +224,48 @@ public class RiverProfileTests
             Assert.True(s.ElevationMeters <= 3.5, $"河床 {s.ElevationMeters:F0} 公尺（{lat:F4}, {lon:F4}）");
         }
         Assert.True(checkedPoints > 0, "河口那一段沒取樣到河道");
+    }
+
+    /// <summary>同一格海有第二條（比較窄的）河流進來：三角洲只算最寬那條，第二條在扇面裡的河道也不能架高（正式站 198633）。</summary>
+    [Fact]
+    public void SecondRiverIntoTheSameDeltaIsNotAboveIt()
+    {
+        // 一般的測試網格格距約 90 公里，三角洲（最大半徑 60 公里）蓋不到鄰格的河口。
+        // 用小五倍的星球：格數一樣、格距約 19 公里，跟正式站（15 公里）一樣是三角洲比格子大
+        var grid = SimulationGrid.Build(TestPlanet.RadiusMeters / 5, 24);
+        Assert.InRange(grid.AverageCellSpacingMeters, 10_000, 50_000);
+        var (cells, path) = River([400, 300, 200, 150], sea => sea.DeltaSupply = 10_000f, grid);
+        var sea = path[^1];
+        Span<int> neighbors = stackalloc int[SimulationGrid.MaxNeighborsPerCell];
+        var count = grid.GetNeighbors(sea, neighbors);
+        // 第二條河選最靠近主河口那格陸地的鄰格：河口才會落在扇面裡
+        var u = grid.UnitVector;
+        var main = path[^2];
+        var second = -1;
+        var closest = double.MaxValue;
+        for (var i = 0; i < count; i++)
+        {
+            var k = neighbors[i];
+            if (path.Contains(k)) continue;
+            var d = Math.Pow(u[k * 3] - u[main * 3], 2) + Math.Pow(u[k * 3 + 1] - u[main * 3 + 1], 2) + Math.Pow(u[k * 3 + 2] - u[main * 3 + 2], 2);
+            if (d < closest) { closest = d; second = k; }
+        }
+        cells[second].SurfaceElevationMeters = 150f;
+        cells[second].RiverDownstreamCellId = sea;
+        cells[second].RiverWidthMeters = 20f;
+        cells[second].IncisionRate = 100f;
+        var sampler = new LandformSampler(grid, cells);
+
+        var checkedPoints = 0;
+        foreach (var (lat, lon) in sampler.RiverCenterline(second))
+        {
+            var s = sampler.Sample(lat, lon);
+            // 落在海格範圍裡、又不是海：就是在三角洲上
+            if (s.Terrain != TerrainType.Freshwater || s.SourceCellId != sea) continue;
+            checkedPoints++;
+            Assert.True(s.ElevationMeters <= 3.5, $"第二條河的河床 {s.ElevationMeters:F0} 公尺（{lat:F4}, {lon:F4}，河段 {s.RiverCellId}、第二條 {second}、主河 {string.Join(",", path)}）");
+        }
+        Assert.True(checkedPoints > 0, "第二條河沒有一段在三角洲上");
     }
 
     /// <summary>

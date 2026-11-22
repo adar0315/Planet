@@ -282,9 +282,22 @@ public sealed class LandformSampler
 
         // 流進三角洲的那一段河，河床壓到三角洲的高度：谷底是粗格「原本」的高度，海邊的粗格常有一兩百公尺，
         // 平滑後的地面卻只有幾公尺（三角洲就是畫在這種低地上），河變成架在三角洲上一百多公尺高的堤（2026-11-22，正式站 160 公尺）。
-        // 只壓低不抬高，下游的谷底本來就比較低（河口是 0），一路往下游降的規則不變
-        foreach (var delta in _deltas)
-            _valleyFloor[delta.ApexCell] = (float)Math.Min(_valleyFloor[delta.ApexCell], DeltaTopMeters);
+        // 只壓低不抬高，下游的谷底本來就比較低（河口是 0），一路往下游降的規則不變。
+        // 不只三角洲頂點那條：同一格海常有好幾條河流進來，三角洲只算最寬的那條，其他條河口落在扇面裡也一樣架高（正式站 198633 就是）
+        // 判斷「流進三角洲」看河道曲線有沒有任何一點落在扇面裡（只看河口那一點不夠：河道是彎的，可能從扇面側邊進去）
+        for (var c = 0; c < n; c++)
+        {
+            var down = _down[c];
+            if (down < 0 || cells[down].WaterDepthMeters <= 0f || !cells[down].IsOcean || _deltasNear[down] is null) continue;
+            for (var s = _curveStart[c]; s < _curveStart[c + 1]; s++)
+            {
+                var point = (_curvePoints[s * 3], _curvePoints[s * 3 + 1], _curvePoints[s * 3 + 2]);
+                if (!InAnyFan(point, down) && !InAnyFan(point, c)) continue;
+                _valleyFloor[c] = (float)Math.Min(_valleyFloor[c], DeltaTopMeters);
+                _riverHead[c] = false; // 源頭的河床從粗格原本的地面降下來，一樣會架高；在三角洲上直接用谷底
+                break;
+            }
+        }
     }
 
     /// <summary>
