@@ -197,8 +197,10 @@ public sealed class LandformSampler
     private readonly int[]?[] _deltasNear;
 
     /// <summary>一個三角洲：河口那一格海、流進來的河從哪一格來、扇面頂點、軸向（往海）、側向、半徑（公尺）。</summary>
+    /// <param name="Outline">扇面的輪廓（見 <see cref="FanOutline"/>）：頂點出發繞一圈回到頂點的折線，(沿軸, 側向) 公尺交錯排。</param>
     private readonly record struct Delta(int Mouth, int ApexCell,
-        (double X, double Y, double Z) Apex, (double X, double Y, double Z) Axis, (double X, double Y, double Z) Side, double Radius);
+        (double X, double Y, double Z) Apex, (double X, double Y, double Z) Axis, (double X, double Y, double Z) Side, double Radius,
+        double[] Outline);
     /// <summary>河的源頭：沒有上游河段流進來（谷從這裡由淺漸深）</summary>
     private readonly bool[] _riverHead;
     /// <summary>每格的下游粗格（−1 沒有）：RiverDownstreamCellId 去掉不連通的河段（見 MaxRiverRiseMeters）</summary>
@@ -300,7 +302,8 @@ public sealed class LandformSampler
             var axis = Normalize(Sub(sea, land));
             var apex = Normalize(Sub(coast, Scale(axis, DeltaInlandShare * radius / _radius)));
             var index = deltas.Count;
-            deltas.Add(new Delta(mouth, apexCell, apex, axis, Normalize(Cross(apex, axis)), radius));
+            var sideAxis = Normalize(Cross(apex, axis));
+            deltas.Add(new Delta(mouth, apexCell, apex, axis, sideAxis, radius, FanOutline(apex, axis, sideAxis, radius)));
 
             // 從河口那格往外找，格心離頂點在半徑＋兩個格距以內的格子都記下來
             var seen = new HashSet<int> { mouth };
@@ -315,7 +318,9 @@ public sealed class LandformSampler
                 {
                     var k = neighbors[i];
                     if (!seen.Add(k)) continue;
-                    if (Length(Sub((u[k * 3], u[k * 3 + 1], u[k * 3 + 2]), apex)) * _radius <= radius + margin) queue.Enqueue(k);
+                    // 範圍要蓋到扇面最遠的外緣（1.325 倍半徑）再加上前積層：只記到半徑的話，前積層延伸到沒記這個三角洲的格子時
+                    // 深度上限突然消失，海底沿著格子交界跳好幾百公尺（2026-11-18 正式站遠景地塊量到 720 公尺）
+                    if (Length(Sub((u[k * 3], u[k * 3 + 1], u[k * 3 + 2]), apex)) * _radius <= radius * (0.8 + 0.35 * 1.5) + ProdeltaReachMeters + margin) queue.Enqueue(k);
                 }
             }
         }
@@ -354,25 +359,69 @@ public sealed class LandformSampler
         return 1 + 0.02 * offshore + 6_000 * t * t;
     }
 
-    /// <summary>點離三角洲（扇面與根）多遠（公尺）；在裡面是 0。扇面側邊外用離側邊的角度近似。</summary>
+    /// <summary>輪廓取樣的角度間隔（度）。半徑 60 公里時 1 度約 1 公里，比朵狀沙洲（8 公里）細得多。</summary>
+    private const double OutlineStepDegrees = 1;
+
+    /// <summary>
+    /// 扇面的輪廓：外緣半徑與張角只跟方向有關（見 <see cref="InFan"/>），所以每度取一點先存起來。
+    /// 從頂點出發，張角內的方向放外緣上的點，進出張角時回到頂點（側邊是從頂點出發的直線），最後回到頂點。
+    /// </summary>
+    private double[] FanOutline((double X, double Y, double Z) apex, (double X, double Y, double Z) axis, (double X, double Y, double Z) side, double radius)
+    {
+        var f = _radius / DeltaLobeWavelengthMeters;
+        var points = new List<double> { 0, 0 };
+        var inside = false;
+        for (var deg = -180.0; deg <= 180.0; deg += OutlineStepDegrees)
+        {
+            var rad = deg * Math.PI / 180;
+            var dir = Add(Scale(axis, Math.Cos(rad)), Scale(side, Math.Sin(rad)));
+            var rim = Add(apex, Scale(dir, radius / _radius));
+            var lobe = _deltaNoise.Fbm(rim.Item1 * f, rim.Item2 * f, rim.Item3 * f, 3, 1.0);
+            var open = Math.Abs(deg) <= DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
+            if (open)
+            {
+                var r = radius * (0.8 + 0.35 * lobe);
+                points.Add(r * Math.Cos(rad));
+                points.Add(r * Math.Sin(rad));
+            }
+            else if (inside)
+            {
+                points.Add(0);
+                points.Add(0);
+            }
+            inside = open;
+        }
+        points.Add(0);
+        points.Add(0);
+        return [.. points];
+    }
+
+    /// <summary>
+    /// 點離三角洲（扇面與根）多遠（公尺）；在裡面是 0。
+    /// 用存好的輪廓折線算真正的距離：以前用「這個方向的外緣半徑」相減，外緣是一朵朵的沙洲，方向偏一點外緣就差好幾公里，
+    /// 算出來的距離跟著跳，海底沿著射線出現上千公尺的斷層（2026-11-22，測試量到 1 公里差 1,825 公尺）。
+    /// </summary>
     private double FanOffshoreMeters((double, double, double) p, in Delta delta)
     {
         var dir = Sub(p, delta.Apex);
         var distance = Length(dir) * _radius;
-        var root = distance - (DeltaInlandShare * delta.Radius + DeltaRootMarginMeters);
-        if (distance > delta.Radius * (0.8 + 0.35 * 1.5) + ProdeltaReachMeters) return Math.Max(0, root);
-        var lobe = 0.0;
-        if (distance >= 1)
+        var root = Math.Max(0, distance - (DeltaInlandShare * delta.Radius + DeltaRootMarginMeters));
+        if (distance > delta.Radius * (0.8 + 0.35 * 1.5) + ProdeltaReachMeters) return root;
+        if (InFan(p, delta, out _, out _, out _, out _)) return 0;
+        var x = Dot(dir, delta.Axis) * _radius;
+        var y = Dot(dir, delta.Side) * _radius;
+        var o = delta.Outline;
+        var best = root * root;
+        for (var i = 0; i + 3 < o.Length; i += 2)
         {
-            var f = _radius / DeltaLobeWavelengthMeters;
-            var rim = Add(delta.Apex, Scale(dir, delta.Radius / distance));
-            lobe = _deltaNoise.Fbm(rim.Item1 * f, rim.Item2 * f, rim.Item3 * f, 3, 1.0);
+            var (ax, ay, bx, by) = (o[i], o[i + 1], o[i + 2], o[i + 3]);
+            var (dx, dy) = (bx - ax, by - ay);
+            var len2 = dx * dx + dy * dy;
+            var t = len2 > 0 ? Math.Clamp(((x - ax) * dx + (y - ay) * dy) / len2, 0, 1) : 0;
+            var (ex, ey) = (x - ax - t * dx, y - ay - t * dy);
+            best = Math.Min(best, ex * ex + ey * ey);
         }
-        var radial = distance - delta.Radius * (0.8 + 0.35 * lobe);
-        var angle = Math.Abs(Math.Atan2(Dot(dir, delta.Side), Dot(dir, delta.Axis)) * 180 / Math.PI);
-        var excess = angle - DeltaHalfAngleDegrees * (0.85 + 0.3 * lobe);
-        var lateral = excess > 0 ? distance * Math.Sin(Math.Min(90, excess) * Math.PI / 180) : 0;
-        return Math.Max(0, Math.Min(Math.Max(radial, lateral), root));
+        return Math.Sqrt(best);
     }
 
     /// <summary>點在不在任何三角洲的扇面或根（見 <see cref="DeltaRootMarginMeters"/>）裡：這些地方的海填成三角洲。</summary>

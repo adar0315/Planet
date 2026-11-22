@@ -206,6 +206,66 @@ public class RiverProfileTests
     }
 
     /// <summary>
+    /// 前積層延伸到別的海格也要連續：以前只有「記得這個三角洲」的格子才有深度上限，跨到沒記的格子海底跳好幾百公尺
+    /// （2026-11-18 正式站遠景地塊，粗格交界上 720 公尺）。做法：河口外整片都是 3,000 公尺深的海，鋪 1 公里的點陣看相鄰兩點的高差。
+    /// </summary>
+    [Fact]
+    public void ProdeltaIsContinuousAcrossCells()
+    {
+        var (cells, path) = River([300, 200, 100, 50, 20], sea => sea.DeltaSupply = 1_000f);
+        var u = Grid.UnitVector;
+        (double X, double Y, double Z) At(int c) => (u[c * 3], u[c * 3 + 1], u[c * 3 + 2]);
+        var (land, sea) = (At(path[^2]), At(path[^1]));
+        var axis = (X: sea.X - land.X, Y: sea.Y - land.Y, Z: sea.Z - land.Z);
+        var mid = (X: (sea.X + land.X) / 2, Y: (sea.Y + land.Y) / 2, Z: (sea.Z + land.Z) / 2);
+        foreach (var c in cells)
+        {
+            if (path.Contains(c.CellId)) continue;
+            var p = At(c.CellId);
+            if ((p.X - mid.X) * axis.X + (p.Y - mid.Y) * axis.Y + (p.Z - mid.Z) * axis.Z <= 0) continue;
+            c.Terrain = TerrainType.Seawater;
+            c.WaterDepthMeters = 3_000f;
+            c.IsOcean = true;
+        }
+        foreach (var c in cells.Where(c => c.IsOcean)) c.SurfaceElevationMeters = -3_000f;
+        var sampler = new LandformSampler(Grid, cells);
+
+        static (double X, double Y, double Z) Unit((double X, double Y, double Z) v)
+        {
+            var l = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            return (v.X / l, v.Y / l, v.Z / l);
+        }
+        var coast = Unit(mid);
+        var ax = Unit(axis);
+        var side = Unit((coast.Y * ax.Z - coast.Z * ax.Y, coast.Z * ax.X - coast.X * ax.Z, coast.X * ax.Y - coast.Y * ax.X));
+        const double step = 1_000;
+        const int size = 200; // 往海 200 公里、兩側各 100 公里
+        var previousRow = new double?[size];
+        var worst = 0.0;
+        var where = "";
+        for (var i = 0; i < size; i++)
+        {
+            double? left = null;
+            for (var j = 0; j < size; j++)
+            {
+                var a = i * step / Grid.PlanetRadiusMeters;
+                var b = (j - size / 2) * step / Grid.PlanetRadiusMeters;
+                var p = Unit((coast.X + a * ax.X + b * side.X, coast.Y + a * ax.Y + b * side.Y, coast.Z + a * ax.Z + b * side.Z));
+                var s = sampler.Sample(Math.Asin(p.Z) * 180 / Math.PI, Math.Atan2(p.Y, p.X) * 180 / Math.PI);
+                double? here = s.Terrain == TerrainType.Seawater ? s.ElevationMeters : null;
+                if (here is { } h)
+                {
+                    if (left is { } l && Math.Abs(h - l) > worst) { worst = Math.Abs(h - l); where = $"{i},{j} {l:F0}→{h:F0} 左右"; }
+                    if (previousRow[j] is { } up && Math.Abs(h - up) > worst) { worst = Math.Abs(h - up); where = $"{i},{j} {up:F0}→{h:F0} 前後"; }
+                }
+                previousRow[j] = here;
+                left = here;
+            }
+        }
+        Assert.True(worst < 600, $"相鄰兩點（1 公里）海底高差 {worst:F0} 公尺（{where}，往海第幾公里,側向第幾格）");
+    }
+
+    /// <summary>
     /// 小格的海岸線會被雜訊扭曲、跟著等高線走，可能跑到三角洲頂點的後面（內陸）：那裡的海也要填成三角洲，
     /// 不然三角洲跟陸地之間夾一條海，變成離岸的島（2026-11-08 實測：半徑 5.9 公里的三角洲，頂點後面 1 公里還是海）。
     /// </summary>
