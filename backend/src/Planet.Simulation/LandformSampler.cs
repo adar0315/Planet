@@ -196,8 +196,10 @@ public sealed class LandformSampler
     /// <summary>每格：扇面可能蓋到這格的三角洲（_deltas 的索引），沒有是 null。</summary>
     private readonly int[]?[] _deltasNear;
 
-    /// <summary>一個三角洲：河口那一格海、流進來的河從哪一格來、扇面頂點、軸向（往海）、側向、半徑（公尺）。</summary>
-    /// <param name="Outline">扇面的輪廓（見 <see cref="FanOutline"/>）：頂點出發繞一圈回到頂點的折線，(沿軸, 側向) 公尺交錯排。</param>
+    /// <summary>
+    /// 一個三角洲：河口那一格海、流進來的河從哪一格來、扇面頂點、軸向（往海）、側向、半徑（公尺），
+    /// 以及扇面的輪廓（見 <see cref="FanOutline"/>：頂點出發繞一圈回到頂點的折線，(沿軸, 側向) 公尺交錯排）。
+    /// </summary>
     private readonly record struct Delta(int Mouth, int ApexCell,
         (double X, double Y, double Z) Apex, (double X, double Y, double Z) Axis, (double X, double Y, double Z) Side, double Radius,
         double[] Outline);
