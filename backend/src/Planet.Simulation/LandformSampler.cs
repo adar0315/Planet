@@ -279,6 +279,12 @@ public sealed class LandformSampler
             if (apexOf[down] < 0 || cells[c].RiverWidthMeters > cells[apexOf[down]].RiverWidthMeters) apexOf[down] = c;
         }
         (_deltas, _deltasNear) = BuildDeltas(apexOf);
+
+        // 流進三角洲的那一段河，河床壓到三角洲的高度：谷底是粗格「原本」的高度，海邊的粗格常有一兩百公尺，
+        // 平滑後的地面卻只有幾公尺（三角洲就是畫在這種低地上），河變成架在三角洲上一百多公尺高的堤（2026-11-22，正式站 160 公尺）。
+        // 只壓低不抬高，下游的谷底本來就比較低（河口是 0），一路往下游降的規則不變
+        foreach (var delta in _deltas)
+            _valleyFloor[delta.ApexCell] = (float)Math.Min(_valleyFloor[delta.ApexCell], DeltaTopMeters);
     }
 
     /// <summary>

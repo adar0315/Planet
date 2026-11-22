@@ -206,6 +206,26 @@ public class RiverProfileTests
     }
 
     /// <summary>
+    /// 2026-11-22 正式站：河口那格粗格原本 160 公尺高，河床照它畫，河變成架在三角洲（幾公尺）上的高堤，遠景地塊整格是河、高出一截。
+    /// 流進三角洲那一段河的河床不能比三角洲高。
+    /// </summary>
+    [Fact]
+    public void RiverIntoDeltaIsNotAboveTheDelta()
+    {
+        var (cells, path) = River([400, 300, 200, 150], sea => sea.DeltaSupply = 1_000f);
+        var sampler = new LandformSampler(Grid, cells);
+        var checkedPoints = 0;
+        foreach (var (lat, lon) in sampler.RiverCenterline(path[^2]))
+        {
+            var s = sampler.Sample(lat, lon);
+            if (s.Terrain != TerrainType.Freshwater) continue;
+            checkedPoints++;
+            Assert.True(s.ElevationMeters <= 3.5, $"河床 {s.ElevationMeters:F0} 公尺（{lat:F4}, {lon:F4}）");
+        }
+        Assert.True(checkedPoints > 0, "河口那一段沒取樣到河道");
+    }
+
+    /// <summary>
     /// 前積層延伸到別的海格也要連續：以前只有「記得這個三角洲」的格子才有深度上限，跨到沒記的格子海底跳好幾百公尺
     /// （2026-11-18 正式站遠景地塊，粗格交界上 720 公尺）。做法：河口外整片都是 3,000 公尺深的海，鋪 1 公里的點陣看相鄰兩點的高差。
     /// </summary>
