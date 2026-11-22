@@ -262,7 +262,8 @@ public class RiverProfileTests
                 left = here;
             }
         }
-        Assert.True(worst < 600, $"相鄰兩點（1 公里）海底高差 {worst:F0} 公尺（{where}，往海第幾公里,側向第幾格）");
+        // 接 3,000 公尺深的海床，最陡約 6 度（1 公里約 110 公尺）
+        Assert.True(worst < 150, $"相鄰兩點（1 公里）海底高差 {worst:F0} 公尺（{where}，往海第幾公里,側向第幾格）");
     }
 
     /// <summary>

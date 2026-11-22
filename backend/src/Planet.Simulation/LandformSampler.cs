@@ -354,11 +354,18 @@ public sealed class LandformSampler
     /// <summary>三角洲前積層的範圍（公尺，扇面外緣往海量）：再遠就是海床原本的深度。</summary>
     private const double ProdeltaReachMeters = 40_000;
 
-    /// <summary>前積層的深度上限（公尺，正值）：近處緩（每公里 20 公尺），遠處越來越陡，到範圍邊緣比任何海都深，跟原本的海床接得起來。</summary>
-    private static double ProdeltaDepthMeters(double offshore)
+    /// <summary>
+    /// 前積層的海底：從淺淺的陸棚（每公里深 20 公尺）平滑過渡到海床原本的深度（smoothstep，範圍邊緣完全是原本的海床）。
+    /// 以前是「深度上限」，上限要在範圍邊緣比任何海都深才接得起來，二次項讓中段一律很陡：正式站遠景地塊 5 公里差 865 公尺（約 10 度，
+    /// 2026-11-22）。過渡的坡度跟著海床深度走：接 1,200 公尺深的海床最陡約 2.6 度、3,000 公尺約 6 度。
+    /// </summary>
+    private static double ProdeltaElevation(double offshore, double seabed)
     {
+        var shelf = -(1 + 0.02 * offshore);
+        if (seabed >= shelf) return seabed; // 原本就比陸棚淺
         var t = offshore / ProdeltaReachMeters;
-        return 1 + 0.02 * offshore + 6_000 * t * t;
+        var w = t * t * (3 - 2 * t);
+        return shelf + (seabed - shelf) * w;
     }
 
     /// <summary>輪廓取樣的角度間隔（度）。半徑 60 公里時 1 度約 1 公里，比朵狀沙洲（8 公里）細得多。</summary>
@@ -558,7 +565,7 @@ public sealed class LandformSampler
             {
                 var offshore = double.PositiveInfinity;
                 foreach (var d in nearDeltas) offshore = Math.Min(offshore, FanOffshoreMeters(p, _deltas[d]));
-                if (offshore < ProdeltaReachMeters) elevation = Math.Max(elevation, -ProdeltaDepthMeters(offshore));
+                if (offshore < ProdeltaReachMeters) elevation = ProdeltaElevation(offshore, elevation);
             }
             return new LandformSample(cell.Terrain, cell.HeightCategory, elevation, surface, nearest, -1, double.PositiveInfinity, 0, false);
         }
