@@ -352,7 +352,7 @@ public sealed class LandformSampler
     }
 
     /// <summary>三角洲前積層的範圍（公尺，扇面外緣往海量）：再遠就是海床原本的深度。</summary>
-    private const double ProdeltaReachMeters = 20_000;
+    private const double ProdeltaReachMeters = 40_000;
 
     /// <summary>前積層的深度上限（公尺，正值）：近處緩（每公里 20 公尺），遠處越來越陡，到範圍邊緣比任何海都深，跟原本的海床接得起來。</summary>
     private static double ProdeltaDepthMeters(double offshore)
